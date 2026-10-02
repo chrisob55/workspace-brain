@@ -82,17 +82,17 @@ under the repository, and removes the project and fixture when it finishes.
 
 ## Repository map
 
-| Path | Purpose |
-| --- | --- |
-| `apps/workspace-brain-api/` | HTTP API and catalogue-facing operations |
-| `apps/ingestion-worker/` | Read-only filesystem scanning and discovery |
-| `packages/` | Domain, configuration, and catalogue contracts |
-| `infrastructure/` | DuckDB, filesystem, and NATS adapters |
-| `config/` | Example Workspace Brain configuration |
-| `deploy/compose/` | Local container runtime |
-| `openapi/` | Public HTTP API contract |
-| `test/` | Contract and integration tests |
-| `docs/` | Architecture, decisions, and implementation records |
+| Path                        | Purpose                                             |
+| --------------------------- | --------------------------------------------------- |
+| `apps/workspace-brain-api/` | HTTP API and catalogue-facing operations            |
+| `apps/ingestion-worker/`    | Read-only filesystem scanning and discovery         |
+| `packages/`                 | Domain, configuration, and catalogue contracts      |
+| `infrastructure/`           | DuckDB, filesystem, and NATS adapters               |
+| `config/`                   | Example Workspace Brain configuration               |
+| `deploy/compose/`           | Local container runtime                             |
+| `openapi/`                  | Public HTTP API contract                            |
+| `test/`                     | Contract and integration tests                      |
+| `docs/`                     | Architecture, decisions, and implementation records |
 
 ## Documentation index
 
