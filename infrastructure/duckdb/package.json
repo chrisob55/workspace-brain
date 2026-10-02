@@ -1,0 +1,24 @@
+{
+  "name": "@workspace-brain/duckdb",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rm -rf dist",
+    "lint": "eslint src",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@duckdb/node-api": "^1.5.6-r.1",
+    "@workspace-brain/catalogue": "workspace:*",
+    "@workspace-brain/domain": "workspace:*",
+    "zod": "^4.1.12"
+  }
+}

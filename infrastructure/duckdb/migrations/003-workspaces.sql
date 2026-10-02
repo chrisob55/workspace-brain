@@ -1,0 +1,7 @@
+CREATE TABLE workspaces (
+  id VARCHAR PRIMARY KEY,
+  name VARCHAR NOT NULL,
+  description VARCHAR,
+  config_json JSON NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

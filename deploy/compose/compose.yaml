@@ -1,0 +1,87 @@
+services:
+  workspace-brain-api:
+    build:
+      context: ../..
+      dockerfile: deploy/compose/Dockerfile
+    command: ['node', 'apps/workspace-brain-api/dist/main.js']
+    environment:
+      CATALOGUE_PATH: /var/lib/workspace-brain/catalogue.duckdb
+      DUCKDB_MIGRATIONS_DIR: /app/infrastructure/duckdb/migrations
+      HOST: 0.0.0.0
+      PORT: 3000
+    ports:
+      - '127.0.0.1:${API_PORT:-3000}:3000'
+    volumes:
+      - catalogue-data:/var/lib/workspace-brain
+    networks:
+      - backend
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3000/ready').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  ingestion-worker:
+    build:
+      context: ../..
+      dockerfile: deploy/compose/Dockerfile
+    command: ['node', 'apps/ingestion-worker/dist/main.js']
+    environment:
+      LOG_LEVEL: info
+    volumes:
+      - '${WORKSPACE_SOURCES_PATH:-../../sources}:/sources:ro'
+      - ../../config:/app/config:ro
+    networks:
+      - backend
+    restart: unless-stopped
+
+  nats:
+    image: nats:2.10-alpine
+    command: ['-js', '-sd', '/data', '-m', '8222']
+    ports:
+      - '127.0.0.1:${NATS_CLIENT_PORT:-4222}:4222'
+      - '127.0.0.1:${NATS_MONITOR_PORT:-8222}:8222'
+    volumes:
+      - nats-data:/data
+    networks:
+      - backend
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:v1.15.4
+    ports:
+      - '127.0.0.1:${QDRANT_HTTP_PORT:-6333}:6333'
+      - '127.0.0.1:${QDRANT_GRPC_PORT:-6334}:6334'
+    volumes:
+      - qdrant-data:/qdrant/storage
+    networks:
+      - backend
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - '127.0.0.1:${OLLAMA_PORT:-11434}:11434'
+    volumes:
+      - ollama-data:/root/.ollama
+    networks:
+      - backend
+    restart: unless-stopped
+
+networks:
+  backend:
+    internal: true
+
+volumes:
+  catalogue-data:
+  nats-data:
+  qdrant-data:
+  ollama-data:
