@@ -24,3 +24,4 @@ Accepted Architecture v1 decisions. Supersede ADRs; do not silently rewrite them
 - [ADR-020: API-First Integration](ADR-020-api-first-integration.md)
 - [ADR-021: Observability of Knowledge Evolution](ADR-021-observability-of-knowledge-evolution.md)
 - [ADR-022: MVP Boundary and Read-Only Sources](ADR-022-mvp-boundary-and-read-only-sources.md)
+- [ADR-023: Deterministic Filesystem Discovery and Inventory Model](ADR-023-deterministic-filesystem-discovery-and-inventory-model.md)
