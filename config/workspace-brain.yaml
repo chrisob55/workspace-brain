@@ -1,0 +1,51 @@
+version: 1
+platform:
+  data_dir: /var/lib/workspace-brain
+  hash_algorithm: sha256
+sources:
+  - id: local-projects
+    type: filesystem
+    container_paths:
+      - /sources
+    defaults:
+      exclude_dirs:
+        - .git
+        - node_modules
+        - dist
+        - build
+      include_extensions:
+        - .md
+        - .txt
+        - .yaml
+        - .yml
+        - .json
+        - .ts
+        - .js
+      max_file_size_mb: 50
+      follow_symbolic_links: false
+workspaces:
+  - id: local-workspace
+    name: Local Workspace
+    sources:
+      - local-projects
+    repository_rules:
+      include: []
+      exclude: []
+knowledge_models: []
+search:
+  lexical:
+    enabled: true
+  semantic:
+    enabled: true
+ai:
+  policy:
+    local_only: true
+    allow_remote_fallback: false
+  providers:
+    - id: local-ollama
+      type: ollama
+      endpoint: http://ollama:11434
+governance:
+  provenance_required: true
+  relationships_require_evidence: true
+  allow_source_mutation: false
