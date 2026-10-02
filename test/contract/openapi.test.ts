@@ -14,6 +14,7 @@ describe('OpenAPI contract', () => {
         {
           get?: {
             operationId?: string;
+            parameters?: { name: string }[];
             responses?: Record<
               string,
               {
@@ -23,7 +24,15 @@ describe('OpenAPI contract', () => {
           };
         }
       >;
-      components: { schemas: Record<string, unknown> };
+      components: {
+        schemas: Record<
+          string,
+          {
+            required?: string[];
+            properties?: Record<string, unknown>;
+          }
+        >;
+      };
     };
 
     expect(document.openapi).toBe('3.1.0');
@@ -34,6 +43,12 @@ describe('OpenAPI contract', () => {
     );
     expect(document.paths['/api/v1/workspaces']?.get?.operationId).toBe(
       'listWorkspaces',
+    );
+    expect(document.paths['/api/v1/repositories']?.get?.operationId).toBe(
+      'listRepositories',
+    );
+    expect(document.paths['/api/v1/documents']?.get?.operationId).toBe(
+      'listDocuments',
     );
     expect(
       document.paths['/api/v1/sources']?.get?.responses?.['200']?.content?.[
@@ -46,12 +61,43 @@ describe('OpenAPI contract', () => {
       ]?.schema?.$ref,
     ).toBe('#/components/schemas/WorkspacePage');
     expect(document.components.schemas.Source).toBeDefined();
+    expect(document.components.schemas.SourceRoot).toBeDefined();
     expect(document.components.schemas.Workspace).toBeDefined();
+    expect(document.components.schemas.Repository).toBeDefined();
+    expect(document.components.schemas.Document).toBeDefined();
+    expect(document.components.schemas.Repository?.required).toContain(
+      'fingerprint',
+    );
+    expect(document.components.schemas.Repository?.required).toContain(
+      'lastSeenAt',
+    );
+    expect(document.components.schemas.Document?.required).toContain(
+      'fingerprint',
+    );
+    expect(document.components.schemas.Document?.required).toContain(
+      'lastSeenAt',
+    );
     expect(Object.keys(document.paths['/api/v1/sources'] ?? {})).toEqual([
       'get',
     ]);
     expect(Object.keys(document.paths['/api/v1/workspaces'] ?? {})).toEqual([
       'get',
     ]);
+    expect(Object.keys(document.paths['/api/v1/repositories'] ?? {})).toEqual([
+      'get',
+    ]);
+    expect(Object.keys(document.paths['/api/v1/documents'] ?? {})).toEqual([
+      'get',
+    ]);
+    expect(
+      document.paths['/api/v1/repositories']?.get?.parameters?.map(
+        (parameter) => parameter.name,
+      ),
+    ).toContain('sourceId');
+    expect(
+      document.paths['/api/v1/documents']?.get?.parameters?.map(
+        (parameter) => parameter.name,
+      ),
+    ).toContain('extension');
   });
 });

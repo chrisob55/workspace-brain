@@ -4,8 +4,9 @@ platform:
   hash_algorithm: sha256
 sources:
   - id: local-projects
+    name: Local Projects
     type: filesystem
-    container_paths:
+    roots:
       - /sources
     defaults:
       exclude_dirs:
@@ -26,11 +27,13 @@ sources:
 workspaces:
   - id: local-workspace
     name: Local Workspace
-    sources:
+    sourceIds:
       - local-projects
-    repository_rules:
-      include: []
-      exclude: []
+    include:
+      - '**'
+    exclude:
+      - '**/node_modules/**'
+      - '**/.git/**'
 knowledge_models: []
 search:
   lexical:

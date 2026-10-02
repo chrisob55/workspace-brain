@@ -1,5 +1,4 @@
 import type { EventConsumer } from './event-consumer.js';
-import type { SourceScanner } from './scanner.js';
 
 export type IngestionWorker = {
   start(): Promise<void>;
@@ -7,14 +6,10 @@ export type IngestionWorker = {
 };
 
 export function createIngestionWorker(
-  scanner: SourceScanner,
   consumer: EventConsumer,
 ): IngestionWorker {
   return {
-    start: () =>
-      consumer.start((source, correlationId) =>
-        scanner.scan(source, correlationId),
-      ),
+    start: () => consumer.start(),
     stop: () => consumer.stop(),
   };
 }

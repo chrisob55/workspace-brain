@@ -145,6 +145,122 @@
           }
         }
       }
+    },
+    "/api/v1/repositories": {
+      "get": {
+        "operationId": "listRepositories",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            }
+          },
+          {
+            "name": "sourceId",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "ulid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated read-only repository collection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepositoryPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid filters or pagination parameters",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/documents": {
+      "get": {
+        "operationId": "listDocuments",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            }
+          },
+          {
+            "name": "sourceId",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "ulid"
+            }
+          },
+          {
+            "name": "extension",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\.[a-zA-Z0-9]+$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated read-only document metadata collection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid filters or pagination parameters",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -187,9 +303,32 @@
               "type": "string"
             }
           },
+          "roots": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SourceRoot"
+            }
+          },
           "createdAt": {
             "type": "string",
             "format": "date-time"
+          }
+        }
+      },
+      "SourceRoot": {
+        "type": "object",
+        "required": ["id", "sourceId", "absolutePath"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "ulid"
+          },
+          "sourceId": {
+            "type": "string",
+            "format": "ulid"
+          },
+          "absolutePath": {
+            "type": "string"
           }
         }
       },
@@ -243,6 +382,140 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/Workspace"
+            }
+          },
+          "nextCursor": {
+            "type": ["string", "null"]
+          }
+        }
+      },
+      "Repository": {
+        "type": "object",
+        "required": [
+          "id",
+          "sourceId",
+          "path",
+          "repositoryType",
+          "fingerprint",
+          "discoveredAt",
+          "lastSeenAt",
+          "discoveryMethod"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "ulid"
+          },
+          "sourceId": {
+            "type": "string",
+            "format": "ulid"
+          },
+          "path": {
+            "type": "string"
+          },
+          "repositoryType": {
+            "enum": ["git", "unknown"]
+          },
+          "fingerprint": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "description": "SHA-256 inventory fingerprint."
+          },
+          "discoveredAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "lastSeenAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "discoveryMethod": {
+            "const": "filesystem"
+          }
+        }
+      },
+      "Document": {
+        "type": "object",
+        "required": [
+          "id",
+          "sourceId",
+          "path",
+          "filename",
+          "extension",
+          "sizeBytes",
+          "modifiedAt",
+          "fingerprint",
+          "discoveredAt",
+          "lastSeenAt",
+          "discoveryMethod"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "ulid"
+          },
+          "sourceId": {
+            "type": "string",
+            "format": "ulid"
+          },
+          "path": {
+            "type": "string"
+          },
+          "filename": {
+            "type": "string"
+          },
+          "extension": {
+            "type": "string"
+          },
+          "sizeBytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "modifiedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "fingerprint": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "description": "SHA-256 inventory fingerprint."
+          },
+          "discoveredAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "lastSeenAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "discoveryMethod": {
+            "const": "filesystem"
+          }
+        }
+      },
+      "RepositoryPage": {
+        "type": "object",
+        "required": ["items", "nextCursor"],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Repository"
+            }
+          },
+          "nextCursor": {
+            "type": ["string", "null"]
+          }
+        }
+      },
+      "DocumentPage": {
+        "type": "object",
+        "required": ["items", "nextCursor"],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Document"
             }
           },
           "nextCursor": {
