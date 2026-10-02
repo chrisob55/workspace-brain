@@ -69,22 +69,20 @@ describe('DuckDB catalogue migrations', () => {
     );
     await expect(second.check()).resolves.toBeUndefined();
     expect((await second.listSources({ limit: 10 })).items).toEqual([
-      {
+      expect.objectContaining({
         id: sourceId,
         name: 'Projects',
         type: 'filesystem',
         containerPaths: ['/sources/projects'],
-        createdAt: '2026-10-01T12:00:00.000000Z',
-      },
+      }),
     ]);
     expect((await second.listWorkspaces({ limit: 10 })).items).toEqual([
-      {
+      expect.objectContaining({
         id: workspaceId,
         name: 'Product',
         description: 'Project knowledge',
         sourceIds: [sourceId],
-        createdAt: '2026-10-01T12:00:00.000000Z',
-      },
+      }),
     ]);
     await second.close();
 
@@ -94,11 +92,453 @@ describe('DuckDB catalogue migrations', () => {
       "SELECT table_name FROM information_schema.tables WHERE table_schema = 'main' ORDER BY table_name",
     );
     expect(tables.getRowObjectsJson().map((row) => row.table_name)).toEqual([
+      'discovery_history',
+      'discovery_outbox',
+      'documents',
+      'inventory_records',
+      'repositories',
       'schema_migrations',
+      'source_scan_runs',
       'sources',
       'workspaces',
     ]);
     connection.closeSync();
     instance.closeSync();
+  });
+
+  it('keeps inventory and completion events pending across retries and catalogue restarts', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'workspace-brain-outbox-'));
+    temporaryDirectories.push(directory);
+    const databasePath = join(directory, 'catalogue.duckdb');
+    const catalogue = await createDuckDbCatalogue(
+      databasePath,
+      migrationsDirectory,
+    );
+    await catalogue.registerConfiguration(
+      [
+        {
+          configId: 'outbox-source',
+          name: 'Outbox Source',
+          rootPaths: [join(directory, 'source')],
+          excludeDirs: [],
+          includeExtensions: ['.md'],
+          maxFileSizeBytes: 1024,
+        },
+      ],
+      [],
+    );
+    const source = (await catalogue.listSources({ limit: 10 })).items[0];
+    const root = source?.roots?.[0];
+    if (source === undefined || root === undefined) {
+      throw new Error('Outbox source registration failed');
+    }
+    const discoveredAt = '2026-10-02T10:00:00.000Z';
+    const candidate = {
+      path: `${root.id}/README.md`,
+      filename: 'README.md',
+      extension: '.md',
+      sizeBytes: 12,
+      modifiedAt: discoveredAt,
+      fingerprint: 'a'.repeat(64),
+      discoveryMethod: 'filesystem' as const,
+    };
+
+    await catalogue.recordScanStarted(source.id, 'outbox-scan', discoveredAt);
+    await catalogue.persistScan(
+      source.id,
+      [],
+      [candidate],
+      discoveredAt,
+      'outbox-scan',
+      100,
+    );
+    await catalogue.persistScan(
+      source.id,
+      [],
+      [candidate],
+      discoveredAt,
+      'outbox-scan',
+      100,
+    );
+    const firstPending = await catalogue.listPendingDiscoveryEvents(10);
+    expect(firstPending.map(({ eventType }) => eventType)).toEqual([
+      'DocumentDiscovered',
+      'SourceScanCompleted',
+    ]);
+    expect(firstPending[1]?.payload).toMatchObject({
+      addedCount: 1,
+      unchangedCount: 0,
+      durationMilliseconds: 100,
+    });
+    await catalogue.close();
+
+    const restarted = await createDuckDbCatalogue(
+      databasePath,
+      migrationsDirectory,
+    );
+    const recovered = await restarted.listPendingDiscoveryEvents(10);
+    expect(recovered).toEqual(firstPending);
+    const discoveredEvent = recovered.find(
+      ({ eventType }) => eventType === 'DocumentDiscovered',
+    );
+    if (discoveredEvent === undefined) {
+      throw new Error('Document discovery event was not in the outbox');
+    }
+    await restarted.markDiscoveryEventPublished(
+      discoveredEvent.eventId,
+      '2026-10-02T10:00:02.000Z',
+    );
+    expect(await restarted.listPendingDiscoveryEvents(10)).toEqual([
+      expect.objectContaining({ eventType: 'SourceScanCompleted' }),
+    ]);
+    await restarted.close();
+  });
+
+  it('registers source roots and workspaces, then persists filterable discovery metadata', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'workspace-brain-'));
+    temporaryDirectories.push(directory);
+    const databasePath = join(directory, 'catalogue.duckdb');
+    const catalogue = await createDuckDbCatalogue(
+      databasePath,
+      migrationsDirectory,
+    );
+    const configuredSources = [
+      {
+        configId: 'projects',
+        name: 'Projects',
+        rootPaths: [join(directory, 'projects')],
+        excludeDirs: ['.git', 'node_modules'],
+        includeExtensions: ['.md', '.txt'],
+        maxFileSizeBytes: 1024,
+      },
+    ];
+    const configuredWorkspaces = [
+      {
+        configId: 'product',
+        name: 'Product',
+        sourceConfigIds: ['projects'],
+        include: ['**'],
+        exclude: ['**/node_modules/**'],
+      },
+    ];
+    await catalogue.registerConfiguration(
+      configuredSources,
+      configuredWorkspaces,
+    );
+    const sourcePage = await catalogue.listSources({ limit: 10 });
+    const workspacePage = await catalogue.listWorkspaces({ limit: 10 });
+    const source = sourcePage.items[0];
+    if (source === undefined) {
+      throw new Error('Configured source was not registered');
+    }
+    expect(source.roots).toHaveLength(1);
+    expect(workspacePage.items[0]?.sourceIds).toEqual([source.id]);
+    expect(
+      (await catalogue.listSourcesForDiscovery({ limit: 10 })).items[0],
+    ).toMatchObject({
+      sourceId: source.id,
+      roots: source.roots,
+      workspaceRules: [{ include: ['**'], exclude: ['**/node_modules/**'] }],
+      excludedDirectoryNames: ['.git', 'node_modules'],
+      includeExtensions: ['.md', '.txt'],
+      maxFileSizeBytes: 1024,
+    });
+    await catalogue.registerConfiguration(
+      configuredSources,
+      configuredWorkspaces,
+    );
+    const reregisteredSource = (await catalogue.listSources({ limit: 10 }))
+      .items[0];
+    expect(reregisteredSource?.id).toBe(source.id);
+    expect(reregisteredSource?.roots?.[0]?.id).toBe(source.roots?.[0]?.id);
+
+    await catalogue.recordScanStarted(
+      source.id,
+      'correlation-one',
+      '2026-10-01T12:00:00.000Z',
+    );
+    const repository = {
+      path: `${source.roots?.[0]?.id}/repo`,
+      repositoryType: 'git' as const,
+      fingerprint: 'a'.repeat(64),
+      discoveryMethod: 'filesystem' as const,
+    };
+    const document = {
+      path: `${source.roots?.[0]?.id}/repo/README.md`,
+      filename: 'README.md',
+      extension: '.md',
+      sizeBytes: 12,
+      modifiedAt: '2026-10-01T11:00:00.000Z',
+      fingerprint: 'b'.repeat(64),
+      discoveryMethod: 'filesystem' as const,
+    };
+    const persisted = await catalogue.persistScan(
+      source.id,
+      [repository],
+      [document],
+      '2026-10-01T12:00:00.000Z',
+      'correlation-one',
+      100,
+    );
+    await catalogue.recordScanStarted(
+      source.id,
+      'correlation-one',
+      '2026-10-01T12:00:00.000Z',
+    );
+    const repeatedSubmission = await catalogue.persistScan(
+      source.id,
+      [repository],
+      [document],
+      '2026-10-01T12:00:00.000Z',
+      'correlation-one',
+      100,
+    );
+    const rescanned = await catalogue.persistScan(
+      source.id,
+      [repository],
+      [document],
+      '2026-10-01T13:00:00.000Z',
+      'correlation-two',
+      100,
+    );
+
+    expect(persisted.repositories[0]).toMatchObject({
+      ...repository,
+      sourceId: source.id,
+      discoveredAt: '2026-10-01T12:00:00.000Z',
+      lastSeenAt: '2026-10-01T12:00:00.000Z',
+    });
+    expect(persisted.documents[0]).toMatchObject({
+      ...document,
+      sourceId: source.id,
+      modifiedAt: '2026-10-01T11:00:00.000Z',
+      discoveredAt: '2026-10-01T12:00:00.000Z',
+      lastSeenAt: '2026-10-01T12:00:00.000Z',
+    });
+    expect(persisted.repositoryChanges.map(({ change }) => change)).toEqual([
+      'added',
+    ]);
+    expect(persisted.documentChanges.map(({ change }) => change)).toEqual([
+      'added',
+    ]);
+    expect(
+      repeatedSubmission.repositoryChanges.map(({ change }) => change),
+    ).toEqual(['unchanged']);
+    expect(
+      repeatedSubmission.documentChanges.map(({ change }) => change),
+    ).toEqual(['unchanged']);
+    expect(repeatedSubmission.repositories[0]?.id).toBe(
+      persisted.repositories[0]?.id,
+    );
+    expect(repeatedSubmission.documents[0]?.id).toBe(
+      persisted.documents[0]?.id,
+    );
+    await catalogue.recordScanFailed(
+      source.id,
+      'correlation-failed',
+      '2026-10-01T12:00:02.000Z',
+      2000,
+      'FilesystemError',
+    );
+    expect(rescanned.repositories[0]?.id).toBe(persisted.repositories[0]?.id);
+    expect(rescanned.documents[0]?.id).toBe(persisted.documents[0]?.id);
+    expect(rescanned.documents[0]?.discoveredAt).toBe(
+      persisted.documents[0]?.discoveredAt,
+    );
+    expect(rescanned.documents[0]?.lastSeenAt).toBe('2026-10-01T13:00:00.000Z');
+    expect(rescanned.repositoryChanges.map(({ change }) => change)).toEqual([
+      'unchanged',
+    ]);
+    expect(rescanned.documentChanges.map(({ change }) => change)).toEqual([
+      'unchanged',
+    ]);
+
+    const modified = await catalogue.persistScan(
+      source.id,
+      [{ ...repository, fingerprint: 'c'.repeat(64) }],
+      [{ ...document, fingerprint: 'd'.repeat(64) }],
+      '2026-10-01T14:00:00.000Z',
+      'correlation-three',
+      100,
+    );
+    expect(modified.repositories[0]?.id).toBe(persisted.repositories[0]?.id);
+    expect(modified.documents[0]?.id).toBe(persisted.documents[0]?.id);
+    expect(modified.repositoryChanges.map(({ change }) => change)).toEqual([
+      'modified',
+    ]);
+    expect(modified.documentChanges.map(({ change }) => change)).toEqual([
+      'modified',
+    ]);
+
+    const removed = await catalogue.persistScan(
+      source.id,
+      [],
+      [],
+      '2026-10-01T15:00:00.000Z',
+      'correlation-four',
+      100,
+    );
+    expect(removed.repositoryChanges.map(({ change }) => change)).toEqual([
+      'removed',
+    ]);
+    expect(removed.documentChanges.map(({ change }) => change)).toEqual([
+      'removed',
+    ]);
+    expect(
+      (await catalogue.listDocuments({ sourceId: source.id, limit: 10 })).items,
+    ).toEqual([]);
+
+    const restored = await catalogue.persistScan(
+      source.id,
+      [repository],
+      [document],
+      '2026-10-01T16:00:00.000Z',
+      'correlation-five',
+      100,
+    );
+    expect(restored.repositories[0]?.id).toBe(persisted.repositories[0]?.id);
+    expect(restored.documents[0]?.id).toBe(persisted.documents[0]?.id);
+    expect(restored.repositoryChanges.map(({ change }) => change)).toEqual([
+      'added',
+    ]);
+    expect(restored.documentChanges.map(({ change }) => change)).toEqual([
+      'added',
+    ]);
+    expect(
+      (await catalogue.listRepositories({ sourceId: source.id, limit: 10 }))
+        .items,
+    ).toHaveLength(1);
+    expect(
+      (
+        await catalogue.listDocuments({
+          sourceId: source.id,
+          extension: '.md',
+          limit: 10,
+        })
+      ).items,
+    ).toHaveLength(1);
+    expect(
+      (
+        await catalogue.listDocuments({
+          sourceId: source.id,
+          extension: '.txt',
+          limit: 10,
+        })
+      ).items,
+    ).toEqual([]);
+    await catalogue.close();
+
+    const historyInstance = await DuckDBInstance.create(databasePath);
+    const historyConnection = await historyInstance.connect();
+    const history = await historyConnection.runAndReadAll(
+      'SELECT event_type, count(*) AS event_count FROM discovery_history GROUP BY event_type ORDER BY event_type',
+    );
+    expect(
+      history
+        .getRowObjectsJson()
+        .map((row) => [row.event_type, Number(row.event_count)]),
+    ).toEqual([
+      ['DocumentDiscovered', 2],
+      ['DocumentModified', 1],
+      ['DocumentRemoved', 1],
+      ['RepositoryDiscovered', 2],
+      ['RepositoryModified', 1],
+      ['RepositoryRemoved', 1],
+    ]);
+    const scanRuns = await historyConnection.runAndReadAll(
+      'SELECT correlation_id, status, repository_count, document_count, added_count, modified_count, removed_count, unchanged_count, failure_type FROM source_scan_runs ORDER BY correlation_id',
+    );
+    expect(
+      scanRuns.getRowObjectsJson().map((row) => ({
+        ...row,
+        ...(row.repository_count === null
+          ? {}
+          : { repository_count: Number(row.repository_count) }),
+        ...(row.document_count === null
+          ? {}
+          : { document_count: Number(row.document_count) }),
+        ...(row.added_count === null
+          ? {}
+          : { added_count: Number(row.added_count) }),
+        ...(row.modified_count === null
+          ? {}
+          : { modified_count: Number(row.modified_count) }),
+        ...(row.removed_count === null
+          ? {}
+          : { removed_count: Number(row.removed_count) }),
+        ...(row.unchanged_count === null
+          ? {}
+          : { unchanged_count: Number(row.unchanged_count) }),
+      })),
+    ).toEqual([
+      {
+        correlation_id: 'correlation-failed',
+        status: 'failed',
+        repository_count: null,
+        document_count: null,
+        added_count: null,
+        modified_count: null,
+        removed_count: null,
+        unchanged_count: null,
+        failure_type: 'FilesystemError',
+      },
+      {
+        correlation_id: 'correlation-five',
+        status: 'completed',
+        repository_count: 1,
+        document_count: 1,
+        added_count: 2,
+        modified_count: 0,
+        removed_count: 0,
+        unchanged_count: 0,
+        failure_type: null,
+      },
+      {
+        correlation_id: 'correlation-four',
+        status: 'completed',
+        repository_count: 0,
+        document_count: 0,
+        added_count: 0,
+        modified_count: 0,
+        removed_count: 2,
+        unchanged_count: 0,
+        failure_type: null,
+      },
+      {
+        correlation_id: 'correlation-one',
+        status: 'completed',
+        repository_count: 1,
+        document_count: 1,
+        added_count: 2,
+        modified_count: 0,
+        removed_count: 0,
+        unchanged_count: 0,
+        failure_type: null,
+      },
+      {
+        correlation_id: 'correlation-three',
+        status: 'completed',
+        repository_count: 1,
+        document_count: 1,
+        added_count: 0,
+        modified_count: 2,
+        removed_count: 0,
+        unchanged_count: 0,
+        failure_type: null,
+      },
+      {
+        correlation_id: 'correlation-two',
+        status: 'completed',
+        repository_count: 1,
+        document_count: 1,
+        added_count: 0,
+        modified_count: 0,
+        removed_count: 0,
+        unchanged_count: 2,
+        failure_type: null,
+      },
+    ]);
+    historyConnection.closeSync();
+    historyInstance.closeSync();
   });
 });

@@ -13,9 +13,12 @@
   },
   "dependencies": {
     "@workspace-brain/catalogue": "workspace:*",
+    "@workspace-brain/configuration": "workspace:*",
     "@workspace-brain/domain": "workspace:*",
     "@workspace-brain/duckdb": "workspace:*",
+    "@workspace-brain/nats": "workspace:*",
     "fastify": "^5.6.2",
+    "pino": "^9.14.0",
     "zod": "^4.6.5"
   }
 }

@@ -1,7 +1,12 @@
+import { isAbsolute } from 'node:path';
+
 import { parse } from 'yaml';
 import { z } from 'zod';
 
 const nonEmptyString = z.string().trim().min(1);
+const absolutePath = nonEmptyString.refine(isAbsolute, {
+  message: 'Filesystem roots must be absolute paths',
+});
 
 const sourceDefaultsSchema = z
   .object({
@@ -12,33 +17,76 @@ const sourceDefaultsSchema = z
       .array(z.string().regex(/^\.[a-zA-Z0-9]+$/))
       .default(['.md', '.txt', '.yaml', '.yml', '.json', '.ts', '.js']),
     max_file_size_mb: z.number().positive().default(50),
-    follow_symbolic_links: z.boolean().default(false),
+    follow_symbolic_links: z.literal(false).default(false),
   })
   .strict();
 
 const sourceSchema = z
   .object({
     id: nonEmptyString,
+    name: nonEmptyString.optional(),
     type: z.literal('filesystem'),
-    container_paths: z.array(nonEmptyString).min(1),
+    roots: z.array(absolutePath).min(1).optional(),
+    container_paths: z.array(absolutePath).min(1).optional(),
     defaults: sourceDefaultsSchema.prefault({}),
   })
-  .strict();
+  .strict()
+  .superRefine((source, context) => {
+    if (
+      (source.roots === undefined) ===
+      (source.container_paths === undefined)
+    ) {
+      context.addIssue({
+        code: 'custom',
+        path: ['roots'],
+        message: 'Specify exactly one of roots or container_paths',
+      });
+    }
+  })
+  .transform((source) => ({
+    id: source.id,
+    name: source.name ?? source.id,
+    type: source.type,
+    roots: source.roots ?? source.container_paths ?? [],
+    defaults: source.defaults,
+  }));
 
 const workspaceSchema = z
   .object({
     id: nonEmptyString,
     name: nonEmptyString,
-    sources: z.array(nonEmptyString).min(1),
+    sourceIds: z.array(nonEmptyString).min(1).optional(),
+    sources: z.array(nonEmptyString).min(1).optional(),
+    include: z.array(nonEmptyString).optional(),
+    exclude: z.array(nonEmptyString).optional(),
     repository_rules: z
       .object({
         include: z.array(nonEmptyString).default([]),
         exclude: z.array(nonEmptyString).default([]),
       })
       .strict()
-      .prefault({}),
+      .optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((workspace, context) => {
+    if (
+      (workspace.sourceIds === undefined) ===
+      (workspace.sources === undefined)
+    ) {
+      context.addIssue({
+        code: 'custom',
+        path: ['sourceIds'],
+        message: 'Specify exactly one of sourceIds or sources',
+      });
+    }
+  })
+  .transform((workspace) => ({
+    id: workspace.id,
+    name: workspace.name,
+    sourceIds: workspace.sourceIds ?? workspace.sources ?? [],
+    include: workspace.include ?? workspace.repository_rules?.include ?? [],
+    exclude: workspace.exclude ?? workspace.repository_rules?.exclude ?? [],
+  }));
 
 const knowledgeModelSchema = z
   .object({
@@ -133,7 +181,7 @@ export const workspaceBrainConfigSchema = z
         });
       }
       workspaceIds.add(workspace.id);
-      for (const sourceId of workspace.sources) {
+      for (const sourceId of workspace.sourceIds) {
         if (!sourceIds.has(sourceId)) {
           context.addIssue({
             code: 'custom',

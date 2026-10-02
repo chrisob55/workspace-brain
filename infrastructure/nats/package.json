@@ -1,21 +1,23 @@
 {
-  "name": "@workspace-brain/ingestion-worker",
+  "name": "@workspace-brain/nats",
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "clean": "rm -rf dist",
-    "dev": "node --watch dist/main.js",
     "lint": "eslint src",
-    "start": "node dist/main.js",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@workspace-brain/catalogue": "workspace:*",
     "@workspace-brain/domain": "workspace:*",
-    "@workspace-brain/filesystem": "workspace:*",
-    "@workspace-brain/nats": "workspace:*",
+    "nats": "^2.29.3",
     "pino": "^9.14.0"
   }
 }

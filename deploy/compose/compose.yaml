@@ -6,8 +6,10 @@ services:
     command: ['node', 'apps/workspace-brain-api/dist/main.js']
     environment:
       CATALOGUE_PATH: /var/lib/workspace-brain/catalogue.duckdb
+      CONFIG_PATH: /app/config/workspace-brain.yaml
       DUCKDB_MIGRATIONS_DIR: /app/infrastructure/duckdb/migrations
       HOST: 0.0.0.0
+      NATS_SERVERS: nats://nats:4222
       PORT: 3000
     ports:
       - '127.0.0.1:${API_PORT:-3000}:3000'
@@ -15,6 +17,9 @@ services:
       - catalogue-data:/var/lib/workspace-brain
     networks:
       - backend
+    depends_on:
+      nats:
+        condition: service_started
     restart: unless-stopped
     healthcheck:
       test:
@@ -36,11 +41,17 @@ services:
     command: ['node', 'apps/ingestion-worker/dist/main.js']
     environment:
       LOG_LEVEL: info
+      NATS_SERVERS: nats://nats:4222
+      SCAN_INTERVAL_MS: ${SCAN_INTERVAL_MS:-300000}
     volumes:
       - '${WORKSPACE_SOURCES_PATH:-../../sources}:/sources:ro'
-      - ../../config:/app/config:ro
     networks:
       - backend
+    depends_on:
+      workspace-brain-api:
+        condition: service_healthy
+      nats:
+        condition: service_started
     restart: unless-stopped
 
   nats:

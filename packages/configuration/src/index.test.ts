@@ -28,6 +28,7 @@ describe('parseWorkspaceBrainConfig', () => {
     expect(config.sources[0]?.defaults.follow_symbolic_links).toBe(false);
     expect(config.ai.policy.allow_remote_fallback).toBe(false);
     expect(config.governance.allow_source_mutation).toBe(false);
+    expect(config.sources[0]?.roots).toEqual(['/sources/projects']);
   });
 
   it('accepts the checked-in local-first example configuration', async () => {
@@ -39,8 +40,36 @@ describe('parseWorkspaceBrainConfig', () => {
 
     expect(config.version).toBe(1);
     expect(config.sources).toHaveLength(1);
-    expect(config.workspaces[0]?.sources).toEqual(['local-projects']);
+    expect(config.workspaces[0]?.sourceIds).toEqual(['local-projects']);
     expect(config.ai.policy.allow_remote_fallback).toBe(false);
+  });
+
+  it('normalizes source roots and workspace discovery rules', () => {
+    const config = parseWorkspaceBrainConfig(`
+version: 1
+platform:
+  data_dir: /data
+sources:
+  - id: projects
+    name: Projects
+    type: filesystem
+    roots: [/workspace/projects]
+workspaces:
+  - id: hmrc-agents
+    name: HMRC Agents
+    sourceIds: [projects]
+    include: ["**"]
+    exclude: ["**/node_modules/**", "**/.git/**"]
+`);
+
+    expect(config.sources[0]?.name).toBe('Projects');
+    expect(config.sources[0]?.roots).toEqual(['/workspace/projects']);
+    expect(config.workspaces[0]?.sourceIds).toEqual(['projects']);
+    expect(config.workspaces[0]?.include).toEqual(['**']);
+    expect(config.workspaces[0]?.exclude).toEqual([
+      '**/node_modules/**',
+      '**/.git/**',
+    ]);
   });
 
   it('rejects unsupported versions and writable source configuration', () => {

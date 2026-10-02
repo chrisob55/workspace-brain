@@ -14,6 +14,19 @@ const pageQuerySchema = z
   })
   .strict();
 
+const sourceIdSchema = z.string().regex(/^[0-7][0-9A-HJKMNP-TV-Z]{25}$/);
+const repositoryQuerySchema = pageQuerySchema
+  .extend({ sourceId: sourceIdSchema.optional() })
+  .strict();
+const documentQuerySchema = repositoryQuerySchema
+  .extend({
+    extension: z
+      .string()
+      .regex(/^\.[a-zA-Z0-9]+$/)
+      .optional(),
+  })
+  .strict();
+
 type ApiServerOptions = {
   readonly logger?: boolean;
 };
@@ -81,12 +94,18 @@ export function createApiServer(
         : { afterId: decodeCursor(query.cursor) }),
       limit: query.limit + 1,
     });
-    const hasMore = page.items.length > query.limit;
-    const items = page.items.slice(0, query.limit);
-    return reply.send({
-      items,
-      nextCursor: hasMore ? encodeCursor(items.at(-1)?.id) : null,
-    });
+    return sendPage(
+      reply,
+      page.items.map((source) => ({
+        id: source.id,
+        name: source.name,
+        type: source.type,
+        containerPaths: source.containerPaths,
+        ...(source.roots === undefined ? {} : { roots: source.roots }),
+        createdAt: source.createdAt,
+      })),
+      query.limit,
+    );
   });
 
   server.get('/api/v1/workspaces', async (request, reply) => {
@@ -97,15 +116,65 @@ export function createApiServer(
         : { afterId: decodeCursor(query.cursor) }),
       limit: query.limit + 1,
     });
-    const hasMore = page.items.length > query.limit;
-    const items = page.items.slice(0, query.limit);
-    return reply.send({
-      items,
-      nextCursor: hasMore ? encodeCursor(items.at(-1)?.id) : null,
+    return sendPage(reply, page.items, query.limit);
+  });
+
+  server.get('/api/v1/repositories', async (request, reply) => {
+    const query = parseCatalogueQuery(request.query, repositoryQuerySchema);
+    const page = await catalogue.listRepositories({
+      ...(query.cursor === undefined
+        ? {}
+        : { afterId: decodeCursor(query.cursor) }),
+      ...(query.sourceId === undefined ? {} : { sourceId: query.sourceId }),
+      limit: query.limit + 1,
     });
+    return sendPage(reply, page.items, query.limit);
+  });
+
+  server.get('/api/v1/documents', async (request, reply) => {
+    const query = parseCatalogueQuery(request.query, documentQuerySchema);
+    const page = await catalogue.listDocuments({
+      ...(query.cursor === undefined
+        ? {}
+        : { afterId: decodeCursor(query.cursor) }),
+      ...(query.sourceId === undefined ? {} : { sourceId: query.sourceId }),
+      ...(query.extension === undefined
+        ? {}
+        : { extension: query.extension.toLocaleLowerCase('en-US') }),
+      limit: query.limit + 1,
+    });
+    return sendPage(reply, page.items, query.limit);
   });
 
   return server;
+}
+
+function parseCatalogueQuery<T extends z.ZodType>(
+  query: unknown,
+  schema: T,
+): z.infer<T> {
+  const parsed = schema.safeParse(query);
+  if (!parsed.success) {
+    throw new ApiError(
+      400,
+      'Invalid Request',
+      'Catalogue query parameters are invalid.',
+    );
+  }
+  return parsed.data;
+}
+
+function sendPage<T extends { readonly id: string }>(
+  reply: FastifyReply,
+  items: readonly T[],
+  limit: number,
+): FastifyReply {
+  const hasMore = items.length > limit;
+  const pageItems = items.slice(0, limit);
+  return reply.send({
+    items: pageItems,
+    nextCursor: hasMore ? encodeCursor(pageItems.at(-1)?.id) : null,
+  });
 }
 
 function parsePageQuery(query: unknown): z.infer<typeof pageQuerySchema> {
