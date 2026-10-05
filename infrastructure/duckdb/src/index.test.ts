@@ -14,6 +14,7 @@ import {
   createKnowledgeModelId,
   processingDefinitionRegistry,
 } from '@workspace-brain/domain';
+import { CatalogueIntegrityError } from '@workspace-brain/catalogue';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { createDuckDbCatalogue } from './index.js';
@@ -2310,6 +2311,144 @@ describe('DuckDB catalogue migrations', () => {
     if (secondPublication === undefined) {
       throw new Error('Second Knowledge Model publication was not created');
     }
+    expect((await catalogue.getLatestKnowledgePublication(model.id))?.id).toBe(
+      secondPublication.id,
+    );
+    expect(
+      await catalogue.getLatestKnowledgePublication(createKnowledgeModelId()),
+    ).toBeUndefined();
+    expect(
+      await catalogue.getKnowledgePublication(firstPublication.id),
+    ).toEqual(firstPublication);
+    expect(
+      await catalogue.getKnowledgePublicationSummary(secondPublication.id),
+    ).toMatchObject({
+      publication: secondPublication,
+      entityCount: 2,
+      relationshipCount: 1,
+    });
+    const firstPublishedEntities = (
+      await catalogue.listKnowledgeEntities({
+        publicationId: firstPublication.id,
+        limit: 10,
+      })
+    ).items;
+    const secondPublishedEntities = (
+      await catalogue.listKnowledgeEntities({
+        publicationId: secondPublication.id,
+        limit: 10,
+      })
+    ).items;
+    const firstPublishedOwner = firstPublishedEntities.find(
+      ({ name }) => name === '@workspace/service',
+    );
+    const secondPublishedOwner = secondPublishedEntities.find(
+      ({ name }) => name === '@workspace/service',
+    );
+    if (
+      firstPublishedOwner === undefined ||
+      secondPublishedOwner === undefined
+    ) {
+      throw new Error('Published entity snapshots were not available');
+    }
+    expect(firstPublishedOwner.id).toBe(secondPublishedOwner.id);
+    expect(firstPublishedOwner.currentVersionId).not.toBe(
+      secondPublishedOwner.currentVersionId,
+    );
+    const firstPublishedEntity = await catalogue.getPublishedEntity(
+      firstPublication.id,
+      firstPublishedOwner.id,
+    );
+    const secondPublishedEntity = await catalogue.getPublishedEntity(
+      secondPublication.id,
+      secondPublishedOwner.id,
+    );
+    expect(firstPublishedEntity).toMatchObject({
+      publicationId: firstPublication.id,
+      entityVersionId: firstPublishedOwner.currentVersionId,
+      entity: firstPublishedOwner,
+    });
+    expect(secondPublishedEntity).toMatchObject({
+      publicationId: secondPublication.id,
+      entityVersionId: secondPublishedOwner.currentVersionId,
+      entity: secondPublishedOwner,
+    });
+    const secondPublishedRelationship = (
+      await catalogue.listKnowledgeRelationships({
+        publicationId: secondPublication.id,
+        limit: 10,
+      })
+    ).items[0];
+    if (secondPublishedRelationship === undefined) {
+      throw new Error('Published relationship snapshot was not available');
+    }
+    const publishedRelationship = await catalogue.getPublishedRelationship(
+      secondPublication.id,
+      secondPublishedRelationship.id,
+    );
+    expect(publishedRelationship).toMatchObject({
+      publicationId: secondPublication.id,
+      relationshipVersionId: secondPublishedRelationship.currentVersionId,
+      relationship: secondPublishedRelationship,
+    });
+    const outgoing = await catalogue.listPublishedEntityRelationships({
+      publicationId: secondPublication.id,
+      entityId: secondPublishedRelationship.sourceEntityId,
+      direction: 'outgoing',
+      relationshipType: 'DEPENDS_ON',
+      limit: 10,
+    });
+    const incoming = await catalogue.listPublishedEntityRelationships({
+      publicationId: secondPublication.id,
+      entityId: secondPublishedRelationship.targetEntityId,
+      direction: 'incoming',
+      relationshipType: 'DEPENDS_ON',
+      limit: 10,
+    });
+    expect(outgoing.items).toHaveLength(1);
+    expect(outgoing.items[0]).toMatchObject({
+      publicationId: secondPublication.id,
+      relationshipVersionId: secondPublishedRelationship.currentVersionId,
+      versionNumber: expect.any(Number),
+      direction: 'outgoing',
+      relationship: secondPublishedRelationship,
+    });
+    expect(incoming.items).toHaveLength(1);
+    expect(incoming.items[0]?.direction).toBe('incoming');
+    expect(
+      (
+        await catalogue.getPublishedRelationshipProvenance(
+          secondPublication.id,
+          secondPublishedRelationship.id,
+        )
+      )?.items,
+    ).toHaveLength(2);
+    const publishedEntityProvenance =
+      await catalogue.getPublishedEntityProvenance(
+        secondPublication.id,
+        secondPublishedOwner.id,
+      );
+    expect(publishedEntityProvenance?.items).toHaveLength(2);
+    for (const support of publishedEntityProvenance?.items ?? []) {
+      expect(support.evidenceExplanation.evidence.id).toBe(
+        support.provenance.evidenceId,
+      );
+      expect(support.evidenceExplanation.evidence.documentVersionId).toBe(
+        support.provenance.documentVersionId,
+      );
+      expect(support.evidenceExplanation.documentVersion.contentHash).toBe(
+        firstFingerprint,
+      );
+      expect(support.evidenceExplanation.document.fingerprint).toBe(
+        support.provenance.contentFingerprint,
+      );
+      expect(support.evidenceExplanation.documentVersion.processorVersion).toBe(
+        support.provenance.processorVersion,
+      );
+      expect(
+        support.evidenceExplanation.documentVersion.extractionRuleVersion,
+      ).toBe(support.provenance.extractionRuleVersion);
+    }
     expect(secondPublication.contentHash).not.toBe(
       firstPublication.contentHash,
     );
@@ -2570,6 +2709,12 @@ describe('DuckDB catalogue migrations', () => {
       ).items,
     ).toEqual([]);
     expect(
+      await catalogue.getPublishedRelationship(
+        fourthPublication.id,
+        currentRelationship?.id ?? '',
+      ),
+    ).toBeUndefined();
+    expect(
       (
         await catalogue.listKnowledgeRelationships({
           publicationId: firstPublication.id,
@@ -2598,6 +2743,24 @@ describe('DuckDB catalogue migrations', () => {
     expect(retainedOwner?.sourceEvidenceIds).toEqual([
       ownerEvidence.evidence.id,
     ]);
+    if (retainedOwner === undefined) {
+      throw new Error('Retained published entity was not available');
+    }
+    const retainedProvenance = await catalogue.getPublishedEntityProvenance(
+      firstPublication.id,
+      retainedOwner.id,
+    );
+    expect(retainedProvenance?.items).toHaveLength(1);
+    expect(
+      retainedProvenance?.items[0]?.evidenceExplanation.documentVersion.id,
+    ).toBe(firstProcessed.documentVersion.id);
+    expect(
+      retainedProvenance?.items[0]?.evidenceExplanation.documentVersion
+        .contentHash,
+    ).toBe(firstFingerprint);
+    expect(
+      retainedProvenance?.items[0]?.evidenceExplanation.document.fingerprint,
+    ).toBe(firstFingerprint);
 
     const historicalRelationship = (
       await catalogue.listKnowledgeRelationships({
@@ -3060,6 +3223,12 @@ describe('DuckDB catalogue migrations', () => {
         })
       ).items,
     ).toHaveLength(5);
+    expect(
+      await catalogue.getKnowledgePublication(firstPublication.id),
+    ).toEqual(firstPublication);
+    expect(
+      await catalogue.getKnowledgePublication(secondPublication.id),
+    ).toEqual(secondPublication);
     await catalogue.close();
 
     const verificationInstance = await DuckDBInstance.create(
@@ -3088,5 +3257,127 @@ describe('DuckDB catalogue migrations', () => {
       verificationConnection.closeSync();
       verificationInstance.closeSync();
     }
+
+    const expectSnapshotIntegrityFailure = async (
+      table: 'entity_versions' | 'relationship_versions',
+      versionId: string,
+      publicationId: string,
+      mutate: (snapshot: Record<string, unknown>) => Record<string, unknown>,
+      expectedMessage?: string,
+    ): Promise<void> => {
+      const databasePath = join(directory, 'catalogue.duckdb');
+      const mutationInstance = await DuckDBInstance.create(databasePath);
+      const mutationConnection = await mutationInstance.connect();
+      const originalSnapshot = await (async (): Promise<string> => {
+        try {
+          const rows = await mutationConnection.runAndReadAll(
+            `SELECT CAST(snapshot_json AS VARCHAR) AS snapshot_json FROM ${table} WHERE id = $1`,
+            [versionId],
+          );
+          const row = rows.getRowObjectsJson()[0];
+          if (row?.snapshot_json === undefined) {
+            throw new Error(`Published ${table} row was not retained`);
+          }
+          const snapshotJson = String(row.snapshot_json);
+          await mutationConnection.run(
+            `UPDATE ${table} SET snapshot_json = $1 WHERE id = $2`,
+            [
+              JSON.stringify(
+                mutate(JSON.parse(snapshotJson) as Record<string, unknown>),
+              ),
+              versionId,
+            ],
+          );
+          return snapshotJson;
+        } finally {
+          mutationConnection.closeSync();
+          mutationInstance.closeSync();
+        }
+      })();
+
+      const integrityCatalogue = await createDuckDbCatalogue(
+        databasePath,
+        migrationsDirectory,
+      );
+      try {
+        const failure = await integrityCatalogue
+          .getKnowledgePublication(publicationId)
+          .then(
+            () => undefined,
+            (error: unknown) => error,
+          );
+        expect(failure).toBeInstanceOf(CatalogueIntegrityError);
+        if (expectedMessage !== undefined) {
+          expect(failure).toMatchObject({ message: expectedMessage });
+        }
+      } finally {
+        await integrityCatalogue.close();
+      }
+
+      const restoreInstance = await DuckDBInstance.create(databasePath);
+      const restoreConnection = await restoreInstance.connect();
+      try {
+        await restoreConnection.run(
+          `UPDATE ${table} SET snapshot_json = $1 WHERE id = $2`,
+          [originalSnapshot, versionId],
+        );
+      } finally {
+        restoreConnection.closeSync();
+        restoreInstance.closeSync();
+      }
+    };
+
+    const mutateEntitySnapshot = (
+      mutate: (snapshot: Record<string, unknown>) => Record<string, unknown>,
+    ) =>
+      expectSnapshotIntegrityFailure(
+        'entity_versions',
+        firstPublishedOwner.currentVersionId,
+        firstPublication.id,
+        mutate,
+      );
+    const mutateRelationshipSnapshot = (
+      mutate: (snapshot: Record<string, unknown>) => Record<string, unknown>,
+    ) =>
+      expectSnapshotIntegrityFailure(
+        'relationship_versions',
+        secondPublishedRelationship.currentVersionId,
+        secondPublication.id,
+        mutate,
+      );
+
+    for (const mutateSupport of [
+      (snapshot: Record<string, unknown>) => ({
+        ...snapshot,
+        sourceEvidenceIds: [],
+      }),
+      (snapshot: Record<string, unknown>) => ({
+        ...snapshot,
+        provenance: [],
+      }),
+      (snapshot: Record<string, unknown>) => ({
+        ...snapshot,
+        sourceEvidenceIds: [],
+        provenance: [],
+      }),
+    ]) {
+      await mutateEntitySnapshot(mutateSupport);
+      await mutateRelationshipSnapshot(mutateSupport);
+    }
+
+    await mutateEntitySnapshot(
+      (snapshot) => ({
+        ...snapshot,
+        name: `${String(snapshot.name)} (modified)`,
+      }),
+      'content does not match its stored hash',
+    );
+    await mutateRelationshipSnapshot(
+      (snapshot) => ({
+        ...snapshot,
+        type: snapshot.type === 'DEPENDS_ON' ? 'USES' : 'DEPENDS_ON',
+      }),
+      'content does not match its stored hash',
+    );
   });
 });

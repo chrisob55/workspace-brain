@@ -18,6 +18,7 @@ type OpenApiDocument = {
         responses?: Record<
           string,
           {
+            $ref?: string;
             content?: Record<string, { schema?: { $ref?: string } }>;
           }
         >;
@@ -25,6 +26,7 @@ type OpenApiDocument = {
     }
   >;
   components: {
+    parameters?: Record<string, Record<string, unknown>>;
     schemas: Record<
       string,
       {
@@ -67,6 +69,10 @@ describe('OpenAPI contract', () => {
     const knowledgeOperations = [
       ['/api/v1/knowledge/models', 'listKnowledgeModels'],
       ['/api/v1/knowledge/models/{modelId}', 'getKnowledgeModel'],
+      [
+        '/api/v1/knowledge/models/{modelId}/publications/latest',
+        'getLatestKnowledgePublication',
+      ],
       ['/api/v1/knowledge/entities', 'listKnowledgeEntities'],
       ['/api/v1/knowledge/entities/{entityId}', 'getKnowledgeEntity'],
       ['/api/v1/knowledge/relationships', 'listKnowledgeRelationships'],
@@ -75,6 +81,34 @@ describe('OpenAPI contract', () => {
         'getKnowledgeRelationship',
       ],
       ['/api/v1/knowledge/publications', 'listKnowledgePublications'],
+      [
+        '/api/v1/knowledge/publications/{publicationId}',
+        'getKnowledgePublication',
+      ],
+      [
+        '/api/v1/knowledge/publications/{publicationId}/summary',
+        'getKnowledgePublicationSummary',
+      ],
+      [
+        '/api/v1/knowledge/publications/{publicationId}/entities/{entityId}',
+        'getPublishedEntity',
+      ],
+      [
+        '/api/v1/knowledge/publications/{publicationId}/entities/{entityId}/relationships',
+        'listPublishedEntityRelationships',
+      ],
+      [
+        '/api/v1/knowledge/publications/{publicationId}/entities/{entityId}/provenance',
+        'getPublishedEntityProvenance',
+      ],
+      [
+        '/api/v1/knowledge/publications/{publicationId}/relationships/{relationshipId}',
+        'getPublishedRelationship',
+      ],
+      [
+        '/api/v1/knowledge/publications/{publicationId}/relationships/{relationshipId}/provenance',
+        'getPublishedRelationshipProvenance',
+      ],
     ] as const;
     for (const [path, operationId] of knowledgeOperations) {
       expect(document.paths[path]?.get?.operationId).toBe(operationId);
@@ -102,6 +136,27 @@ describe('OpenAPI contract', () => {
     expect(document.components.schemas.KnowledgeEntity).toBeDefined();
     expect(document.components.schemas.KnowledgeRelationship).toBeDefined();
     expect(document.components.schemas.KnowledgePublication).toBeDefined();
+    expect(
+      document.components.schemas.KnowledgePublicationSummary,
+    ).toBeDefined();
+    expect(document.components.schemas.PublishedEntity).toBeDefined();
+    expect(document.components.schemas.PublishedRelationship).toBeDefined();
+    expect(document.components.schemas.KnowledgeProvenancePage).toBeDefined();
+    expect(document.components.schemas.PublishedRelationshipPage).toBeDefined();
+    expect(document.components.schemas.PublishedEntity?.required).toContain(
+      'entityVersionId',
+    );
+    expect(
+      document.components.schemas.PublishedRelationship?.required,
+    ).toContain('relationshipVersionId');
+    for (const path of [
+      '/api/v1/knowledge/publications/{publicationId}/entities/{entityId}',
+      '/api/v1/knowledge/publications/{publicationId}/relationships/{relationshipId}',
+    ]) {
+      expect(document.paths[path]?.get?.responses?.['404']?.$ref).toBe(
+        '#/components/responses/NotFound',
+      );
+    }
     expect(document.components.schemas.KnowledgeEntity?.required).toContain(
       'provenance',
     );
@@ -179,6 +234,94 @@ describe('OpenAPI contract', () => {
         (parameter) => parameter.name,
       ),
     ).toContain('extension');
+  });
+
+  it('declares and registers the Slice 5 publication-scoped exploration API', async () => {
+    const document = JSON.parse(
+      await readFile(openApiPath, 'utf8'),
+    ) as OpenApiDocument;
+    const operations = [
+      [
+        '/api/v1/knowledge/models/{modelId}/publications/latest',
+        'getLatestKnowledgePublication',
+        'KnowledgePublication',
+      ],
+      [
+        '/api/v1/knowledge/publications/{publicationId}',
+        'getKnowledgePublication',
+        'KnowledgePublication',
+      ],
+      [
+        '/api/v1/knowledge/publications/{publicationId}/summary',
+        'getKnowledgePublicationSummary',
+        'KnowledgePublicationSummary',
+      ],
+      [
+        '/api/v1/knowledge/publications/{publicationId}/entities/{entityId}',
+        'getPublishedEntity',
+        'PublishedEntity',
+      ],
+      [
+        '/api/v1/knowledge/publications/{publicationId}/entities/{entityId}/relationships',
+        'listPublishedEntityRelationships',
+        'PublishedRelationshipPage',
+      ],
+      [
+        '/api/v1/knowledge/publications/{publicationId}/entities/{entityId}/provenance',
+        'getPublishedEntityProvenance',
+        'KnowledgeProvenancePage',
+      ],
+      [
+        '/api/v1/knowledge/publications/{publicationId}/relationships/{relationshipId}',
+        'getPublishedRelationship',
+        'PublishedRelationship',
+      ],
+      [
+        '/api/v1/knowledge/publications/{publicationId}/relationships/{relationshipId}/provenance',
+        'getPublishedRelationshipProvenance',
+        'KnowledgeProvenancePage',
+      ],
+    ] as const;
+    const server = createApiServer(
+      {} as Parameters<typeof createApiServer>[0],
+      { logger: false },
+    );
+    await server.ready();
+    for (const [path, operationId, schema] of operations) {
+      const operation = document.paths[path]?.get;
+      expect(operation?.operationId).toBe(operationId);
+      expect(
+        operation?.responses?.['200']?.content?.['application/json']?.schema
+          ?.$ref,
+      ).toBe(`#/components/schemas/${schema}`);
+      expect(operation?.responses?.['400']?.$ref).toBe(
+        '#/components/responses/InvalidRequest',
+      );
+      expect(
+        server.hasRoute({
+          method: 'GET',
+          url: path.replace(/\{([^}]+)\}/g, ':$1'),
+        }),
+      ).toBe(true);
+      for (const parameter of operation?.parameters ?? []) {
+        const ref = (parameter as { $ref?: string }).$ref;
+        if (ref !== undefined) {
+          const name = ref.split('/').at(-1);
+          expect(
+            name === undefined
+              ? undefined
+              : document.components.parameters?.[name],
+          ).toBeDefined();
+        }
+      }
+    }
+    expect(
+      document.components.schemas.PublishedRelationshipTraversal?.required,
+    ).toContain('relationshipVersionId');
+    expect(
+      document.components.schemas.KnowledgeProvenancePage?.required,
+    ).toContain('knowledgeVersionNumber');
+    await server.close();
   });
 
   it('declares the Slice 4 read-only search projection routes and schemas', async () => {

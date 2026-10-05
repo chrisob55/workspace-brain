@@ -5,13 +5,15 @@ discover and organise knowledge in local workspaces, repositories, and
 documents, then produce traceable, versioned Knowledge Models for AI OS and
 other consumers. It is not itself an agent or reasoning platform.
 
-The project is being delivered in vertical slices. The current implementation
-provides deterministic, read-only filesystem discovery and an operational
-inventory of repositories and documents. It records fingerprints and change
-history; it does not yet parse sources into Evidence, use AI, or produce and
-publish Knowledge Models. See the [architecture document](docs/architecture/Workspace-Brain-ADD-v1.md)
-for the target design and [Slice 1 remediation report](docs/implementation/slice-1-remediation-report.md)
-for the current runtime topology.
+The project is being delivered in vertical slices. Slices 0-5 provide
+deterministic filesystem discovery, evidence extraction, immutable Knowledge
+Model publications, publication-scoped lexical search, and one-hop knowledge
+exploration with evidence-backed provenance. Search and exploration remain
+read-only; no AI, embeddings, semantic search, or graph store is used. See the
+[architecture document](docs/architecture/Workspace-Brain-ADD-v1.md), the
+[Slice 5 implementation report](docs/implementation/slice-5-report.md), and
+[Slice 1 remediation report](docs/implementation/slice-1-remediation-report.md)
+for architecture, current exploration behavior, and runtime topology.
 
 ## Principles
 
@@ -20,7 +22,7 @@ for the current runtime topology.
 - Discovery is deterministic and useful without AI.
 - The API owns catalogue writes; the ingestion worker scans sources and sends
   inventory over NATS JetStream.
-- Future Knowledge Models are intended to be evidence-backed, provenance-aware,
+- Published Knowledge Models are immutable, evidence-backed, provenance-aware,
   and versioned.
 - AI OS and other consumers should use published contracts, not internal
   storage or infrastructure.
@@ -36,11 +38,16 @@ for the current MVP scope.
 - SHA-256 file fingerprints and deterministic change classification:
   added, modified, removed, and unchanged.
 - Stable inventory identities, scan history, and discovery events.
+- Document-version evidence and deterministic, controlled-vocabulary
+  Knowledge Model candidates with immutable publication snapshots.
+- Publication-scoped lexical search and deterministic one-hop relationship
+  exploration with source-version provenance.
 - Read-only, cursor-paginated API endpoints for sources, workspaces,
-  repositories, and documents.
+  repositories, documents, search, and published knowledge.
 - Docker Compose runtime with the API, ingestion worker, NATS JetStream,
-  Qdrant, and Ollama. Qdrant and Ollama are part of the planned architecture;
-  the current discovery slice does not use them for indexing or AI.
+  Qdrant, and Ollama. Qdrant and Ollama are part of the broader architecture;
+  the completed knowledge-exploration slice does not use them for indexing or
+  AI.
 
 ## Getting started
 

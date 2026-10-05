@@ -1,11 +1,13 @@
 import {
   createDocumentId,
   createDocumentVersionId,
+  createEntityVersionId,
   createEvidenceId,
   createKnowledgeEntityId,
   createKnowledgeModelId,
   createKnowledgePublicationId,
   createKnowledgeRelationshipId,
+  createRelationshipVersionId,
   createRepositoryId,
   createSourceId,
   createWorkspaceId,
@@ -14,6 +16,7 @@ import type {
   SearchEntityRequest,
   SearchRelationshipRequest,
 } from '@workspace-brain/catalogue';
+import { CatalogueIntegrityError } from '@workspace-brain/catalogue';
 import { describe, expect, it } from 'vitest';
 
 import { createApiServer } from './server.js';
@@ -156,6 +159,110 @@ const evidenceExplanation = {
     extractionRuleVersion: 1,
   },
 };
+const entityVersionId = createEntityVersionId();
+const relationshipVersionId = createRelationshipVersionId();
+const entityProvenance = {
+  evidenceId: evidence.id,
+  documentVersionId: documentVersion.id,
+  documentId: document.id,
+  sourceId: source.id,
+  documentPath: document.path,
+  contentFingerprint: document.fingerprint,
+  locator: evidence.locator,
+  processorId: documentVersion.processorId,
+  processorVersion: documentVersion.processorVersion,
+  extractionRuleId: documentVersion.extractionRuleId,
+  extractionRuleVersion: documentVersion.extractionRuleVersion,
+  knowledgeExtractorId: 'deterministic-knowledge-extractors',
+  knowledgeExtractorVersion: 1,
+};
+const publishedEntityObject = {
+  id: projectedEntities[0]!.entityId,
+  knowledgeModelId: knowledgeModel.id,
+  type: 'package' as const,
+  name: 'service',
+  sourceEvidenceIds: [evidence.id],
+  provenance: [entityProvenance],
+  lifecycleStatus: 'observed' as const,
+  currentVersionId: entityVersionId,
+  createdAt: publication.publishedAt,
+  updatedAt: publication.publishedAt,
+};
+const publishedRelationshipObject = {
+  id: projectedRelationship.relationshipId,
+  knowledgeModelId: knowledgeModel.id,
+  type: 'DEPENDS_ON' as const,
+  sourceEntityId: projectedEntities[0]!.entityId,
+  targetEntityId: projectedEntities[1]!.entityId,
+  sourceEvidenceIds: [evidence.id],
+  provenance: [entityProvenance],
+  confidence: 1,
+  lifecycleStatus: 'related' as const,
+  currentVersionId: relationshipVersionId,
+  createdAt: publication.publishedAt,
+  updatedAt: publication.publishedAt,
+};
+const publishedEntity = {
+  publicationId: publication.id,
+  entityVersionId,
+  versionNumber: 2,
+  entity: publishedEntityObject,
+};
+const publishedRelationship = {
+  publicationId: publication.id,
+  relationshipVersionId,
+  versionNumber: 3,
+  relationship: publishedRelationshipObject,
+};
+const incomingRelationshipId = createKnowledgeRelationshipId();
+const incomingRelationshipVersionId = createRelationshipVersionId();
+const incomingPublishedRelationship = {
+  publicationId: publication.id,
+  relationshipVersionId: incomingRelationshipVersionId,
+  versionNumber: 1,
+  direction: 'incoming' as const,
+  relationship: {
+    ...publishedRelationshipObject,
+    id: incomingRelationshipId,
+    sourceEntityId: projectedEntities[1]!.entityId,
+    targetEntityId: publishedEntityObject.id,
+    currentVersionId: incomingRelationshipVersionId,
+  },
+};
+const publishedRelationshipTraversals = [
+  {
+    ...publishedRelationship,
+    direction: 'outgoing' as const,
+  },
+  incomingPublishedRelationship,
+].sort((left, right) =>
+  left.relationship.id.localeCompare(right.relationship.id),
+);
+const secondEvidence = { ...evidence, id: createEvidenceId() };
+const secondProvenance = {
+  ...entityProvenance,
+  evidenceId: secondEvidence.id,
+};
+const secondEvidenceExplanation = {
+  ...evidenceExplanation,
+  evidence: secondEvidence,
+};
+const publishedProvenance = {
+  publicationId: publication.id,
+  knowledgeObjectType: 'entity' as const,
+  knowledgeObjectId: publishedEntityObject.id,
+  knowledgeVersionId: entityVersionId,
+  knowledgeVersionNumber: 2,
+  items: [
+    { provenance: entityProvenance, evidenceExplanation },
+    {
+      provenance: secondProvenance,
+      evidenceExplanation: secondEvidenceExplanation,
+    },
+  ].sort((left, right) =>
+    left.provenance.evidenceId.localeCompare(right.provenance.evidenceId),
+  ),
+};
 
 function createCatalogue(
   ready = true,
@@ -271,6 +378,83 @@ function createCatalogue(
     async listKnowledgePublications() {
       return { items: [] };
     },
+    async listAvailableKnowledgePublications() {
+      return { items: [] };
+    },
+    async getKnowledgePublication(publicationId: string) {
+      return publicationId === publication.id ? publication : undefined;
+    },
+    async getLatestKnowledgePublication(modelId: string) {
+      return modelId === knowledgeModel.id ? publication : undefined;
+    },
+    async getKnowledgePublicationSummary(publicationId: string) {
+      return publicationId === publication.id
+        ? {
+            publication,
+            entityCount: 2,
+            relationshipCount: 1,
+          }
+        : undefined;
+    },
+    async getPublishedEntity(publicationId: string, entityId: string) {
+      return publicationId === publication.id &&
+        entityId === publishedEntity.entity.id
+        ? publishedEntity
+        : undefined;
+    },
+    async getPublishedRelationship(
+      publicationId: string,
+      relationshipId: string,
+    ) {
+      return publicationId === publication.id &&
+        relationshipId === publishedRelationship.relationship.id
+        ? publishedRelationship
+        : undefined;
+    },
+    async listPublishedEntityRelationships(request: {
+      publicationId: string;
+      entityId: string;
+      direction: 'incoming' | 'outgoing' | 'both';
+      relationshipType?: string;
+      afterId?: string;
+      limit: number;
+    }) {
+      const items = publishedRelationshipTraversals.filter(
+        (item) =>
+          request.publicationId === publication.id &&
+          (request.direction === 'both' ||
+            request.direction === item.direction) &&
+          (request.relationshipType === undefined ||
+            item.relationship.type === request.relationshipType) &&
+          (request.afterId === undefined ||
+            item.relationship.id > request.afterId),
+      );
+      return { items: items.slice(0, request.limit) };
+    },
+    async getPublishedEntityProvenance(
+      publicationId: string,
+      entityId: string,
+    ) {
+      return publicationId === publication.id &&
+        entityId === publishedEntity.entity.id
+        ? publishedProvenance
+        : undefined;
+    },
+    async getPublishedRelationshipProvenance(
+      publicationId: string,
+      relationshipId: string,
+    ) {
+      return publicationId === publication.id &&
+        relationshipId === publishedRelationship.relationship.id
+        ? {
+            ...publishedProvenance,
+            knowledgeObjectType: 'relationship' as const,
+            knowledgeObjectId: publishedRelationship.relationship.id,
+            knowledgeVersionId: publishedRelationship.relationshipVersionId,
+            knowledgeVersionNumber: publishedRelationship.versionNumber,
+          }
+        : undefined;
+    },
     searchEntityRequests,
     searchRelationshipRequests,
     async searchProjectedEntities(request: SearchEntityRequest) {
@@ -378,6 +562,149 @@ describe('Workspace Brain API routes', () => {
     expect(workspaces.statusCode).toBe(200);
     expect(workspaces.json()).toEqual({ items: [workspace], nextCursor: null });
     expect(sources.headers['content-type']).toContain('application/json');
+    await server.close();
+  });
+
+  it('resolves concrete publications and opens immutable objects by publication', async () => {
+    const server = createApiServer(createCatalogue(), { logger: false });
+    const latest = await server.inject(
+      `/api/v1/knowledge/models/${knowledgeModel.id}/publications/latest`,
+    );
+    const selectedPublication = await server.inject(
+      `/api/v1/knowledge/publications/${publication.id}`,
+    );
+    const summary = await server.inject(
+      `/api/v1/knowledge/publications/${publication.id}/summary`,
+    );
+    const entity = await server.inject(
+      `/api/v1/knowledge/publications/${publication.id}/entities/${publishedEntity.entity.id}`,
+    );
+    const relationship = await server.inject(
+      `/api/v1/knowledge/publications/${publication.id}/relationships/${publishedRelationship.relationship.id}`,
+    );
+    const searchEntity = await server.inject(
+      `/api/v1/search/entity/${publishedEntity.entity.id}?publicationId=${publication.id}`,
+    );
+    const searchRelationship = await server.inject(
+      `/api/v1/search/relationship/${publishedRelationship.relationship.id}?publicationId=${publication.id}`,
+    );
+    const absent = await server.inject(
+      `/api/v1/knowledge/publications/${publication.id}/entities/${projectedEntities[2]!.entityId}`,
+    );
+
+    expect(latest.statusCode).toBe(200);
+    expect(latest.json()).toMatchObject({
+      id: publication.id,
+      knowledgeModelId: knowledgeModel.id,
+    });
+    expect(selectedPublication.json()).toEqual(publication);
+    expect(summary.json()).toEqual({
+      publication,
+      entityCount: 2,
+      relationshipCount: 1,
+    });
+    expect(entity.json()).toEqual(publishedEntity);
+    expect(entity.json().entityVersionId).toBe(entityVersionId);
+    expect(entity.json().versionNumber).toBe(2);
+    expect(relationship.json()).toEqual(publishedRelationship);
+    expect(relationship.json().relationshipVersionId).toBe(
+      relationshipVersionId,
+    );
+    expect(searchEntity.json()).toMatchObject({
+      entityId: entity.json().entity.id,
+      publicationId: entity.json().publicationId,
+    });
+    expect(searchRelationship.json()).toMatchObject({
+      relationshipId: relationship.json().relationship.id,
+      publicationId: relationship.json().publicationId,
+    });
+    expect(absent.statusCode).toBe(404);
+    await server.close();
+  });
+
+  it('paginates one-hop relationships and provenance with publication-bound cursors', async () => {
+    const server = createApiServer(createCatalogue(), { logger: false });
+    const entityId = publishedEntity.entity.id;
+    const relationshipPage1 = await server.inject(
+      `/api/v1/knowledge/publications/${publication.id}/entities/${entityId}/relationships?limit=1&direction=both`,
+    );
+    const firstRelationshipItem = relationshipPage1.json().items[0];
+    const relationshipPage2 = await server.inject(
+      `/api/v1/knowledge/publications/${publication.id}/entities/${entityId}/relationships?limit=1&direction=both&cursor=${encodeURIComponent(relationshipPage1.json().nextCursor)}`,
+    );
+    const mismatchedRelationshipCursor = await server.inject(
+      `/api/v1/knowledge/publications/${publication.id}/entities/${entityId}/relationships?limit=1&direction=incoming&cursor=${encodeURIComponent(relationshipPage1.json().nextCursor)}`,
+    );
+    const invalidCursor = Buffer.from(
+      JSON.stringify({
+        version: 8,
+        kind: 'published-relationships',
+        publicationId: publication.id,
+        entityId,
+        direction: 'both',
+        afterId: incomingRelationshipId,
+      }),
+    ).toString('base64url');
+    const unsupportedCursor = await server.inject(
+      `/api/v1/knowledge/publications/${publication.id}/entities/${entityId}/relationships?cursor=${invalidCursor}`,
+    );
+
+    const provenancePath = `/api/v1/knowledge/publications/${publication.id}/entities/${entityId}/provenance`;
+    const provenancePage1 = await server.inject(`${provenancePath}?limit=1`);
+    const provenancePage2 = await server.inject(
+      `${provenancePath}?limit=1&cursor=${encodeURIComponent(provenancePage1.json().nextCursor)}`,
+    );
+    const relationshipProvenanceWithEntityCursor = await server.inject(
+      `/api/v1/knowledge/publications/${publication.id}/relationships/${publishedRelationship.relationship.id}/provenance?cursor=${encodeURIComponent(provenancePage1.json().nextCursor)}`,
+    );
+
+    expect(relationshipPage1.statusCode).toBe(200);
+    expect(relationshipPage1.json().publicationId).toBe(publication.id);
+    expect(firstRelationshipItem).toMatchObject({
+      publicationId: publication.id,
+      versionNumber: expect.any(Number),
+      direction: expect.stringMatching(/^(incoming|outgoing)$/),
+    });
+    expect(firstRelationshipItem.relationshipVersionId).toBeDefined();
+    expect(relationshipPage2.json().items).toHaveLength(1);
+    expect(relationshipPage2.json().items[0].relationship.id).not.toBe(
+      firstRelationshipItem.relationship.id,
+    );
+    expect(mismatchedRelationshipCursor.statusCode).toBe(400);
+    expect(unsupportedCursor.statusCode).toBe(400);
+    expect(provenancePage1.json()).toMatchObject({
+      publicationId: publication.id,
+      knowledgeObjectType: 'entity',
+      knowledgeObjectId: entityId,
+      knowledgeVersionId: entityVersionId,
+      knowledgeVersionNumber: 2,
+    });
+    expect(provenancePage1.json().items).toHaveLength(1);
+    expect(provenancePage1.json().nextCursor).toBeTruthy();
+    expect(provenancePage2.json().items).toHaveLength(1);
+    expect(relationshipProvenanceWithEntityCursor.statusCode).toBe(400);
+    await server.close();
+  });
+
+  it('returns an explicit integrity problem when a published read detects corrupt authority', async () => {
+    const catalogue = {
+      ...createCatalogue(),
+      async getPublishedEntity() {
+        throw new CatalogueIntegrityError('publication version is missing');
+      },
+    };
+    const server = createApiServer(
+      catalogue as Parameters<typeof createApiServer>[0],
+      { logger: false },
+    );
+    const response = await server.inject(
+      `/api/v1/knowledge/publications/${publication.id}/entities/${publishedEntity.entity.id}`,
+    );
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toMatchObject({
+      title: 'Knowledge Integrity Failure',
+      status: 500,
+    });
     await server.close();
   });
 
