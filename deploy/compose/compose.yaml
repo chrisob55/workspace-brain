@@ -54,6 +54,23 @@ services:
         condition: service_started
     restart: unless-stopped
 
+  knowledge-worker:
+    build:
+      context: ../..
+      dockerfile: deploy/compose/Dockerfile
+    command: ['node', 'apps/knowledge-worker/dist/main.js']
+    environment:
+      LOG_LEVEL: info
+      NATS_SERVERS: nats://nats:4222
+    networks:
+      - backend
+    depends_on:
+      ingestion-worker:
+        condition: service_started
+      nats:
+        condition: service_started
+    restart: unless-stopped
+
   nats:
     image: nats:2.10-alpine
     command: ['-js', '-sd', '/data', '-m', '8222']

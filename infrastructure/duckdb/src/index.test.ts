@@ -1,8 +1,10 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { createHash } from 'node:crypto';
 
 import { DuckDBInstance } from '@duckdb/node-api';
+import type { DiscoveryEvent } from '@workspace-brain/domain';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { createDuckDbCatalogue } from './index.js';
@@ -20,6 +22,29 @@ afterEach(async () => {
       .map((directory) => rm(directory, { recursive: true, force: true })),
   );
 });
+
+function createProcessingEvent(
+  candidate: Extract<
+    DiscoveryEvent,
+    { readonly eventType: 'DocumentProcessingSubmitted' }
+  >['payload']['candidate'],
+  eventId: string,
+): Extract<
+  DiscoveryEvent,
+  { readonly eventType: 'DocumentProcessingSubmitted' }
+> {
+  return {
+    eventId,
+    eventType: 'DocumentProcessingSubmitted',
+    eventVersion: 1,
+    occurredAt: candidate.processedAt,
+    producer: 'workspace-brain-knowledge-worker',
+    correlationId: 'evidence-correlation',
+    idempotencyKey: `processing:${eventId}`,
+    partitionKey: candidate.sourceId,
+    payload: { candidate },
+  };
+}
 
 describe('DuckDB catalogue migrations', () => {
   it('runs and safely reapplies initial migrations for schema, sources, and workspaces', async () => {
@@ -94,7 +119,10 @@ describe('DuckDB catalogue migrations', () => {
     expect(tables.getRowObjectsJson().map((row) => row.table_name)).toEqual([
       'discovery_history',
       'discovery_outbox',
+      'document_processing_runs',
+      'document_versions',
       'documents',
+      'extracted_evidence',
       'inventory_records',
       'repositories',
       'schema_migrations',
@@ -192,6 +220,275 @@ describe('DuckDB catalogue migrations', () => {
       expect.objectContaining({ eventType: 'SourceScanCompleted' }),
     ]);
     await restarted.close();
+  });
+
+  it('serializes concurrent writes while persisting immutable evidence idempotently', async () => {
+    const directory = await mkdtemp(
+      join(tmpdir(), 'workspace-brain-evidence-'),
+    );
+    temporaryDirectories.push(directory);
+    const catalogue = await createDuckDbCatalogue(
+      join(directory, 'catalogue.duckdb'),
+      migrationsDirectory,
+    );
+    await catalogue.registerConfiguration(
+      [
+        {
+          configId: 'evidence-source',
+          name: 'Evidence Source',
+          rootPaths: [join(directory, 'source')],
+          excludeDirs: [],
+          includeExtensions: ['.md'],
+          maxFileSizeBytes: 1024,
+        },
+      ],
+      [],
+    );
+    const source = (await catalogue.listSources({ limit: 10 })).items[0];
+    const root = source?.roots?.[0];
+    if (source === undefined || root === undefined) {
+      throw new Error('Evidence source registration failed');
+    }
+    const discoveredAt = '2026-10-02T10:00:00.000Z';
+    const content = '# Evidence\n\nA deterministic fact.';
+    const fingerprint = createHash('sha256').update(content).digest('hex');
+    const scan = await catalogue.persistScan(
+      source.id,
+      [],
+      [
+        {
+          path: `${root.id}/README.md`,
+          filename: 'README.md',
+          extension: '.md',
+          sizeBytes: Buffer.byteLength(content),
+          modifiedAt: discoveredAt,
+          fingerprint,
+          discoveryMethod: 'filesystem',
+        },
+      ],
+      discoveredAt,
+      'evidence-scan',
+      10,
+    );
+    const document = scan.documents[0];
+    if (document === undefined) {
+      throw new Error('Evidence fixture document was not persisted');
+    }
+    const candidate = {
+      documentId: document.id,
+      sourceId: source.id,
+      path: document.path,
+      contentFingerprint: fingerprint,
+      processedAt: '2026-10-02T10:00:01.000Z',
+      durationMilliseconds: 12,
+      processorId: 'markdown',
+      processorVersion: 1,
+      extractionRuleId: 'markdown-blocks',
+      extractionRuleVersion: 1,
+      evidence: [
+        {
+          key: 'markdown:1:heading',
+          kind: 'heading' as const,
+          excerpt: 'Evidence',
+          truncated: false,
+          locator: {
+            kind: 'markdown-lines' as const,
+            lineStart: 1,
+            lineEnd: 1,
+          },
+        },
+      ],
+    };
+    const event = createProcessingEvent(candidate, 'processing-event-1');
+
+    await expect(
+      catalogue.applyDocumentProcessing(
+        createProcessingEvent(
+          {
+            ...candidate,
+            extractionRuleId: 'json-scalar-values',
+          },
+          'processing-invalid-processor',
+        ),
+      ),
+    ).rejects.toThrow('Invalid document processing submission');
+    await expect(
+      catalogue.applyDocumentProcessing(
+        createProcessingEvent(
+          {
+            ...candidate,
+            processorId: 'json',
+            extractionRuleId: 'json-scalar-values',
+            evidence: [
+              {
+                key: 'json:invalid-pointer',
+                kind: 'structured-value',
+                excerpt: 'value',
+                truncated: false,
+                locator: { kind: 'json-pointer', pointer: 'invalid' },
+              },
+            ],
+          },
+          'processing-invalid-pointer',
+        ),
+      ),
+    ).rejects.toThrow('Invalid document processing submission');
+
+    const [first] = await Promise.all([
+      catalogue.applyDocumentProcessing(event),
+      catalogue.persistScan(
+        source.id,
+        [],
+        [
+          {
+            path: document.path,
+            filename: document.filename,
+            extension: document.extension,
+            sizeBytes: document.sizeBytes,
+            modifiedAt: document.modifiedAt,
+            fingerprint,
+            discoveryMethod: 'filesystem',
+          },
+        ],
+        discoveredAt,
+        'evidence-concurrent-scan',
+        10,
+      ),
+    ]);
+    const replay = await catalogue.applyDocumentProcessing(event);
+    const sameFingerprint = await catalogue.applyDocumentProcessing(
+      createProcessingEvent(candidate, 'processing-event-2'),
+    );
+
+    expect(first.duplicate).toBe(false);
+    expect(first.documentVersion.documentId).toBe(document.id);
+    expect(first.documentVersion.contentHash).toBe(fingerprint);
+    expect(first.evidence).toHaveLength(1);
+    expect(replay.duplicate).toBe(true);
+    expect(replay.evidence.map(({ id }) => id)).toEqual(
+      first.evidence.map(({ id }) => id),
+    );
+    expect(sameFingerprint.duplicate).toBe(true);
+    expect(
+      (await catalogue.listDocumentEvidence(document.id, { limit: 20 })).items,
+    ).toEqual(first.evidence);
+    const explanation = await catalogue.explainEvidence(
+      String(first.evidence[0]?.id),
+    );
+    expect(explanation).toMatchObject({
+      document: {
+        id: document.id,
+        sourceId: source.id,
+        path: document.path,
+        fingerprint,
+      },
+      provenance: {
+        provider: 'filesystem',
+        contentFingerprint: fingerprint,
+        processorId: 'markdown',
+        extractionRuleId: 'markdown-blocks',
+      },
+    });
+    const pending = await catalogue.listPendingDiscoveryEvents(100);
+    expect(
+      pending.filter(({ eventType }) => eventType === 'DocumentExtracted'),
+    ).toHaveLength(1);
+
+    await expect(
+      catalogue.applyDocumentProcessing(
+        createProcessingEvent(
+          {
+            ...candidate,
+            evidence: [
+              {
+                ...candidate.evidence[0],
+                excerpt: 'altered',
+              },
+            ],
+          },
+          'processing-event-1',
+        ),
+      ),
+    ).rejects.toThrow('reused with a different payload');
+
+    await catalogue.persistScan(
+      source.id,
+      [],
+      [
+        {
+          path: document.path,
+          filename: document.filename,
+          extension: document.extension,
+          sizeBytes: document.sizeBytes,
+          modifiedAt: discoveredAt,
+          fingerprint: 'c'.repeat(64),
+          discoveryMethod: 'filesystem',
+        },
+      ],
+      discoveredAt,
+      'evidence-scan-modified',
+      10,
+    );
+    await expect(
+      catalogue.applyDocumentProcessing(
+        createProcessingEvent(candidate, 'processing-event-3'),
+      ),
+    ).rejects.toThrow('does not match the current catalogue document');
+
+    const changedContent = '# Updated evidence';
+    const changedFingerprint = createHash('sha256')
+      .update(changedContent)
+      .digest('hex');
+    await catalogue.persistScan(
+      source.id,
+      [],
+      [
+        {
+          path: document.path,
+          filename: document.filename,
+          extension: document.extension,
+          sizeBytes: Buffer.byteLength(changedContent),
+          modifiedAt: discoveredAt,
+          fingerprint: changedFingerprint,
+          discoveryMethod: 'filesystem',
+        },
+      ],
+      discoveredAt,
+      'evidence-scan-updated',
+      10,
+    );
+    const changed = await catalogue.applyDocumentProcessing(
+      createProcessingEvent(
+        {
+          ...candidate,
+          contentFingerprint: changedFingerprint,
+          processedAt: '2026-10-02T10:00:02.000Z',
+          evidence: [
+            {
+              key: 'markdown:1:heading',
+              kind: 'heading',
+              excerpt: 'Updated evidence',
+              truncated: false,
+              locator: {
+                kind: 'markdown-lines',
+                lineStart: 1,
+                lineEnd: 1,
+              },
+            },
+          ],
+        },
+        'processing-event-4',
+      ),
+    );
+    expect(changed.duplicate).toBe(false);
+    expect(changed.documentVersion.id).not.toBe(first.documentVersion.id);
+    expect(
+      (await catalogue.listDocumentEvidence(document.id, { limit: 20 })).items,
+    ).toHaveLength(2);
+    expect(
+      (await catalogue.listDocumentEvidence(document.id, { limit: 101 })).items,
+    ).toHaveLength(2);
+    await catalogue.close();
   });
 
   it('registers source roots and workspaces, then persists filterable discovery metadata', async () => {

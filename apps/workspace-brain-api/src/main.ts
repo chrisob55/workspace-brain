@@ -82,6 +82,10 @@ try {
       'workspace.discovery.source.scan.failed',
       'workspace-api-source-scan-failed',
     ],
+    [
+      'workspace.discovery.document.processing.submitted',
+      'workspace-api-document-processing-submitted',
+    ],
   ] as const) {
     await bus.subscribe(subject, durableName, (event) =>
       discovery.handle(event),

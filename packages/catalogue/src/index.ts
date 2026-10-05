@@ -3,6 +3,9 @@ import type {
   DiscoveryEvent,
   DiscoverySource,
   DocumentCandidate,
+  DocumentVersion,
+  Evidence,
+  EvidenceExplanation,
   InventoryChange,
   InventoryRecord,
   RepositoryCandidate,
@@ -60,6 +63,17 @@ export type SourceScanMetrics = {
   readonly durationMilliseconds: number;
 };
 
+export type DocumentProcessingEvent = Extract<
+  DiscoveryEvent,
+  { readonly eventType: 'DocumentProcessingSubmitted' }
+>;
+
+export type DocumentProcessingApplyResult = {
+  readonly documentVersion: DocumentVersion;
+  readonly evidence: readonly Evidence[];
+  readonly duplicate: boolean;
+};
+
 export type { InventoryChange } from '@workspace-brain/domain';
 
 export interface CatalogueReader {
@@ -73,6 +87,11 @@ export interface CatalogueReader {
   listDocuments(
     request: CataloguePageRequest,
   ): Promise<CataloguePage<Document>>;
+  listDocumentEvidence(
+    documentId: string,
+    request: CataloguePageRequest,
+  ): Promise<CataloguePage<Evidence>>;
+  explainEvidence(evidenceId: string): Promise<EvidenceExplanation | undefined>;
 }
 
 export interface DiscoverySourceProvider {
@@ -120,4 +139,7 @@ export interface CatalogueDiscovery extends CatalogueReader {
     durationMilliseconds: number,
     failureType: string,
   ): Promise<void>;
+  applyDocumentProcessing(
+    event: DocumentProcessingEvent,
+  ): Promise<DocumentProcessingApplyResult>;
 }

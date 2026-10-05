@@ -261,6 +261,109 @@
           }
         }
       }
+    },
+    "/api/v1/documents/{documentId}/evidence": {
+      "get": {
+        "operationId": "listDocumentEvidence",
+        "parameters": [
+          {
+            "name": "documentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "ulid"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated read-only extracted evidence for a document",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvidencePage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid document ID, cursor, or pagination parameters",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/evidence/{evidenceId}/explanation": {
+      "get": {
+        "operationId": "getEvidenceExplanation",
+        "parameters": [
+          {
+            "name": "evidenceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "ulid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Evidence, document version, exact locator, and processing provenance",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvidenceExplanation"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid evidence ID",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Evidence was not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -520,6 +623,234 @@
           },
           "nextCursor": {
             "type": ["string", "null"]
+          }
+        }
+      },
+      "EvidenceLocator": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": ["kind", "lineStart", "lineEnd"],
+            "properties": {
+              "kind": {
+                "enum": ["markdown-lines", "text-lines", "yaml-lines"]
+              },
+              "lineStart": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "lineEnd": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "headingPath": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": ["kind", "pointer"],
+            "properties": {
+              "kind": {
+                "const": "json-pointer"
+              },
+              "pointer": {
+                "type": "string"
+              }
+            }
+          }
+        ]
+      },
+      "Evidence": {
+        "type": "object",
+        "required": [
+          "id",
+          "documentVersionId",
+          "key",
+          "kind",
+          "excerpt",
+          "truncated",
+          "locator"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "ulid"
+          },
+          "documentVersionId": {
+            "type": "string",
+            "format": "ulid"
+          },
+          "key": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "heading",
+              "paragraph",
+              "list-item",
+              "table-row",
+              "code-block",
+              "structured-value"
+            ]
+          },
+          "excerpt": {
+            "type": "string",
+            "maxLength": 4000
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "locator": {
+            "$ref": "#/components/schemas/EvidenceLocator"
+          }
+        }
+      },
+      "EvidencePage": {
+        "type": "object",
+        "required": ["items", "nextCursor"],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Evidence"
+            }
+          },
+          "nextCursor": {
+            "type": ["string", "null"]
+          }
+        }
+      },
+      "DocumentVersion": {
+        "type": "object",
+        "required": [
+          "id",
+          "documentId",
+          "contentHash",
+          "hashAlgorithm",
+          "discoveredAt",
+          "processorId",
+          "processorVersion",
+          "extractionRuleId",
+          "extractionRuleVersion",
+          "evidenceCount"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "ulid"
+          },
+          "documentId": {
+            "type": "string",
+            "format": "ulid"
+          },
+          "contentHash": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "hashAlgorithm": {
+            "const": "sha256"
+          },
+          "discoveredAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "processorId": {
+            "type": "string"
+          },
+          "processorVersion": {
+            "type": "integer"
+          },
+          "extractionRuleId": {
+            "type": "string"
+          },
+          "extractionRuleVersion": {
+            "type": "integer"
+          },
+          "evidenceCount": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "EvidenceExplanation": {
+        "type": "object",
+        "required": ["evidence", "documentVersion", "document", "provenance"],
+        "properties": {
+          "evidence": {
+            "$ref": "#/components/schemas/Evidence"
+          },
+          "documentVersion": {
+            "$ref": "#/components/schemas/DocumentVersion"
+          },
+          "document": {
+            "type": "object",
+            "required": ["id", "sourceId", "path", "filename", "fingerprint"],
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "ulid"
+              },
+              "sourceId": {
+                "type": "string",
+                "format": "ulid"
+              },
+              "path": {
+                "type": "string"
+              },
+              "filename": {
+                "type": "string"
+              },
+              "fingerprint": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              }
+            }
+          },
+          "provenance": {
+            "type": "object",
+            "required": [
+              "sourceId",
+              "provider",
+              "documentPath",
+              "contentFingerprint",
+              "processorId",
+              "processorVersion",
+              "extractionRuleId",
+              "extractionRuleVersion"
+            ],
+            "properties": {
+              "sourceId": {
+                "type": "string",
+                "format": "ulid"
+              },
+              "provider": {
+                "const": "filesystem"
+              },
+              "documentPath": {
+                "type": "string"
+              },
+              "contentFingerprint": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "processorId": {
+                "type": "string"
+              },
+              "processorVersion": {
+                "type": "integer"
+              },
+              "extractionRuleId": {
+                "type": "string"
+              },
+              "extractionRuleVersion": {
+                "type": "integer"
+              }
+            }
           }
         }
       },

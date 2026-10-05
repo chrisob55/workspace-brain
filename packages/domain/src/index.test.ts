@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import { createDocumentId, parseDocumentId } from './index.js';
+import {
+  createDocumentId,
+  createDocumentVersionId,
+  createEvidenceId,
+  parseDocumentId,
+  parseDocumentVersionId,
+  parseEvidenceId,
+} from './index.js';
 
 describe('branded domain identifiers', () => {
   it('creates and parses ULIDs', () => {
@@ -14,5 +21,13 @@ describe('branded domain identifiers', () => {
     expect(() => parseDocumentId('documents/readme.md')).toThrow(
       'Catalogue contains an invalid ULID',
     );
+  });
+
+  it('assigns evidence and document-version identities through the catalogue domain', () => {
+    const versionId = createDocumentVersionId();
+    const evidenceId = createEvidenceId();
+
+    expect(parseDocumentVersionId(versionId)).toBe(versionId);
+    expect(parseEvidenceId(evidenceId)).toBe(evidenceId);
   });
 });

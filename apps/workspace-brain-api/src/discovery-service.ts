@@ -16,6 +16,7 @@ type DiscoveryCatalogue = Pick<
   | 'markDiscoveryEventPublished'
   | 'recordScanStarted'
   | 'recordScanFailed'
+  | 'applyDocumentProcessing'
 >;
 
 export function createDiscoveryService(
@@ -49,6 +50,21 @@ export function createDiscoveryService(
           event.payload.durationMilliseconds,
           event.payload.failureType,
         );
+        return;
+      }
+
+      if (event.eventType === 'DocumentProcessingSubmitted') {
+        const { candidate } = event.payload;
+        if (
+          event.producer !== 'workspace-brain-knowledge-worker' ||
+          event.partitionKey !== candidate.sourceId
+        ) {
+          throw new Error(
+            'Document processing source does not match event ownership',
+          );
+        }
+        await catalogue.applyDocumentProcessing(event);
+        await publishPendingEvents(catalogue, events);
         return;
       }
 

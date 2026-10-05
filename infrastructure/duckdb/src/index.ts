@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -10,11 +10,15 @@ import type {
   CataloguePageRequest,
   ConfiguredSource,
   ConfiguredWorkspace,
+  DocumentProcessingEvent,
+  DocumentProcessingApplyResult,
   ScanPersistenceResult,
   SourceScanMetrics,
 } from '@workspace-brain/catalogue';
 import {
   createDocumentId,
+  createDocumentVersionId,
+  createEvidenceId,
   createRepositoryId,
   createSourceId,
   createSourceRootId,
@@ -22,9 +26,15 @@ import {
   type DiscoveryEvent,
   type DiscoverySource,
   type DocumentCandidate,
+  type DocumentVersion,
+  type Evidence,
+  type EvidenceExplanation,
+  type EvidenceLocator,
   type InventoryChange,
   type InventoryRecord,
   parseDocumentId,
+  parseDocumentVersionId,
+  parseEvidenceId,
   parseRepositoryId,
   parseSourceId,
   parseSourceRootId,
@@ -141,16 +151,150 @@ const discoveryEventEnvelopeSchema = z
       'DocumentDiscovered',
       'DocumentModified',
       'DocumentRemoved',
+      'DocumentProcessingSubmitted',
+      'DocumentExtracted',
     ]),
     eventVersion: z.literal(1),
     occurredAt: z.string(),
-    producer: z.literal('workspace-brain-api'),
+    producer: z.enum([
+      'workspace-brain-api',
+      'workspace-brain-ingestion-worker',
+      'workspace-brain-knowledge-worker',
+    ]),
     correlationId: z.string(),
     idempotencyKey: z.string(),
     partitionKey: z.string(),
     payload: z.record(z.string(), z.unknown()),
   })
   .strict();
+
+const evidenceLocatorSchema = z.union([
+  z
+    .object({
+      kind: z.enum(['markdown-lines', 'text-lines', 'yaml-lines']),
+      lineStart: z.number().int().positive(),
+      lineEnd: z.number().int().positive(),
+      headingPath: z.array(z.string()).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('json-pointer'),
+      pointer: z.string().regex(/^(?:\/(?:[^~]|~[01])*)*$/),
+    })
+    .strict(),
+]);
+
+const processingCandidateSchema = z
+  .object({
+    documentId: z.string().regex(/^[0-7][0-9A-HJKMNP-TV-Z]{25}$/),
+    sourceId: z.string().regex(/^[0-7][0-9A-HJKMNP-TV-Z]{25}$/),
+    path: z.string().min(1).max(4096),
+    contentFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+    processedAt: z.string().datetime(),
+    durationMilliseconds: z.number().nonnegative(),
+    processorId: z.enum(['markdown', 'yaml', 'json', 'plain-text']),
+    processorVersion: z.literal(1),
+    extractionRuleId: z.enum([
+      'markdown-blocks',
+      'yaml-scalar-values',
+      'json-scalar-values',
+      'text-paragraphs',
+    ]),
+    extractionRuleVersion: z.literal(1),
+    evidence: z
+      .array(
+        z
+          .object({
+            key: z.string().min(1).max(4096),
+            kind: z.enum([
+              'heading',
+              'paragraph',
+              'list-item',
+              'table-row',
+              'code-block',
+              'structured-value',
+            ]),
+            excerpt: z.string().max(4000),
+            truncated: z.boolean(),
+            locator: evidenceLocatorSchema,
+          })
+          .strict(),
+      )
+      .max(100_000),
+  })
+  .strict()
+  .superRefine((candidate, context) => {
+    const expectedRule: Record<string, string> = {
+      markdown: 'markdown-blocks',
+      yaml: 'yaml-scalar-values',
+      json: 'json-scalar-values',
+      'plain-text': 'text-paragraphs',
+    };
+    if (expectedRule[candidate.processorId] !== candidate.extractionRuleId) {
+      context.addIssue({
+        code: 'custom',
+        path: ['extractionRuleId'],
+        message: 'Extraction rule does not match the processor',
+      });
+    }
+  });
+
+const processingRunRowSchema = z.object({
+  payload_hash: z.string(),
+  document_version_id: z.string(),
+});
+
+const documentVersionRowSchema = z.object({
+  id: z.string(),
+  document_id: z.string(),
+  content_hash: z.string(),
+  processed_at: z.string(),
+  processor_id: z.string(),
+  processor_version: z.coerce.number().int(),
+  extraction_rule_id: z.string(),
+  extraction_rule_version: z.coerce.number().int(),
+  evidence_count: z.coerce.number().int(),
+});
+
+const evidenceRowSchema = z.object({
+  id: z.string(),
+  document_version_id: z.string(),
+  evidence_key: z.string(),
+  evidence_kind: z.enum([
+    'heading',
+    'paragraph',
+    'list-item',
+    'table-row',
+    'code-block',
+    'structured-value',
+  ]),
+  excerpt: z.string(),
+  truncated: z.boolean(),
+  locator_json: z.string(),
+});
+
+const evidenceExplanationRowSchema = z.object({
+  evidence_id: z.string(),
+  document_version_id: z.string(),
+  evidence_key: z.string(),
+  evidence_kind: evidenceRowSchema.shape.evidence_kind,
+  excerpt: z.string(),
+  truncated: z.boolean(),
+  locator_json: z.string(),
+  version_id: z.string(),
+  document_id: z.string(),
+  content_fingerprint: z.string(),
+  processed_at: z.string(),
+  processor_id: z.string(),
+  processor_version: z.coerce.number().int(),
+  extraction_rule_id: z.string(),
+  extraction_rule_version: z.coerce.number().int(),
+  evidence_count: z.coerce.number().int(),
+  source_id: z.string(),
+  path: z.string(),
+  filename: z.string(),
+});
 
 type DuckDbCatalogue = CatalogueDiscovery & CatalogueHealth;
 type DuckDbConnection = Awaited<ReturnType<DuckDBInstance['connect']>>;
@@ -170,7 +314,7 @@ export async function createDuckDbCatalogue(
     throw error;
   }
 
-  return {
+  return serializeCatalogue({
     async listSources(request): Promise<CataloguePage<Source>> {
       const rows = await queryPage(
         connection,
@@ -604,6 +748,95 @@ export async function createDuckDbCatalogue(
       };
     },
 
+    async applyDocumentProcessing(
+      event: DocumentProcessingEvent,
+    ): Promise<DocumentProcessingApplyResult> {
+      return applyDocumentProcessing(connection, event);
+    },
+
+    async listDocumentEvidence(
+      documentId: string,
+      request: CataloguePageRequest,
+    ): Promise<CataloguePage<Evidence>> {
+      const parsedDocumentId = parseDocumentId(documentId);
+      if (request.limit < 1 || request.limit > 101) {
+        throw new Error('Evidence page limit must be between 1 and 101');
+      }
+      const parameters: (string | number)[] = [parsedDocumentId];
+      const filters = ['v.document_id = $1'];
+      if (request.afterId !== undefined) {
+        parameters.push(parseEvidenceId(request.afterId));
+        filters.push(`e.id > $${parameters.length}`);
+      }
+      parameters.push(request.limit);
+      const rows = await connection.runAndReadAll(
+        `SELECT e.id, e.document_version_id, e.evidence_key, e.evidence_kind, e.excerpt, e.truncated, CAST(e.locator_json AS VARCHAR) AS locator_json FROM extracted_evidence e JOIN document_versions v ON v.id = e.document_version_id WHERE ${filters.join(' AND ')} ORDER BY e.id LIMIT $${parameters.length}`,
+        parameters,
+      );
+      return {
+        items: rows.getRowObjectsJson().map(parseEvidenceRow),
+      };
+    },
+
+    async explainEvidence(
+      evidenceId: string,
+    ): Promise<EvidenceExplanation | undefined> {
+      const parsedId = parseEvidenceId(evidenceId);
+      const rows = await connection.runAndReadAll(
+        "SELECT e.id AS evidence_id, e.document_version_id, e.evidence_key, e.evidence_kind, e.excerpt, e.truncated, CAST(e.locator_json AS VARCHAR) AS locator_json, v.id AS version_id, v.document_id, v.content_fingerprint, strftime(v.processed_at, '%Y-%m-%dT%H:%M:%S.%fZ') AS processed_at, v.processor_id, v.processor_version, v.extraction_rule_id, v.extraction_rule_version, v.evidence_count, v.source_id, v.path, v.filename FROM extracted_evidence e JOIN document_versions v ON v.id = e.document_version_id WHERE e.id = $1",
+        [parsedId],
+      );
+      const row = rows.getRowObjectsJson()[0];
+      if (row === undefined) {
+        return undefined;
+      }
+      const parsed = evidenceExplanationRowSchema.parse(row);
+      const evidence = parseEvidenceRow({
+        id: parsed.evidence_id,
+        document_version_id: parsed.document_version_id,
+        evidence_key: parsed.evidence_key,
+        evidence_kind: parsed.evidence_kind,
+        excerpt: parsed.excerpt,
+        truncated: parsed.truncated,
+        locator_json: parsed.locator_json,
+      });
+      const documentVersion: DocumentVersion = {
+        id: parseDocumentVersionId(parsed.version_id),
+        documentId: parseDocumentId(parsed.document_id),
+        contentHash: parsed.content_fingerprint,
+        hashAlgorithm: 'sha256',
+        discoveredAt: parsed.processed_at,
+        processorId: parsed.processor_id,
+        processorVersion: parsed.processor_version,
+        extractionRuleId: parsed.extraction_rule_id,
+        extractionRuleVersion: parsed.extraction_rule_version,
+        evidenceCount: parsed.evidence_count,
+      };
+      const documentIdValue = parseDocumentId(parsed.document_id);
+      const sourceIdValue = parseSourceId(parsed.source_id);
+      return {
+        evidence,
+        documentVersion,
+        document: {
+          id: documentIdValue,
+          sourceId: sourceIdValue,
+          path: parsed.path,
+          filename: parsed.filename,
+          fingerprint: parsed.content_fingerprint,
+        },
+        provenance: {
+          sourceId: sourceIdValue,
+          provider: 'filesystem',
+          documentPath: parsed.path,
+          contentFingerprint: parsed.content_fingerprint,
+          processorId: parsed.processor_id,
+          processorVersion: parsed.processor_version,
+          extractionRuleId: parsed.extraction_rule_id,
+          extractionRuleVersion: parsed.extraction_rule_version,
+        },
+      };
+    },
+
     async listPendingDiscoveryEvents(limit: number): Promise<DiscoveryEvent[]> {
       if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000) {
         throw new Error('Outbox page limit must be between 1 and 1000');
@@ -701,7 +934,32 @@ export async function createDuckDbCatalogue(
       connection.closeSync();
       instance.closeSync();
     },
+  });
+}
+
+function serializeCatalogue<T extends object>(catalogue: T): T {
+  let pendingOperations = Promise.resolve();
+  const runExclusive = <Result>(
+    operation: () => Promise<Result>,
+  ): Promise<Result> => {
+    const result = pendingOperations.then(operation, operation);
+    pendingOperations = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
   };
+
+  return new Proxy(catalogue, {
+    get(target, property, receiver) {
+      const value: unknown = Reflect.get(target, property, receiver);
+      if (typeof value !== 'function') {
+        return value;
+      }
+      return (...args: unknown[]) =>
+        runExclusive(() => Reflect.apply(value, target, args));
+    },
+  });
 }
 
 function parseSourceRow(row: unknown): Source {
@@ -735,6 +993,308 @@ function parseSourceRow(row: unknown): Source {
     workspaceRules: config.workspaceRules,
     createdAt: parsedRow.created_at,
   };
+}
+
+async function applyDocumentProcessing(
+  connection: DuckDbConnection,
+  event: DocumentProcessingEvent,
+): Promise<DocumentProcessingApplyResult> {
+  const candidateResult = processingCandidateSchema.safeParse(
+    event.payload.candidate,
+  );
+  if (
+    !candidateResult.success ||
+    event.eventId.length === 0 ||
+    event.eventId.length > 128 ||
+    event.correlationId.length === 0 ||
+    event.idempotencyKey.length === 0 ||
+    event.eventVersion !== 1 ||
+    event.producer !== 'workspace-brain-knowledge-worker'
+  ) {
+    throw new Error('Invalid document processing submission');
+  }
+  const candidate = candidateResult.data;
+  const documentId = parseDocumentId(candidate.documentId);
+  const sourceId = parseSourceId(candidate.sourceId);
+  const candidateHash = stableJson(candidate);
+  const payloadHash = createHash('sha256').update(candidateHash).digest('hex');
+  const evidence = [...candidate.evidence].sort((left, right) =>
+    compareOrdinal(left.key, right.key),
+  );
+  if (new Set(evidence.map(({ key }) => key)).size !== evidence.length) {
+    throw new Error(
+      'Invalid document processing submission: duplicate evidence key',
+    );
+  }
+  for (const item of evidence) {
+    if (
+      item.locator.kind !== 'json-pointer' &&
+      item.locator.lineEnd < item.locator.lineStart
+    ) {
+      throw new Error(
+        'Invalid document processing submission: invalid locator',
+      );
+    }
+  }
+
+  await connection.run('BEGIN TRANSACTION');
+  try {
+    const priorRunRows = await connection.runAndReadAll(
+      'SELECT payload_hash, document_version_id FROM document_processing_runs WHERE event_id = $1',
+      [event.eventId],
+    );
+    const priorRun = priorRunRows.getRowObjectsJson()[0];
+    if (priorRun !== undefined) {
+      const parsedRun = processingRunRowSchema.parse(priorRun);
+      if (parsedRun.payload_hash !== payloadHash) {
+        throw new Error(
+          `Document processing event ${event.eventId} was reused with a different payload`,
+        );
+      }
+      const priorVersion = await getDocumentVersion(
+        connection,
+        parsedRun.document_version_id,
+      );
+      const priorEvidence = await listEvidenceForVersion(
+        connection,
+        parsedRun.document_version_id,
+      );
+      await connection.run('COMMIT');
+      return {
+        documentVersion: priorVersion,
+        evidence: priorEvidence,
+        duplicate: true,
+      };
+    }
+
+    const documentRows = await connection.runAndReadAll(
+      "SELECT d.filename, d.source_id, d.path, i.fingerprint FROM documents d JOIN inventory_records i ON i.source_id = d.source_id AND i.path = d.path AND i.asset_type = 'document' WHERE d.id = $1 AND i.is_present = TRUE",
+      [documentId],
+    );
+    const documentRow = documentRows.getRowObjectsJson()[0];
+    if (
+      documentRow === undefined ||
+      documentRow.source_id !== sourceId ||
+      documentRow.path !== candidate.path ||
+      documentRow.fingerprint !== candidate.contentFingerprint
+    ) {
+      throw new Error(
+        'Document processing candidate does not match the current catalogue document',
+      );
+    }
+    const filename = requiredString(documentRow.filename, 'document filename');
+
+    const existingVersionRows = await connection.runAndReadAll(
+      'SELECT id FROM document_versions WHERE document_id = $1 AND content_hash = $2 AND processor_id = $3 AND processor_version = $4 AND extraction_rule_id = $5 AND extraction_rule_version = $6',
+      [
+        documentId,
+        candidate.contentFingerprint,
+        candidate.processorId,
+        candidate.processorVersion,
+        candidate.extractionRuleId,
+        candidate.extractionRuleVersion,
+      ],
+    );
+    const existingVersionId = existingVersionRows.getRowObjectsJson()[0]?.id;
+    const isNewVersion = existingVersionId === undefined;
+    const versionId = isNewVersion
+      ? createDocumentVersionId()
+      : parseDocumentVersionId(
+          requiredString(existingVersionId, 'document version ID'),
+        );
+    if (isNewVersion) {
+      await connection.run(
+        'INSERT INTO document_versions (id, document_id, source_id, path, filename, content_fingerprint, content_hash, hash_algorithm, processed_at, processor_id, processor_version, extraction_rule_id, extraction_rule_version, evidence_count) VALUES ($1, $2, $3, $4, $5, $6, $6, $7, $8, $9, $10, $11, $12, $13)',
+        [
+          versionId,
+          documentId,
+          sourceId,
+          candidate.path,
+          filename,
+          candidate.contentFingerprint,
+          'sha256',
+          candidate.processedAt,
+          candidate.processorId,
+          candidate.processorVersion,
+          candidate.extractionRuleId,
+          candidate.extractionRuleVersion,
+          evidence.length,
+        ],
+      );
+      for (const item of evidence) {
+        await connection.run(
+          'INSERT INTO extracted_evidence (id, document_version_id, evidence_key, evidence_kind, excerpt, truncated, locator_json, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
+          [
+            createEvidenceId(),
+            versionId,
+            item.key,
+            item.kind,
+            item.excerpt,
+            item.truncated,
+            JSON.stringify(item.locator),
+            candidate.processedAt,
+          ],
+        );
+      }
+    } else {
+      const existingEvidence = await listEvidenceForVersion(
+        connection,
+        String(versionId),
+      );
+      const normalizedExisting = existingEvidence.map((item) => ({
+        key: item.key,
+        kind: item.kind,
+        excerpt: item.excerpt,
+        truncated: item.truncated,
+        locator: item.locator,
+      }));
+      if (stableJson(normalizedExisting) !== stableJson(evidence)) {
+        throw new Error(
+          'Document processing output conflicts with the existing document version',
+        );
+      }
+    }
+
+    await connection.run(
+      "INSERT INTO document_processing_runs (event_id, payload_hash, correlation_id, source_id, document_id, document_version_id, content_fingerprint, status, started_at, completed_at, duration_milliseconds, evidence_count) VALUES ($1, $2, $3, $4, $5, $6, $7, 'completed', $8, $9, $10, $11)",
+      [
+        event.eventId,
+        payloadHash,
+        event.correlationId,
+        sourceId,
+        documentId,
+        versionId,
+        candidate.contentFingerprint,
+        new Date(
+          new Date(candidate.processedAt).getTime() -
+            candidate.durationMilliseconds,
+        ).toISOString(),
+        candidate.processedAt,
+        candidate.durationMilliseconds,
+        evidence.length,
+      ],
+    );
+    if (isNewVersion) {
+      const outputEvent = createCatalogueEvent(
+        'DocumentExtracted',
+        {
+          documentId,
+          documentVersionId: versionId,
+          contentFingerprint: candidate.contentFingerprint,
+          evidenceCount: evidence.length,
+        },
+        sourceId,
+        event.correlationId,
+        `document-extracted:${documentId}:${candidate.contentFingerprint}:${candidate.processorId}:${candidate.processorVersion}:${candidate.extractionRuleId}:${candidate.extractionRuleVersion}`,
+        candidate.processedAt,
+      );
+      await insertOutboxEvent(connection, outputEvent);
+    }
+    const documentVersion = await getDocumentVersion(
+      connection,
+      String(versionId),
+    );
+    const persistedEvidence = await listEvidenceForVersion(
+      connection,
+      String(versionId),
+    );
+    await connection.run('COMMIT');
+    return {
+      documentVersion,
+      evidence: persistedEvidence,
+      duplicate: !isNewVersion,
+    };
+  } catch (error) {
+    await connection.run('ROLLBACK');
+    throw error;
+  }
+}
+
+async function getDocumentVersion(
+  connection: DuckDbConnection,
+  versionId: string,
+): Promise<DocumentVersion> {
+  const rows = await connection.runAndReadAll(
+    "SELECT id, document_id, content_hash, strftime(processed_at, '%Y-%m-%dT%H:%M:%S.%fZ') AS processed_at, processor_id, processor_version, extraction_rule_id, extraction_rule_version, evidence_count FROM document_versions WHERE id = $1",
+    [versionId],
+  );
+  const row = rows.getRowObjectsJson()[0];
+  if (row === undefined) {
+    throw new Error(`Document version ${versionId} was not found`);
+  }
+  const parsed = documentVersionRowSchema.parse(row);
+  return {
+    id: parseDocumentVersionId(parsed.id),
+    documentId: parseDocumentId(parsed.document_id),
+    contentHash: parsed.content_hash,
+    hashAlgorithm: 'sha256',
+    discoveredAt: parsed.processed_at,
+    processorId: parsed.processor_id,
+    processorVersion: parsed.processor_version,
+    extractionRuleId: parsed.extraction_rule_id,
+    extractionRuleVersion: parsed.extraction_rule_version,
+    evidenceCount: parsed.evidence_count,
+  };
+}
+
+async function listEvidenceForVersion(
+  connection: DuckDbConnection,
+  versionId: string,
+): Promise<Evidence[]> {
+  const rows = await connection.runAndReadAll(
+    'SELECT id, document_version_id, evidence_key, evidence_kind, excerpt, truncated, CAST(locator_json AS VARCHAR) AS locator_json FROM extracted_evidence WHERE document_version_id = $1 ORDER BY evidence_key',
+    [versionId],
+  );
+  return rows.getRowObjectsJson().map(parseEvidenceRow);
+}
+
+function parseEvidenceRow(row: unknown): Evidence {
+  const parsed = evidenceRowSchema.parse(row);
+  const rawLocator = evidenceLocatorSchema.parse(
+    JSON.parse(parsed.locator_json) as unknown,
+  );
+  const locator: EvidenceLocator =
+    rawLocator.kind === 'json-pointer'
+      ? rawLocator
+      : rawLocator.headingPath === undefined
+        ? {
+            kind: rawLocator.kind,
+            lineStart: rawLocator.lineStart,
+            lineEnd: rawLocator.lineEnd,
+          }
+        : {
+            kind: rawLocator.kind,
+            lineStart: rawLocator.lineStart,
+            lineEnd: rawLocator.lineEnd,
+            headingPath: rawLocator.headingPath,
+          };
+  return {
+    id: parseEvidenceId(parsed.id),
+    documentVersionId: parseDocumentVersionId(parsed.document_version_id),
+    key: parsed.evidence_key,
+    kind: parsed.evidence_kind,
+    excerpt: parsed.excerpt,
+    truncated: parsed.truncated,
+    locator,
+  };
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(stableJson).join(',')}]`;
+  }
+  if (value !== null && typeof value === 'object') {
+    const object = value as Record<string, unknown>;
+    return `{${Object.keys(object)
+      .sort(compareOrdinal)
+      .map((key) => `${JSON.stringify(key)}:${stableJson(object[key])}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function compareOrdinal(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 function parseWorkspaceRow(row: unknown): Workspace {
@@ -908,6 +1468,7 @@ type CatalogueEventType = Extract<
   | 'DocumentDiscovered'
   | 'DocumentModified'
   | 'DocumentRemoved'
+  | 'DocumentExtracted'
 >;
 
 function parseCatalogueEventType(value: string): CatalogueEventType {
@@ -919,6 +1480,7 @@ function parseCatalogueEventType(value: string): CatalogueEventType {
     'DocumentDiscovered',
     'DocumentModified',
     'DocumentRemoved',
+    'DocumentExtracted',
   ];
   if (!eventTypes.includes(value as CatalogueEventType)) {
     throw new Error(`Unsupported catalogue discovery event: ${value}`);

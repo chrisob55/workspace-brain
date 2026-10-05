@@ -8,6 +8,7 @@ export type WorkspaceId = Brand<string, 'WorkspaceId'>;
 export type RepositoryId = Brand<string, 'RepositoryId'>;
 export type DocumentId = Brand<string, 'DocumentId'>;
 export type DocumentVersionId = Brand<string, 'DocumentVersionId'>;
+export type EvidenceId = Brand<string, 'EvidenceId'>;
 
 const ulidPattern = /^[0-7][0-9A-HJKMNP-TV-Z]{25}$/;
 
@@ -27,6 +28,7 @@ export const createRepositoryId = (): RepositoryId => ulid() as RepositoryId;
 export const createDocumentId = (): DocumentId => ulid() as DocumentId;
 export const createDocumentVersionId = (): DocumentVersionId =>
   ulid() as DocumentVersionId;
+export const createEvidenceId = (): EvidenceId => ulid() as EvidenceId;
 
 export const parseSourceId = (value: string): SourceId =>
   parseBrandedId<'SourceId'>(value);
@@ -40,6 +42,8 @@ export const parseDocumentId = (value: string): DocumentId =>
   parseBrandedId<'DocumentId'>(value);
 export const parseDocumentVersionId = (value: string): DocumentVersionId =>
   parseBrandedId<'DocumentVersionId'>(value);
+export const parseEvidenceId = (value: string): EvidenceId =>
+  parseBrandedId<'EvidenceId'>(value);
 
 export type Source = {
   readonly id: SourceId;
@@ -104,7 +108,91 @@ export type DiscoveryEventName =
   | 'RepositoryRemoved'
   | 'DocumentDiscovered'
   | 'DocumentModified'
-  | 'DocumentRemoved';
+  | 'DocumentRemoved'
+  | 'DocumentProcessingSubmitted'
+  | 'DocumentExtracted';
+
+export type EvidenceLocator =
+  | {
+      readonly kind: 'markdown-lines' | 'text-lines' | 'yaml-lines';
+      readonly lineStart: number;
+      readonly lineEnd: number;
+      readonly headingPath?: readonly string[];
+    }
+  | {
+      readonly kind: 'json-pointer';
+      readonly pointer: string;
+    };
+
+export type EvidenceCandidate = {
+  readonly key: string;
+  readonly kind:
+    | 'heading'
+    | 'paragraph'
+    | 'list-item'
+    | 'table-row'
+    | 'code-block'
+    | 'structured-value';
+  readonly excerpt: string;
+  readonly truncated: boolean;
+  readonly locator: EvidenceLocator;
+};
+
+export type DocumentProcessingCandidate = {
+  readonly documentId: DocumentId;
+  readonly sourceId: SourceId;
+  readonly path: string;
+  readonly contentFingerprint: string;
+  readonly processedAt: string;
+  readonly durationMilliseconds: number;
+  readonly processorId: string;
+  readonly processorVersion: number;
+  readonly extractionRuleId: string;
+  readonly extractionRuleVersion: number;
+  readonly evidence: readonly EvidenceCandidate[];
+};
+
+export type DocumentVersion = {
+  readonly id: DocumentVersionId;
+  readonly documentId: DocumentId;
+  readonly contentHash: string;
+  readonly hashAlgorithm: 'sha256';
+  readonly discoveredAt: string;
+  readonly processorId: string;
+  readonly processorVersion: number;
+  readonly extractionRuleId: string;
+  readonly extractionRuleVersion: number;
+  readonly evidenceCount: number;
+};
+
+export type Evidence = {
+  readonly id: EvidenceId;
+  readonly documentVersionId: DocumentVersionId;
+  readonly key: string;
+  readonly kind: EvidenceCandidate['kind'];
+  readonly excerpt: string;
+  readonly truncated: boolean;
+  readonly locator: EvidenceLocator;
+};
+
+export type EvidenceExplanation = {
+  readonly evidence: Evidence;
+  readonly documentVersion: DocumentVersion;
+  readonly document: Pick<
+    Document,
+    'id' | 'sourceId' | 'path' | 'filename' | 'fingerprint'
+  >;
+  readonly provenance: {
+    readonly sourceId: SourceId;
+    readonly provider: 'filesystem';
+    readonly documentPath: string;
+    readonly contentFingerprint: string;
+    readonly processorId: string;
+    readonly processorVersion: number;
+    readonly extractionRuleId: string;
+    readonly extractionRuleVersion: number;
+  };
+};
 
 export type DiscoveryEventPayloads = {
   SourceScanRequested: { readonly sourceId: SourceId };
@@ -139,6 +227,15 @@ export type DiscoveryEventPayloads = {
   DocumentDiscovered: { readonly document: Document };
   DocumentModified: { readonly document: Document };
   DocumentRemoved: { readonly inventoryRecord: InventoryRecord };
+  DocumentProcessingSubmitted: {
+    readonly candidate: DocumentProcessingCandidate;
+  };
+  DocumentExtracted: {
+    readonly documentId: DocumentId;
+    readonly documentVersionId: DocumentVersionId;
+    readonly contentFingerprint: string;
+    readonly evidenceCount: number;
+  };
 };
 
 export type DiscoveryEvent = {
@@ -148,7 +245,9 @@ export type DiscoveryEvent = {
     readonly eventVersion: 1;
     readonly occurredAt: string;
     readonly producer:
-      'workspace-brain-api' | 'workspace-brain-ingestion-worker';
+      | 'workspace-brain-api'
+      | 'workspace-brain-ingestion-worker'
+      | 'workspace-brain-knowledge-worker';
     readonly correlationId: string;
     readonly idempotencyKey: string;
     readonly partitionKey: string;
@@ -209,11 +308,3 @@ export type InventoryChange<T extends Repository | Document | InventoryRecord> =
     readonly change: 'added' | 'modified' | 'removed' | 'unchanged';
     readonly record: T;
   };
-
-export type DocumentVersion = {
-  readonly id: DocumentVersionId;
-  readonly documentId: DocumentId;
-  readonly contentHash: string;
-  readonly hashAlgorithm: 'sha256';
-  readonly discoveredAt: string;
-};

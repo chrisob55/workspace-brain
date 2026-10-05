@@ -1,7 +1,15 @@
 import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
-import { lstat, open, readdir } from 'node:fs/promises';
-import { extname, isAbsolute, join, resolve, sep } from 'node:path';
+import { open, realpath, readdir, type FileHandle } from 'node:fs/promises';
+import {
+  basename,
+  dirname,
+  extname,
+  isAbsolute,
+  join,
+  resolve,
+  sep,
+} from 'node:path';
 
 import {
   type DiscoverySource,
@@ -15,6 +23,98 @@ export interface SourceScanner {
   scan(source: DiscoverySource): Promise<ScanResult>;
 }
 
+export type DocumentContentChunk = {
+  readonly contentBase64: string;
+  readonly sizeBytes: number;
+  readonly done: boolean;
+};
+
+export async function readDocumentContentChunk(
+  source: DiscoverySource,
+  repositoryRelativePath: string,
+  offset: number,
+  requestedBytes: number,
+): Promise<DocumentContentChunk> {
+  if (
+    !Number.isSafeInteger(offset) ||
+    offset < 0 ||
+    !Number.isSafeInteger(requestedBytes) ||
+    requestedBytes < 1 ||
+    requestedBytes > 256 * 1024
+  ) {
+    throw new Error('Invalid document content range');
+  }
+  const [rootId, ...segments] = repositoryRelativePath.split('/');
+  const root = source.roots.find(({ id }) => id === rootId);
+  if (
+    root === undefined ||
+    segments.length === 0 ||
+    segments.some(
+      (segment) =>
+        segment.length === 0 ||
+        segment === '.' ||
+        segment === '..' ||
+        segment.includes('\\') ||
+        segment.includes('\0'),
+    )
+  ) {
+    throw new Error('Document path is outside the registered source root');
+  }
+
+  const openedRoot = await openRootDirectory(root.absolutePath);
+  let currentPath = openedRoot.path;
+  const directories: FileHandle[] = [];
+  try {
+    directories.push(openedRoot.handle);
+    for (const segment of segments.slice(0, -1)) {
+      const parent = directories.at(-1);
+      if (parent === undefined) {
+        throw new Error('Document source root is unavailable');
+      }
+      const child = await openDirectoryAt(parent, currentPath, segment);
+      directories.push(child);
+      currentPath = join(currentPath, segment);
+    }
+
+    const parent = directories.at(-1);
+    if (parent === undefined) {
+      throw new Error('Document source root is unavailable');
+    }
+    const handle = await openFileAt(parent, currentPath, segments.at(-1) ?? '');
+    try {
+      const metadata = await handle.stat();
+      if (
+        !metadata.isFile() ||
+        metadata.size > source.maxFileSizeBytes ||
+        offset > metadata.size
+      ) {
+        throw new Error('Document is unavailable for read-only processing');
+      }
+      const buffer = Buffer.alloc(
+        Math.min(requestedBytes, metadata.size - offset),
+      );
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, offset);
+      const finalMetadata = await handle.stat();
+      if (
+        finalMetadata.size !== metadata.size ||
+        finalMetadata.mtimeMs !== metadata.mtimeMs ||
+        finalMetadata.ino !== metadata.ino
+      ) {
+        throw new Error('Document changed while being processed');
+      }
+      return {
+        contentBase64: buffer.subarray(0, bytesRead).toString('base64'),
+        sizeBytes: metadata.size,
+        done: offset + bytesRead >= metadata.size,
+      };
+    } finally {
+      await handle.close();
+    }
+  } finally {
+    await closeHandles(directories);
+  }
+}
+
 export class FilesystemSourceScanner implements SourceScanner {
   async scan(source: DiscoverySource): Promise<ScanResult> {
     const discoveredAt = new Date().toISOString();
@@ -26,23 +126,23 @@ export class FilesystemSourceScanner implements SourceScanner {
     );
 
     for (const root of source.roots) {
-      const rootMetadata = await lstat(root.absolutePath);
-      if (!rootMetadata.isDirectory()) {
-        throw new Error(
-          `Configured source root is not a real directory: ${root.absolutePath}`,
-        );
+      const openedRoot = await openRootDirectory(root.absolutePath);
+      try {
+        await this.scanDirectory({
+          root,
+          directory: openedRoot.path,
+          directoryHandle: openedRoot.handle,
+          relativeDirectory: '',
+          source,
+          discoveredAt,
+          repositories,
+          documents,
+          excludedDirectoryNames,
+          includedExtensions,
+        });
+      } finally {
+        await openedRoot.handle.close();
       }
-      await this.scanDirectory({
-        root,
-        directory: resolve(root.absolutePath),
-        relativeDirectory: '',
-        source,
-        discoveredAt,
-        repositories,
-        documents,
-        excludedDirectoryNames,
-        includedExtensions,
-      });
     }
 
     return {
@@ -56,6 +156,7 @@ export class FilesystemSourceScanner implements SourceScanner {
   private async scanDirectory(context: {
     readonly root: SourceRoot;
     readonly directory: string;
+    readonly directoryHandle: FileHandle;
     readonly relativeDirectory: string;
     readonly source: DiscoverySource;
     readonly discoveredAt: string;
@@ -64,7 +165,10 @@ export class FilesystemSourceScanner implements SourceScanner {
     readonly excludedDirectoryNames: ReadonlySet<string>;
     readonly includedExtensions: ReadonlySet<string>;
   }): Promise<void> {
-    const entries = await readdir(context.directory, { withFileTypes: true });
+    const entries = await readdir(
+      descriptorPath(context.directoryHandle, context.directory),
+      { withFileTypes: true },
+    );
     entries.sort((left, right) =>
       left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
     );
@@ -76,43 +180,62 @@ export class FilesystemSourceScanner implements SourceScanner {
         .join('/');
 
       if (entry.isDirectory()) {
-        if (entry.name === '.git') {
-          const repositoryPath = sourcePath(
-            context.root,
-            context.relativeDirectory,
+        let childHandle: FileHandle;
+        try {
+          childHandle = await openDirectoryAt(
+            context.directoryHandle,
+            context.directory,
+            entry.name,
           );
-          if (
-            matchesDiscoveryRules(
-              context.relativeDirectory,
-              context.source.workspaceRules,
-            )
-          ) {
-            const fingerprint = await repositoryFingerprint(
-              absolutePath,
-              repositoryPath,
-            );
-            context.repositories.set(repositoryPath, {
-              path: repositoryPath,
-              repositoryType: 'git',
-              fingerprint,
-              discoveryMethod: 'filesystem',
-            });
+        } catch (error) {
+          if (isDisappearedEntry(error)) {
+            continue;
           }
-          continue;
+          throw error;
         }
+        try {
+          if (entry.name === '.git') {
+            const repositoryPath = sourcePath(
+              context.root,
+              context.relativeDirectory,
+            );
+            if (
+              matchesDiscoveryRules(
+                context.relativeDirectory,
+                context.source.workspaceRules,
+              )
+            ) {
+              const fingerprint = await repositoryFingerprint(
+                childHandle,
+                absolutePath,
+                repositoryPath,
+              );
+              context.repositories.set(repositoryPath, {
+                path: repositoryPath,
+                repositoryType: 'git',
+                fingerprint,
+                discoveryMethod: 'filesystem',
+              });
+            }
+            continue;
+          }
 
-        if (
-          context.excludedDirectoryNames.has(entry.name) ||
-          !matchesDiscoveryRules(relativePath, context.source.workspaceRules)
-        ) {
-          continue;
+          if (
+            context.excludedDirectoryNames.has(entry.name) ||
+            !matchesDiscoveryRules(relativePath, context.source.workspaceRules)
+          ) {
+            continue;
+          }
+
+          await this.scanDirectory({
+            ...context,
+            directory: absolutePath,
+            directoryHandle: childHandle,
+            relativeDirectory: relativePath,
+          });
+        } finally {
+          await childHandle.close();
         }
-
-        await this.scanDirectory({
-          ...context,
-          directory: absolutePath,
-          relativeDirectory: relativePath,
-        });
         continue;
       }
 
@@ -130,8 +253,11 @@ export class FilesystemSourceScanner implements SourceScanner {
       ) {
         continue;
       }
+
       const file = await entryPathMetadata(
-        absolutePath,
+        context.directoryHandle,
+        context.directory,
+        entry.name,
         context.source.maxFileSizeBytes,
       );
       if (file === undefined) {
@@ -152,12 +278,133 @@ export class FilesystemSourceScanner implements SourceScanner {
   }
 }
 
+function descriptorPath(handle: FileHandle, fallbackPath: string): string {
+  return process.platform === 'linux'
+    ? `/proc/self/fd/${handle.fd}`
+    : fallbackPath;
+}
+
+async function openDirectory(path: string): Promise<FileHandle> {
+  const handle = await open(
+    path,
+    constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+  );
+  try {
+    if (!(await handle.stat()).isDirectory()) {
+      throw new Error('Configured source root is not a real directory');
+    }
+    return handle;
+  } catch (error) {
+    await handle.close();
+    throw error;
+  }
+}
+
+async function openRootDirectory(
+  configuredPath: string,
+): Promise<{ readonly handle: FileHandle; readonly path: string }> {
+  const absolutePath = resolve(configuredPath);
+  if (absolutePath === sep) {
+    return { handle: await openDirectory(absolutePath), path: absolutePath };
+  }
+  const parentPath = await realpath(dirname(absolutePath));
+  const path = join(parentPath, basename(absolutePath));
+  const parent = await openAbsoluteDirectory(parentPath);
+  try {
+    return {
+      handle: await openDirectoryAt(parent.handle, parent.path, basename(path)),
+      path,
+    };
+  } finally {
+    await parent.handle.close();
+  }
+}
+
+async function openAbsoluteDirectory(
+  absolutePath: string,
+): Promise<{ readonly handle: FileHandle; readonly path: string }> {
+  const targetPath = resolve(absolutePath);
+  let path: string = sep;
+  let current = await openDirectory(path);
+  for (const segment of targetPath.split(sep).filter(Boolean)) {
+    const nextPath = join(path, segment);
+    let next: FileHandle;
+    try {
+      next = await openDirectoryAt(current, path, segment);
+    } catch (error) {
+      await current.close();
+      throw error;
+    }
+    await current.close();
+    current = next;
+    path = nextPath;
+  }
+  return { handle: current, path };
+}
+
+async function openDirectoryAt(
+  parent: FileHandle,
+  parentPath: string,
+  name: string,
+): Promise<FileHandle> {
+  const child = await open(
+    join(descriptorPath(parent, parentPath), name),
+    constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+  );
+  try {
+    if (!(await child.stat()).isDirectory()) {
+      throw new Error('Filesystem entry is not a real directory');
+    }
+    return child;
+  } catch (error) {
+    await child.close();
+    throw error;
+  }
+}
+
+async function openFileAt(
+  parent: FileHandle,
+  parentPath: string,
+  name: string,
+): Promise<FileHandle> {
+  return open(
+    join(descriptorPath(parent, parentPath), name),
+    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+  );
+}
+
+async function closeHandles(handles: readonly FileHandle[]): Promise<void> {
+  const errors: unknown[] = [];
+  for (const handle of [...handles].reverse()) {
+    try {
+      await handle.close();
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  if (errors.length > 0) {
+    throw new AggregateError(errors, 'Could not close filesystem handles');
+  }
+}
+
+function isDisappearedEntry(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    (error.code === 'ENOENT' ||
+      error.code === 'ENOTDIR' ||
+      error.code === 'ELOOP')
+  );
+}
+
 async function repositoryFingerprint(
-  gitDirectory: string,
+  gitDirectory: FileHandle,
+  gitDirectoryPath: string,
   repositoryPath: string,
 ): Promise<string> {
   const headReference = (
-    await readLocalGitMetadata(join(gitDirectory, 'HEAD'))
+    await readLocalGitMetadataAt(gitDirectory, gitDirectoryPath, ['HEAD'])
   )?.trim();
   let head = headReference ?? '';
   const reference = /^ref: ([A-Za-z0-9._/-]+)$/.exec(headReference ?? '')?.[1];
@@ -166,11 +413,18 @@ async function repositoryFingerprint(
     !isAbsolute(reference) &&
     !reference.split('/').includes('..')
   ) {
-    const referencePath = resolve(gitDirectory, reference);
-    if (referencePath.startsWith(`${resolve(gitDirectory)}${sep}`)) {
+    if (reference.split('/').every((segment) => segment.length > 0)) {
       head =
-        (await readLocalGitMetadata(referencePath)) ??
-        (await readPackedReference(gitDirectory, reference)) ??
+        (await readLocalGitMetadataAt(
+          gitDirectory,
+          gitDirectoryPath,
+          reference.split('/'),
+        )) ??
+        (await readPackedReference(
+          gitDirectory,
+          gitDirectoryPath,
+          reference,
+        )) ??
         head;
     }
   }
@@ -181,11 +435,14 @@ async function repositoryFingerprint(
 }
 
 async function readPackedReference(
-  gitDirectory: string,
+  gitDirectory: FileHandle,
+  gitDirectoryPath: string,
   reference: string,
 ): Promise<string | undefined> {
-  const packedReferences = await readLocalGitMetadata(
-    join(gitDirectory, 'packed-refs'),
+  const packedReferences = await readLocalGitMetadataAt(
+    gitDirectory,
+    gitDirectoryPath,
+    ['packed-refs'],
   );
   if (packedReferences === undefined) {
     return undefined;
@@ -202,37 +459,52 @@ async function readPackedReference(
   return undefined;
 }
 
-async function readLocalGitMetadata(path: string): Promise<string | undefined> {
-  let handle;
+async function readLocalGitMetadataAt(
+  root: FileHandle,
+  rootPath: string,
+  segments: readonly string[],
+): Promise<string | undefined> {
+  const directories: FileHandle[] = [];
   try {
-    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    directories.push(root);
+    let directoryPath = rootPath;
+    for (const segment of segments.slice(0, -1)) {
+      const parent = directories.at(-1);
+      if (parent === undefined) {
+        return undefined;
+      }
+      const child = await openDirectoryAt(parent, directoryPath, segment);
+      directories.push(child);
+      directoryPath = join(directoryPath, segment);
+    }
+    const parent = directories.at(-1);
+    const name = segments.at(-1);
+    if (parent === undefined || name === undefined) {
+      return undefined;
+    }
+    const handle = await openFileAt(parent, directoryPath, name);
+    try {
+      if (!(await handle.stat()).isFile()) {
+        return undefined;
+      }
+      return await handle.readFile('utf8');
+    } finally {
+      await handle.close();
+    }
   } catch (error) {
-    if (isMissingFile(error)) {
+    if (isDisappearedEntry(error)) {
       return undefined;
     }
     throw error;
-  }
-  try {
-    if (!(await handle.stat()).isFile()) {
-      return undefined;
-    }
-    return await handle.readFile('utf8');
   } finally {
-    await handle.close();
+    await closeHandles(directories.slice(1));
   }
-}
-
-function isMissingFile(error: unknown): boolean {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    'code' in error &&
-    error.code === 'ENOENT'
-  );
 }
 
 async function entryPathMetadata(
-  path: string,
+  parent: FileHandle,
+  parentPath: string,
+  name: string,
   maxFileSizeBytes: number | undefined,
 ): Promise<
   | {
@@ -242,7 +514,15 @@ async function entryPathMetadata(
     }
   | undefined
 > {
-  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  let handle: FileHandle;
+  try {
+    handle = await openFileAt(parent, parentPath, name);
+  } catch (error) {
+    if (isDisappearedEntry(error)) {
+      return undefined;
+    }
+    throw error;
+  }
   try {
     const metadata = await handle.stat();
     if (
