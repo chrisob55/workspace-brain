@@ -10,7 +10,7 @@ const servers = process.env.NATS_TEST_SERVERS;
 const codec = StringCodec();
 
 describe.skipIf(servers === undefined)('NATS JetStream integration', () => {
-  it('routes and retains knowledge outbox events on the configured stream', async () => {
+  it('routes and retains knowledge and search projection outbox events on the configured stream', async () => {
     if (servers === undefined) {
       throw new Error(
         'NATS_TEST_SERVERS is required for this integration test',
@@ -20,6 +20,31 @@ describe.skipIf(servers === undefined)('NATS JetStream integration', () => {
     const connection = await connect({ servers });
     const manager = await connection.jetstreamManager();
     const durableName = `knowledge-flow-${randomUUID()}`;
+    const searchDurableName = `search-flow-${randomUUID()}`;
+    const fetchEventTypes = async (filterSubject: string) => {
+      await manager.consumers.add('WORKSPACE_DISCOVERY', {
+        durable_name: searchDurableName,
+        ack_policy: AckPolicy.Explicit,
+        deliver_policy: DeliverPolicy.All,
+        filter_subject: filterSubject,
+      });
+      const consumer = await connection
+        .jetstream()
+        .consumers.get('WORKSPACE_DISCOVERY', searchDurableName);
+      const messages = await consumer.fetch({
+        max_messages: 100,
+        expires: 5_000,
+      });
+      const eventTypes: unknown[] = [];
+      for await (const message of messages) {
+        eventTypes.push(
+          (JSON.parse(codec.decode(message.data)) as Record<string, unknown>)
+            .eventType,
+        );
+        message.ack();
+      }
+      return eventTypes;
+    };
 
     try {
       const stream = await manager.streams.info('WORKSPACE_DISCOVERY');
@@ -28,6 +53,7 @@ describe.skipIf(servers === undefined)('NATS JetStream integration', () => {
           'workspace.discovery.>',
           'workspace.processing.>',
           'workspace.knowledge.>',
+          'workspace.search.>',
         ]),
       );
       await manager.consumers.add('WORKSPACE_DISCOVERY', {
@@ -56,6 +82,9 @@ describe.skipIf(servers === undefined)('NATS JetStream integration', () => {
       expect(eventTypes).toContain('KnowledgeEntityDiscovered');
       expect(eventTypes).toContain('KnowledgeRelationshipDiscovered');
       expect(eventTypes).toContain('KnowledgeModelPublished');
+      const searchEvents = await fetchEventTypes('workspace.search.>');
+      expect(searchEvents).toContain('SearchProjectionRequested');
+      expect(searchEvents).toContain('SearchProjectionBuilt');
       if (expectedPackageName !== undefined) {
         expect(
           events.some(
@@ -74,6 +103,9 @@ describe.skipIf(servers === undefined)('NATS JetStream integration', () => {
     } finally {
       try {
         await manager.consumers.delete('WORKSPACE_DISCOVERY', durableName);
+        await manager.consumers
+          .delete('WORKSPACE_DISCOVERY', searchDurableName)
+          .catch(() => undefined);
       } finally {
         await connection.close();
       }

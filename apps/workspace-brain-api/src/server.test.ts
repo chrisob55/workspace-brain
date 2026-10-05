@@ -2,11 +2,18 @@ import {
   createDocumentId,
   createDocumentVersionId,
   createEvidenceId,
+  createKnowledgeEntityId,
   createKnowledgeModelId,
+  createKnowledgePublicationId,
+  createKnowledgeRelationshipId,
   createRepositoryId,
   createSourceId,
   createWorkspaceId,
 } from '@workspace-brain/domain';
+import type {
+  SearchEntityRequest,
+  SearchRelationshipRequest,
+} from '@workspace-brain/catalogue';
 import { describe, expect, it } from 'vitest';
 
 import { createApiServer } from './server.js';
@@ -32,6 +39,56 @@ const knowledgeModel = {
   schemaVersion: 1 as const,
   latestPublicationVersion: null,
   createdAt: '2026-10-01T12:00:00.000Z',
+};
+
+const publication = {
+  id: createKnowledgePublicationId(),
+  knowledgeModelId: knowledgeModel.id,
+  version: 1,
+  schemaVersion: 1 as const,
+  status: 'published' as const,
+  contentHash: 'c'.repeat(64),
+  entityVersionIds: [],
+  relationshipVersionIds: [],
+  publishedAt: '2026-10-01T12:00:00.000Z',
+};
+const projectedEntities = [
+  createKnowledgeEntityId(),
+  createKnowledgeEntityId(),
+  createKnowledgeEntityId(),
+]
+  .sort()
+  .map((entityId, index) => ({
+    entityId,
+    modelId: knowledgeModel.id,
+    publicationId: publication.id,
+    type: 'package' as const,
+    name: ['@workspace/service', 'lodash', 'react'][index] ?? 'unknown',
+    lifecycleStatus: 'observed' as const,
+    sourceEvidenceIds: [createEvidenceId()],
+    relationshipCount: index === 2 ? 0 : 1,
+    publishedAt: publication.publishedAt,
+  }));
+const projectedRelationship = {
+  relationshipId: createKnowledgeRelationshipId(),
+  modelId: knowledgeModel.id,
+  publicationId: publication.id,
+  type: 'DEPENDS_ON' as const,
+  sourceEntityId: projectedEntities[0]!.entityId,
+  targetEntityId: projectedEntities[1]!.entityId,
+  lifecycleStatus: 'related' as const,
+  sourceEvidenceIds: [createEvidenceId()],
+  publishedAt: publication.publishedAt,
+};
+const projectionStatistics = {
+  publication,
+  projectionStatus: 'built' as const,
+  projectionSchemaVersion: 1 as const,
+  projectionContentHash: 'd'.repeat(64),
+  projectedEntityCount: 3,
+  projectedRelationshipCount: 1,
+  projectedSearchDocumentCount: 4,
+  builtAt: '2026-10-01T12:00:01.000Z',
 };
 
 const repository = {
@@ -107,6 +164,8 @@ function createCatalogue(
   repositories = [repository],
   documents = [document],
 ) {
+  const searchEntityRequests: SearchEntityRequest[] = [];
+  const searchRelationshipRequests: SearchRelationshipRequest[] = [];
   return {
     async listSources({ afterId, limit }: { afterId?: string; limit: number }) {
       const items = sources
@@ -211,6 +270,50 @@ function createCatalogue(
     },
     async listKnowledgePublications() {
       return { items: [] };
+    },
+    searchEntityRequests,
+    searchRelationshipRequests,
+    async searchProjectedEntities(request: SearchEntityRequest) {
+      searchEntityRequests.push(request);
+      const items = projectedEntities.filter(
+        (item) =>
+          (request.afterId === undefined || item.entityId > request.afterId) &&
+          (request.type === undefined || item.type === request.type) &&
+          (request.publicationId === undefined ||
+            item.publicationId === request.publicationId) &&
+          (request.text === undefined ||
+            item.name.includes(request.text.query)),
+      );
+      return { items: items.slice(0, request.limit) };
+    },
+    async searchProjectedRelationships(request: SearchRelationshipRequest) {
+      searchRelationshipRequests.push(request);
+      const items = [projectedRelationship].filter(
+        (item) =>
+          (request.afterId === undefined ||
+            item.relationshipId > request.afterId) &&
+          (request.entityId === undefined ||
+            item.sourceEntityId === request.entityId ||
+            item.targetEntityId === request.entityId),
+      );
+      return { items: items.slice(0, request.limit) };
+    },
+    async getProjectedEntity(entityId: string, publicationId?: string) {
+      return projectedEntities.find(
+        (item) =>
+          item.entityId === entityId &&
+          (publicationId === undefined || item.publicationId === publicationId),
+      );
+    },
+    async getProjectedRelationship(relationshipId: string) {
+      return relationshipId === projectedRelationship.relationshipId
+        ? projectedRelationship
+        : undefined;
+    },
+    async getProjectionStatistics(publicationId: string) {
+      return publicationId === publication.id
+        ? projectionStatistics
+        : undefined;
     },
     async check() {
       if (!ready) {
@@ -438,6 +541,160 @@ describe('Workspace Brain API routes', () => {
     expect(firstPage.json().items).toEqual([orderedSources[0]]);
     expect(secondPage.json().items).toEqual([orderedSources[1]]);
     expect(secondPage.json().nextCursor).toBeNull();
+    await server.close();
+  });
+  it('serves deterministic filtered search over projected entities', async () => {
+    const catalogue = createCatalogue();
+    const server = createApiServer(catalogue, { logger: false });
+
+    const all = await server.inject('/api/v1/search/entities');
+    const filtered = await server.inject(
+      `/api/v1/search/entities?publicationId=${publication.id}&type=package&lifecycleStatus=observed&query=%20lodash%20&match=exact&field=name&limit=5`,
+    );
+    const textSearch = await server.inject(
+      '/api/v1/search/entities?query=pack&match=prefix&field=text',
+    );
+
+    expect(all.statusCode).toBe(200);
+    expect(all.json()).toEqual({ items: projectedEntities, nextCursor: null });
+    expect(filtered.statusCode).toBe(200);
+    expect(filtered.json()).toEqual({
+      items: [projectedEntities[1]],
+      nextCursor: null,
+    });
+    expect(catalogue.searchEntityRequests[0]).toEqual({ limit: 51 });
+    expect(catalogue.searchEntityRequests[1]).toEqual({
+      publicationId: publication.id,
+      type: 'package',
+      lifecycleStatus: 'observed',
+      text: { query: 'lodash', match: 'exact', field: 'name' },
+      limit: 6,
+    });
+    expect(catalogue.searchEntityRequests[2]?.text).toEqual({
+      query: 'pack',
+      match: 'prefix',
+      field: 'text',
+    });
+    expect(textSearch.statusCode).toBe(200);
+    await server.close();
+  });
+
+  it('cursor-paginates projected entities by entity ID', async () => {
+    const server = createApiServer(createCatalogue(), { logger: false });
+
+    const first = await server.inject('/api/v1/search/entities?limit=2');
+    const firstPage = first.json<{
+      items: typeof projectedEntities;
+      nextCursor: string | null;
+    }>();
+    const second = await server.inject(
+      `/api/v1/search/entities?limit=2&cursor=${firstPage.nextCursor ?? ''}`,
+    );
+
+    expect(firstPage.items).toEqual(projectedEntities.slice(0, 2));
+    expect(firstPage.nextCursor).toBe(
+      Buffer.from(projectedEntities[1]!.entityId).toString('base64url'),
+    );
+    expect(second.json()).toEqual({
+      items: projectedEntities.slice(2),
+      nextCursor: null,
+    });
+    await server.close();
+  });
+
+  it('filters projected relationships by type, entity and text', async () => {
+    const catalogue = createCatalogue();
+    const server = createApiServer(catalogue, { logger: false });
+
+    const byEntity = await server.inject(
+      `/api/v1/search/relationships?entityId=${projectedEntities[1]!.entityId}&type=DEPENDS_ON&query=depends&match=prefix`,
+    );
+    const none = await server.inject(
+      `/api/v1/search/relationships?entityId=${projectedEntities[2]!.entityId}`,
+    );
+
+    expect(byEntity.statusCode).toBe(200);
+    expect(byEntity.json()).toEqual({
+      items: [projectedRelationship],
+      nextCursor: null,
+    });
+    expect(catalogue.searchRelationshipRequests[0]).toEqual({
+      entityId: projectedEntities[1]!.entityId,
+      type: 'DEPENDS_ON',
+      text: { query: 'depends', match: 'prefix', field: 'type' },
+      limit: 51,
+    });
+    expect(none.json()).toEqual({ items: [], nextCursor: null });
+    await server.close();
+  });
+
+  it('looks up projected entities, relationships and publication statistics by ID', async () => {
+    const server = createApiServer(createCatalogue(), { logger: false });
+
+    const entity = await server.inject(
+      `/api/v1/search/entity/${projectedEntities[0]!.entityId}?publicationId=${publication.id}`,
+    );
+    const relationship = await server.inject(
+      `/api/v1/search/relationship/${projectedRelationship.relationshipId}`,
+    );
+    const statistics = await server.inject(
+      `/api/v1/search/publication/${publication.id}`,
+    );
+    const missingEntity = await server.inject(
+      `/api/v1/search/entity/${createKnowledgeEntityId()}`,
+    );
+    const missingRelationship = await server.inject(
+      `/api/v1/search/relationship/${createKnowledgeRelationshipId()}`,
+    );
+    const missingPublication = await server.inject(
+      `/api/v1/search/publication/${createKnowledgePublicationId()}`,
+    );
+
+    expect(entity.statusCode).toBe(200);
+    expect(entity.json()).toEqual(projectedEntities[0]);
+    expect(relationship.json()).toEqual(projectedRelationship);
+    expect(statistics.json()).toEqual(projectionStatistics);
+    expect(missingEntity.statusCode).toBe(404);
+    expect(missingEntity.headers['content-type']).toContain(
+      'application/problem+json',
+    );
+    expect(missingRelationship.statusCode).toBe(404);
+    expect(missingPublication.statusCode).toBe(404);
+    await server.close();
+  });
+
+  it('rejects invalid search requests with problem details', async () => {
+    const server = createApiServer(createCatalogue(), { logger: false });
+    const invalid = [
+      '/api/v1/search/entities?limit=101',
+      '/api/v1/search/entities?cursor=%%%',
+      `/api/v1/search/entities?cursor=${Buffer.from('not-a-ulid').toString('base64url')}`,
+      '/api/v1/search/entities?match=exact',
+      '/api/v1/search/entities?field=text',
+      '/api/v1/search/entities?query=',
+      `/api/v1/search/entities?query=${'a'.repeat(257)}`,
+      '/api/v1/search/entities?query=x&match=fuzzy',
+      '/api/v1/search/entities?query=x&field=type',
+      '/api/v1/search/entities?type=arbitrary',
+      '/api/v1/search/entities?publicationId=invalid',
+      '/api/v1/search/entities?unknown=1',
+      '/api/v1/search/relationships?type=OWNS',
+      '/api/v1/search/relationships?entityId=invalid',
+      '/api/v1/search/relationships?query=x&field=name',
+      '/api/v1/search/entity/not-a-ulid',
+      `/api/v1/search/entity/${createKnowledgeEntityId()}?publicationId=bad`,
+      '/api/v1/search/relationship/not-a-ulid',
+      '/api/v1/search/publication/not-a-ulid',
+      `/api/v1/search/publication/${publication.id}?limit=1`,
+    ];
+
+    for (const url of invalid) {
+      const response = await server.inject(url);
+      expect(response.statusCode, url).toBe(400);
+      expect(response.headers['content-type'], url).toContain(
+        'application/problem+json',
+      );
+    }
     await server.close();
   });
 });

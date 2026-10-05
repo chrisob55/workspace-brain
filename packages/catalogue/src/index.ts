@@ -13,6 +13,11 @@ import type {
   KnowledgePublication,
   KnowledgeRelationship,
   InventoryChange,
+  ProjectedEntity,
+  ProjectedRelationship,
+  ProjectionStatistics,
+  SearchMatchMode,
+  SearchProjectionSummary,
   InventoryRecord,
   RepositoryCandidate,
   Repository,
@@ -89,7 +94,82 @@ export type KnowledgePageRequest = Pick<
   readonly type?: string;
 };
 
+export type SearchTextFilter<Field extends string> = {
+  readonly query: string;
+  readonly match: SearchMatchMode;
+  readonly field: Field;
+};
+
+export type SearchEntityRequest = Pick<
+  CataloguePageRequest,
+  'afterId' | 'limit'
+> & {
+  readonly publicationId?: string;
+  readonly type?: string;
+  readonly lifecycleStatus?: string;
+  readonly text?: SearchTextFilter<'name' | 'text'>;
+};
+
+export type SearchRelationshipRequest = Pick<
+  CataloguePageRequest,
+  'afterId' | 'limit'
+> & {
+  readonly publicationId?: string;
+  readonly type?: string;
+  readonly entityId?: string;
+  readonly text?: SearchTextFilter<'type' | 'text'>;
+};
+
+export type KnowledgeModelPublishedEvent = Extract<
+  DiscoveryEvent,
+  { readonly eventType: 'KnowledgeModelPublished' }
+>;
+
+export type SearchProjectionRequestedEvent = Extract<
+  DiscoveryEvent,
+  { readonly eventType: 'SearchProjectionRequested' }
+>;
+
 export type { InventoryChange } from '@workspace-brain/domain';
+
+/**
+ * Read-only access to the disposable search projection. When publicationId is
+ * omitted, reads are scoped to the latest publication of each Knowledge Model.
+ */
+export interface SearchProjectionReader {
+  searchProjectedEntities(
+    request: SearchEntityRequest,
+  ): Promise<CataloguePage<ProjectedEntity>>;
+  searchProjectedRelationships(
+    request: SearchRelationshipRequest,
+  ): Promise<CataloguePage<ProjectedRelationship>>;
+  getProjectedEntity(
+    entityId: string,
+    publicationId?: string,
+  ): Promise<ProjectedEntity | undefined>;
+  getProjectedRelationship(
+    relationshipId: string,
+    publicationId?: string,
+  ): Promise<ProjectedRelationship | undefined>;
+  getProjectionStatistics(
+    publicationId: string,
+  ): Promise<ProjectionStatistics | undefined>;
+}
+
+/**
+ * Projection maintenance. Implementations read only Knowledge Publications and
+ * their immutable snapshots and write only projection rows and outbox events.
+ */
+export interface SearchProjectionWriter {
+  requestSearchProjection(event: KnowledgeModelPublishedEvent): Promise<void>;
+  buildSearchProjection(
+    event: SearchProjectionRequestedEvent,
+  ): Promise<SearchProjectionSummary>;
+  rebuildSearchProjections(request: {
+    readonly mode: 'missing' | 'all';
+    readonly correlationId: string;
+  }): Promise<readonly SearchProjectionSummary[]>;
+}
 
 export interface CatalogueReader {
   listSources(request: CataloguePageRequest): Promise<CataloguePage<Source>>;
@@ -140,7 +220,8 @@ export interface CatalogueHealth {
   close(): Promise<void>;
 }
 
-export interface CatalogueDiscovery extends CatalogueReader {
+export interface CatalogueDiscovery
+  extends CatalogueReader, SearchProjectionReader, SearchProjectionWriter {
   registerConfiguration(
     sources: readonly ConfiguredSource[],
     workspaces: readonly ConfiguredWorkspace[],

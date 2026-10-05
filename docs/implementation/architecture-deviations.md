@@ -102,3 +102,28 @@ directly. This trades a database-enforced child-to-parent check for correct
 immutable version updates under the supported DuckDB behavior. Revisit if a
 DuckDB version supports these updates with the FK or if the storage engine
 changes.
+
+## DEV-004 Publication-Scoped Lexical Search Projection
+
+- **Status:** Documented Slice 4 sequencing and storage decision
+- **Introduced:** Slice 4 search projection
+
+The ADD implementation plan (section 23) lists Search as slice 3 and Knowledge
+Models as slice 4. Delivery built Knowledge Model publication first, so the
+Slice 4 search projection is derived from immutable Knowledge Publications
+(entity and relationship version snapshots), not from raw Evidence. It
+provides deterministic lexical filtering only (exact, prefix and contains on
+NFKC/lower-cased text). Embeddings, Qdrant (ADR-011), semantic/hybrid search,
+degradation behaviour and evidence-excerpt search remain future work.
+
+The projection lives in the API process as a module (ADR-009) because the API
+is the sole DuckDB writer (ADR-010/ADR-017). The API consumes its own
+`KnowledgeModelPublished` and `SearchProjectionRequested` events from JetStream
+and only accepts them when produced by `workspace-brain-api`.
+
+Migration `013-search-projection.sql` intentionally declares no foreign keys
+from projection tables to `knowledge_publications` or version tables. The
+projection is a disposable cache: it can be truncated and rebuilt (the API
+rebuilds missing projections on startup) without touching authoritative rows,
+and a full rebuild purges orphaned projection rows. Revisit if a projection is
+ever treated as authoritative, which ADR-018 forbids.
