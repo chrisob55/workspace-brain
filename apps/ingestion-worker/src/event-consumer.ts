@@ -11,12 +11,29 @@ import type {
   ScanResult,
   SourceId,
 } from '@workspace-brain/domain';
+import { parseSourceId } from '@workspace-brain/domain';
 import type { NatsDiscoveryBus } from '@workspace-brain/nats';
 import type { Logger } from 'pino';
+import { z } from 'zod';
 
-import type { SourceScanner } from './scanner.js';
+import {
+  readDocumentContentChunk,
+  type SourceScanner,
+} from '@workspace-brain/filesystem';
 
 const sourceListSubject = 'workspace.catalogue.discovery.sources';
+const documentContentRequestSchema = z
+  .object({
+    sourceId: z.string().regex(/^[0-7][0-9A-HJKMNP-TV-Z]{25}$/),
+    path: z.string().min(1).max(4096),
+    offset: z.number().int().nonnegative(),
+    requestedBytes: z
+      .number()
+      .int()
+      .min(1)
+      .max(256 * 1024),
+  })
+  .strict();
 type WorkerLogger = Pick<Logger, 'error' | 'info'>;
 
 export type EventConsumer = {
@@ -45,6 +62,36 @@ export class NatsEventConsumer implements EventConsumer {
 
   async start(): Promise<void> {
     await this.refreshAndRequestScans();
+    this.bus.subscribeRequests(
+      'workspace.ingestion.document.read',
+      async (request) => {
+        const parsed = documentContentRequestSchema.safeParse(request);
+        if (!parsed.success) {
+          return { failureType: 'InvalidDocumentReadRequest' };
+        }
+        const source = this.sources.get(parseSourceId(parsed.data.sourceId));
+        if (source === undefined) {
+          return { failureType: 'RepositoryUnavailable' };
+        }
+        try {
+          return await readDocumentContentChunk(
+            source,
+            parsed.data.path,
+            parsed.data.offset,
+            parsed.data.requestedBytes,
+          );
+        } catch (error) {
+          this.logger.error(
+            {
+              err: error instanceof Error ? error.name : 'UnknownError',
+              sourceId: parsed.data.sourceId,
+            },
+            'document content request failed',
+          );
+          return { failureType: 'DocumentUnavailable' };
+        }
+      },
+    );
     await this.bus.subscribe(
       'workspace.discovery.source.scan.requested',
       'workspace-ingestion-scan-requested',

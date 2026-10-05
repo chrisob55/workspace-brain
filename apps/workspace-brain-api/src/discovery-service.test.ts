@@ -1,5 +1,6 @@
 import {
   createDocumentId,
+  createDocumentVersionId,
   createRepositoryId,
   createSourceId,
   createSourceRootId,
@@ -72,6 +73,31 @@ const inventoryEvent: DiscoveryEvent = {
       documents: [documentCandidate],
     },
     durationMilliseconds: 15,
+  },
+};
+const processingEvent: DiscoveryEvent = {
+  eventId: 'event-processing-submitted',
+  eventType: 'DocumentProcessingSubmitted',
+  eventVersion: 1,
+  occurredAt: '2026-10-01T12:00:01.000Z',
+  producer: 'workspace-brain-knowledge-worker',
+  correlationId: 'processing-correlation',
+  idempotencyKey: 'document-processing-idempotency',
+  partitionKey: sourceId,
+  payload: {
+    candidate: {
+      documentId: document.id,
+      sourceId,
+      path: document.path,
+      contentFingerprint: document.fingerprint,
+      processedAt: '2026-10-01T12:00:01.000Z',
+      durationMilliseconds: 4,
+      processorId: 'markdown',
+      processorVersion: 1,
+      extractionRuleId: 'markdown-blocks',
+      extractionRuleVersion: 1,
+      evidence: [],
+    },
   },
 };
 
@@ -224,6 +250,42 @@ describe('DiscoveryService', () => {
     await service.handle(failed);
     expect(calls).toEqual(['failed']);
   });
+
+  it('persists submitted evidence before publishing the extracted document fact', async () => {
+    const calls: string[] = [];
+    const published: DiscoveryEvent[] = [];
+    const service = createDiscoveryService(
+      createCatalogue(source, calls),
+      createPublisher(published, calls),
+    );
+
+    await service.handle(processingEvent);
+
+    expect(calls[0]).toBe('processing');
+    expect(calls).toContain('publish:DocumentExtracted');
+    expect(published).toHaveLength(1);
+    expect(published[0]).toMatchObject({
+      eventType: 'DocumentExtracted',
+      payload: {
+        documentId: document.id,
+        contentFingerprint: document.fingerprint,
+        evidenceCount: 0,
+      },
+    });
+  });
+
+  it('rejects processing candidates partitioned to another source', async () => {
+    const calls: string[] = [];
+    const service = createDiscoveryService(
+      createCatalogue(source, calls),
+      createPublisher([], calls),
+    );
+
+    await expect(
+      service.handle({ ...processingEvent, partitionKey: createSourceId() }),
+    ).rejects.toThrow('source does not match event ownership');
+    expect(calls).toEqual([]);
+  });
 });
 
 function createCatalogue(source: Source, calls: string[]) {
@@ -264,6 +326,36 @@ function createCatalogue(source: Source, calls: string[]) {
         documentChanges: [{ change: 'added' as const, record: document }],
       };
     },
+    async applyDocumentProcessing(event) {
+      calls.push('processing');
+      const candidate = event.payload.candidate;
+      const documentVersionId = createDocumentVersionId();
+      addPending(
+        pending,
+        createCatalogueEvent('DocumentExtracted', {
+          documentId: candidate.documentId,
+          documentVersionId,
+          contentFingerprint: candidate.contentFingerprint,
+          evidenceCount: candidate.evidence.length,
+        }),
+      );
+      return {
+        documentVersion: {
+          id: documentVersionId,
+          documentId: candidate.documentId,
+          contentHash: candidate.contentFingerprint,
+          hashAlgorithm: 'sha256' as const,
+          discoveredAt: candidate.processedAt,
+          processorId: candidate.processorId,
+          processorVersion: candidate.processorVersion,
+          extractionRuleId: candidate.extractionRuleId,
+          extractionRuleVersion: candidate.extractionRuleVersion,
+          evidenceCount: candidate.evidence.length,
+        },
+        evidence: [],
+        duplicate: false,
+      };
+    },
     async recordScanStarted() {
       calls.push('started');
     },
@@ -285,7 +377,10 @@ function createCatalogue(source: Source, calls: string[]) {
 
 function createCatalogueEvent(
   eventType:
-    'RepositoryDiscovered' | 'DocumentDiscovered' | 'SourceScanCompleted',
+    | 'RepositoryDiscovered'
+    | 'DocumentDiscovered'
+    | 'SourceScanCompleted'
+    | 'DocumentExtracted',
   payload: Extract<DiscoveryEvent, { eventType: typeof eventType }>['payload'],
 ): DiscoveryEvent {
   const stableKey =
@@ -293,7 +388,9 @@ function createCatalogueEvent(
       ? repository.id
       : eventType === 'DocumentDiscovered'
         ? document.id
-        : sourceId;
+        : eventType === 'DocumentExtracted'
+          ? document.id
+          : sourceId;
   return {
     eventId: `event-${eventType}-${stableKey}`,
     eventType,

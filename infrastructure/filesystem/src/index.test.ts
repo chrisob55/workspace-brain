@@ -10,7 +10,7 @@ import {
 } from '@workspace-brain/domain';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { FilesystemSourceScanner } from './index.js';
+import { FilesystemSourceScanner, readDocumentContentChunk } from './index.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -145,6 +145,58 @@ describe('FilesystemSourceScanner', () => {
     expect(first.repositories[0]?.fingerprint).not.toBe(
       second.repositories[0]?.fingerprint,
     );
+  });
+
+  it('reads bounded content chunks through registered roots without following symlinks', async () => {
+    const root = await createFixture();
+    const outside = await createFixture();
+    await mkdir(join(root, 'docs'));
+    await mkdir(join(outside, 'private'));
+    await writeFile(join(root, 'docs', 'notes.txt'), 'read-only content');
+    await writeFile(join(outside, 'secret.txt'), 'outside');
+    await writeFile(join(outside, 'private', 'notes.txt'), 'outside parent');
+    await symlink(join(outside, 'secret.txt'), join(root, 'linked.txt'));
+    await symlink(join(outside, 'private'), join(root, 'linked-directory'));
+    const source = createSource(root);
+    const rootId = source.roots[0]?.id;
+    if (rootId === undefined) {
+      throw new Error('Fixture source root was not created');
+    }
+
+    const firstChunk = await readDocumentContentChunk(
+      source,
+      `${rootId}/docs/notes.txt`,
+      0,
+      4,
+    );
+    const rest = await readDocumentContentChunk(
+      source,
+      `${rootId}/docs/notes.txt`,
+      4,
+      256,
+    );
+
+    expect(Buffer.from(firstChunk.contentBase64, 'base64').toString()).toBe(
+      'read',
+    );
+    expect(rest.done).toBe(true);
+    expect(Buffer.from(rest.contentBase64, 'base64').toString()).toBe(
+      '-only content',
+    );
+    await expect(
+      readDocumentContentChunk(source, `${rootId}/linked.txt`, 0, 256),
+    ).rejects.toThrow();
+    await expect(
+      readDocumentContentChunk(
+        source,
+        `${rootId}/linked-directory/notes.txt`,
+        0,
+        256,
+      ),
+    ).rejects.toThrow();
+    await expect(
+      readDocumentContentChunk(source, `${rootId}/../secret.txt`, 0, 256),
+    ).rejects.toThrow('Document path is outside the registered source root');
   });
 });
 

@@ -15,6 +15,8 @@ const pageQuerySchema = z
   .strict();
 
 const sourceIdSchema = z.string().regex(/^[0-7][0-9A-HJKMNP-TV-Z]{25}$/);
+const documentIdSchema = z.string().regex(/^[0-7][0-9A-HJKMNP-TV-Z]{25}$/);
+const evidenceIdSchema = z.string().regex(/^[0-7][0-9A-HJKMNP-TV-Z]{25}$/);
 const repositoryQuerySchema = pageQuerySchema
   .extend({ sourceId: sourceIdSchema.optional() })
   .strict();
@@ -144,6 +146,45 @@ export function createApiServer(
       limit: query.limit + 1,
     });
     return sendPage(reply, page.items, query.limit);
+  });
+
+  server.get(
+    '/api/v1/documents/:documentId/evidence',
+    async (request, reply) => {
+      const params = z
+        .object({ documentId: documentIdSchema })
+        .strict()
+        .safeParse(request.params);
+      if (!params.success) {
+        throw new ApiError(400, 'Invalid Request', 'Document ID is invalid.');
+      }
+      const query = parsePageQuery(request.query);
+      const page = await catalogue.listDocumentEvidence(
+        params.data.documentId,
+        {
+          ...(query.cursor === undefined
+            ? {}
+            : { afterId: decodeCursor(query.cursor) }),
+          limit: query.limit + 1,
+        },
+      );
+      return sendPage(reply, page.items, query.limit);
+    },
+  );
+
+  server.get('/api/v1/evidence/:evidenceId/explanation', async (request) => {
+    const params = z
+      .object({ evidenceId: evidenceIdSchema })
+      .strict()
+      .safeParse(request.params);
+    if (!params.success) {
+      throw new ApiError(400, 'Invalid Request', 'Evidence ID is invalid.');
+    }
+    const explanation = await catalogue.explainEvidence(params.data.evidenceId);
+    if (explanation === undefined) {
+      throw new ApiError(404, 'Not Found', 'Evidence was not found.');
+    }
+    return explanation;
   });
 
   return server;

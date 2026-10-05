@@ -51,6 +51,14 @@ describe('OpenAPI contract', () => {
       'listDocuments',
     );
     expect(
+      document.paths['/api/v1/documents/{documentId}/evidence']?.get
+        ?.operationId,
+    ).toBe('listDocumentEvidence');
+    expect(
+      document.paths['/api/v1/evidence/{evidenceId}/explanation']?.get
+        ?.operationId,
+    ).toBe('getEvidenceExplanation');
+    expect(
       document.paths['/api/v1/sources']?.get?.responses?.['200']?.content?.[
         'application/json'
       ]?.schema?.$ref,
@@ -65,6 +73,18 @@ describe('OpenAPI contract', () => {
     expect(document.components.schemas.Workspace).toBeDefined();
     expect(document.components.schemas.Repository).toBeDefined();
     expect(document.components.schemas.Document).toBeDefined();
+    expect(document.components.schemas.Evidence).toBeDefined();
+    expect(document.components.schemas.EvidenceLocator).toBeDefined();
+    expect(document.components.schemas.EvidenceExplanation).toBeDefined();
+    expect(
+      document.paths['/api/v1/documents/{documentId}/evidence']?.get
+        ?.responses?.['200']?.content?.['application/json']?.schema?.$ref,
+    ).toBe('#/components/schemas/EvidencePage');
+    expect(
+      document.paths['/api/v1/evidence/{evidenceId}/explanation']?.get
+        ?.responses?.['404']?.content?.['application/problem+json']?.schema
+        ?.$ref,
+    ).toBe('#/components/schemas/ProblemDetails');
     expect(document.components.schemas.Repository?.required).toContain(
       'fingerprint',
     );
@@ -89,6 +109,16 @@ describe('OpenAPI contract', () => {
     expect(Object.keys(document.paths['/api/v1/documents'] ?? {})).toEqual([
       'get',
     ]);
+    expect(
+      Object.keys(
+        document.paths['/api/v1/documents/{documentId}/evidence'] ?? {},
+      ),
+    ).toEqual(['get']);
+    expect(
+      Object.keys(
+        document.paths['/api/v1/evidence/{evidenceId}/explanation'] ?? {},
+      ),
+    ).toEqual(['get']);
     expect(
       document.paths['/api/v1/repositories']?.get?.parameters?.map(
         (parameter) => parameter.name,

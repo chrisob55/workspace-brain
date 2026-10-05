@@ -17,6 +17,7 @@
     "test": "pnpm build && vitest run",
     "test:contract": "pnpm build && vitest run test/contract",
     "test:smoke:discovery": "bash scripts/discovery-smoke.sh",
+    "test:smoke:evidence": "bash scripts/discovery-smoke.sh",
     "typecheck": "turbo run typecheck"
   },
   "devDependencies": {

@@ -1,5 +1,7 @@
 import {
   createDocumentId,
+  createDocumentVersionId,
+  createEvidenceId,
   createRepositoryId,
   createSourceId,
   createWorkspaceId,
@@ -45,6 +47,48 @@ const document = {
   discoveredAt: '2026-10-01T12:00:00.000Z',
   lastSeenAt: '2026-10-01T12:00:00.000Z',
   discoveryMethod: 'filesystem' as const,
+};
+const documentVersion = {
+  id: createDocumentVersionId(),
+  documentId: document.id,
+  contentHash: document.fingerprint,
+  hashAlgorithm: 'sha256' as const,
+  discoveredAt: document.discoveredAt,
+  processorId: 'markdown',
+  processorVersion: 1,
+  extractionRuleId: 'markdown-blocks',
+  extractionRuleVersion: 1,
+  evidenceCount: 1,
+};
+const evidence = {
+  id: createEvidenceId(),
+  documentVersionId: documentVersion.id,
+  key: 'markdown:1:heading',
+  kind: 'heading' as const,
+  excerpt: 'Overview',
+  truncated: false,
+  locator: { kind: 'markdown-lines' as const, lineStart: 1, lineEnd: 1 },
+};
+const evidenceExplanation = {
+  evidence,
+  documentVersion,
+  document: {
+    id: document.id,
+    sourceId: document.sourceId,
+    path: document.path,
+    filename: document.filename,
+    fingerprint: document.fingerprint,
+  },
+  provenance: {
+    sourceId: document.sourceId,
+    provider: 'filesystem' as const,
+    documentPath: document.path,
+    contentFingerprint: document.fingerprint,
+    processorId: 'markdown',
+    processorVersion: 1,
+    extractionRuleId: 'markdown-blocks',
+    extractionRuleVersion: 1,
+  },
 };
 
 function createCatalogue(
@@ -113,6 +157,16 @@ function createCatalogue(
         )
         .sort((left, right) => left.id.localeCompare(right.id));
       return { items: items.slice(0, limit) };
+    },
+    async listDocumentEvidence(documentId: string, { afterId, limit }) {
+      const items =
+        documentId === document.id && evidence.id > (afterId ?? '')
+          ? [evidence]
+          : [];
+      return { items: items.slice(0, limit) };
+    },
+    async explainEvidence(evidenceId: string) {
+      return evidenceId === evidence.id ? evidenceExplanation : undefined;
     },
     async check() {
       if (!ready) {
@@ -247,6 +301,36 @@ describe('Workspace Brain API routes', () => {
     );
     expect(badCursor.statusCode).toBe(400);
     expect(badFilter.statusCode).toBe(400);
+    await server.close();
+  });
+
+  it('serves extracted evidence and provenance explanations read-only', async () => {
+    const server = createApiServer(createCatalogue(), { logger: false });
+    const evidencePage = await server.inject(
+      `/api/v1/documents/${document.id}/evidence?limit=100`,
+    );
+    const explanation = await server.inject(
+      `/api/v1/evidence/${evidence.id}/explanation`,
+    );
+    const missing = await server.inject(
+      `/api/v1/evidence/${createEvidenceId()}/explanation`,
+    );
+    const invalidDocument = await server.inject(
+      '/api/v1/documents/not-a-ulid/evidence',
+    );
+
+    expect(evidencePage.statusCode).toBe(200);
+    expect(evidencePage.json()).toEqual({
+      items: [evidence],
+      nextCursor: null,
+    });
+    expect(explanation.statusCode).toBe(200);
+    expect(explanation.json()).toEqual(evidenceExplanation);
+    expect(missing.statusCode).toBe(404);
+    expect(missing.headers['content-type']).toContain(
+      'application/problem+json',
+    );
+    expect(invalidDocument.statusCode).toBe(400);
     await server.close();
   });
 
