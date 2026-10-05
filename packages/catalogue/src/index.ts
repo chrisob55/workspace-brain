@@ -10,8 +10,13 @@ import type {
   KnowledgeEntity,
   KnowledgeInputEvidence,
   KnowledgeModel,
+  KnowledgeObjectProvenance,
   KnowledgePublication,
+  KnowledgePublicationSummary,
   KnowledgeRelationship,
+  PublishedEntity,
+  PublishedRelationship,
+  PublishedRelationshipTraversal,
   InventoryChange,
   ProjectedEntity,
   ProjectedRelationship,
@@ -93,6 +98,22 @@ export type KnowledgePageRequest = Pick<
   readonly lifecycleStatus?: string;
   readonly type?: string;
 };
+
+export type PublishedRelationshipRequest = {
+  readonly publicationId: string;
+  readonly entityId: string;
+  readonly direction: 'incoming' | 'outgoing' | 'both';
+  readonly relationshipType?: string;
+  readonly afterId?: string;
+  readonly limit: number;
+};
+
+export class CatalogueIntegrityError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'CatalogueIntegrityError';
+  }
+}
 
 export type SearchTextFilter<Field extends string> = {
   readonly query: string;
@@ -207,6 +228,37 @@ export interface CatalogueReader {
   listKnowledgePublications(
     request: KnowledgePageRequest,
   ): Promise<CataloguePage<KnowledgePublication>>;
+  listAvailableKnowledgePublications(
+    request: KnowledgePageRequest,
+  ): Promise<CataloguePage<KnowledgePublication>>;
+  getKnowledgePublication(
+    publicationId: string,
+  ): Promise<KnowledgePublication | undefined>;
+  getLatestKnowledgePublication(
+    modelId: string,
+  ): Promise<KnowledgePublication | undefined>;
+  getKnowledgePublicationSummary(
+    publicationId: string,
+  ): Promise<KnowledgePublicationSummary | undefined>;
+  getPublishedEntity(
+    publicationId: string,
+    entityId: string,
+  ): Promise<PublishedEntity | undefined>;
+  getPublishedRelationship(
+    publicationId: string,
+    relationshipId: string,
+  ): Promise<PublishedRelationship | undefined>;
+  listPublishedEntityRelationships(
+    request: PublishedRelationshipRequest,
+  ): Promise<CataloguePage<PublishedRelationshipTraversal>>;
+  getPublishedEntityProvenance(
+    publicationId: string,
+    entityId: string,
+  ): Promise<KnowledgeObjectProvenance | undefined>;
+  getPublishedRelationshipProvenance(
+    publicationId: string,
+    relationshipId: string,
+  ): Promise<KnowledgeObjectProvenance | undefined>;
 }
 
 export interface DiscoverySourceProvider {

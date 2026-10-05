@@ -786,6 +786,216 @@
         }
       }
     },
+    "/api/v1/knowledge/models/{modelId}/publications/latest": {
+      "get": {
+        "operationId": "getLatestKnowledgePublication",
+        "parameters": [{ "$ref": "#/components/parameters/ModelId" }],
+        "responses": {
+          "200": {
+            "description": "Latest immutable publication for this model; publication ID is concrete and resolved once",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KnowledgePublication"
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/InvalidRequest" },
+          "404": {
+            "description": "Model or its latest publication was not found",
+            "content": {
+              "application/problem+json": {
+                "schema": { "$ref": "#/components/schemas/ProblemDetails" }
+              }
+            }
+          },
+          "500": { "$ref": "#/components/responses/IntegrityFailure" }
+        }
+      }
+    },
+    "/api/v1/knowledge/publications/{publicationId}": {
+      "get": {
+        "operationId": "getKnowledgePublication",
+        "parameters": [{ "$ref": "#/components/parameters/PublicationId" }],
+        "responses": {
+          "200": {
+            "description": "Immutable publication metadata",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KnowledgePublication"
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/InvalidRequest" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "500": { "$ref": "#/components/responses/IntegrityFailure" }
+        }
+      }
+    },
+    "/api/v1/knowledge/publications/{publicationId}/summary": {
+      "get": {
+        "operationId": "getKnowledgePublicationSummary",
+        "parameters": [{ "$ref": "#/components/parameters/PublicationId" }],
+        "responses": {
+          "200": {
+            "description": "Summary calculated from immutable publication membership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KnowledgePublicationSummary"
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/InvalidRequest" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "500": { "$ref": "#/components/responses/IntegrityFailure" }
+        }
+      }
+    },
+    "/api/v1/knowledge/publications/{publicationId}/entities/{entityId}": {
+      "get": {
+        "operationId": "getPublishedEntity",
+        "parameters": [
+          { "$ref": "#/components/parameters/PublicationId" },
+          { "$ref": "#/components/parameters/EntityId" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Exact immutable entity version included in the publication",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PublishedEntity" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/InvalidRequest" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "500": { "$ref": "#/components/responses/IntegrityFailure" }
+        }
+      }
+    },
+    "/api/v1/knowledge/publications/{publicationId}/entities/{entityId}/relationships": {
+      "get": {
+        "operationId": "listPublishedEntityRelationships",
+        "parameters": [
+          { "$ref": "#/components/parameters/PublicationId" },
+          { "$ref": "#/components/parameters/EntityId" },
+          { "$ref": "#/components/parameters/Cursor" },
+          { "$ref": "#/components/parameters/Limit" },
+          {
+            "name": "direction",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": ["incoming", "outgoing", "both"],
+              "default": "both"
+            }
+          },
+          {
+            "name": "relationshipType",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/KnowledgeRelationshipType"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One-hop relationships from the selected immutable publication",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishedRelationshipPage"
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/InvalidRequest" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "500": { "$ref": "#/components/responses/IntegrityFailure" }
+        }
+      }
+    },
+    "/api/v1/knowledge/publications/{publicationId}/entities/{entityId}/provenance": {
+      "get": {
+        "operationId": "getPublishedEntityProvenance",
+        "parameters": [
+          { "$ref": "#/components/parameters/PublicationId" },
+          { "$ref": "#/components/parameters/EntityId" },
+          { "$ref": "#/components/parameters/Cursor" },
+          { "$ref": "#/components/parameters/Limit" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stored evidence and processing provenance supporting the published entity version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KnowledgeProvenancePage"
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/InvalidRequest" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "500": { "$ref": "#/components/responses/IntegrityFailure" }
+        }
+      }
+    },
+    "/api/v1/knowledge/publications/{publicationId}/relationships/{relationshipId}": {
+      "get": {
+        "operationId": "getPublishedRelationship",
+        "parameters": [
+          { "$ref": "#/components/parameters/PublicationId" },
+          { "$ref": "#/components/parameters/RelationshipId" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Exact immutable relationship version included in the publication",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishedRelationship"
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/InvalidRequest" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "500": { "$ref": "#/components/responses/IntegrityFailure" }
+        }
+      }
+    },
+    "/api/v1/knowledge/publications/{publicationId}/relationships/{relationshipId}/provenance": {
+      "get": {
+        "operationId": "getPublishedRelationshipProvenance",
+        "parameters": [
+          { "$ref": "#/components/parameters/PublicationId" },
+          { "$ref": "#/components/parameters/RelationshipId" },
+          { "$ref": "#/components/parameters/Cursor" },
+          { "$ref": "#/components/parameters/Limit" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stored evidence and processing provenance supporting the published relationship version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KnowledgeProvenancePage"
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/InvalidRequest" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "500": { "$ref": "#/components/responses/IntegrityFailure" }
+        }
+      }
+    },
     "/api/v1/search/entities": {
       "get": {
         "operationId": "searchProjectedEntities",
@@ -1166,6 +1376,73 @@
     }
   },
   "components": {
+    "parameters": {
+      "ModelId": {
+        "name": "modelId",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string", "format": "ulid" }
+      },
+      "PublicationId": {
+        "name": "publicationId",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string", "format": "ulid" }
+      },
+      "EntityId": {
+        "name": "entityId",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string", "format": "ulid" }
+      },
+      "RelationshipId": {
+        "name": "relationshipId",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string", "format": "ulid" }
+      },
+      "Cursor": {
+        "name": "cursor",
+        "in": "query",
+        "schema": { "type": "string", "minLength": 1, "maxLength": 2048 }
+      },
+      "Limit": {
+        "name": "limit",
+        "in": "query",
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 50
+        }
+      }
+    },
+    "responses": {
+      "InvalidRequest": {
+        "description": "Invalid identifier, filter, or continuation cursor",
+        "content": {
+          "application/problem+json": {
+            "schema": { "$ref": "#/components/schemas/ProblemDetails" }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "Publication or object is absent from the selected publication",
+        "content": {
+          "application/problem+json": {
+            "schema": { "$ref": "#/components/schemas/ProblemDetails" }
+          }
+        }
+      },
+      "IntegrityFailure": {
+        "description": "Published membership or mandatory provenance is corrupt or incomplete",
+        "content": {
+          "application/problem+json": {
+            "schema": { "$ref": "#/components/schemas/ProblemDetails" }
+          }
+        }
+      }
+    },
     "schemas": {
       "Health": {
         "type": "object",
@@ -1966,6 +2243,142 @@
             "format": "date-time"
           }
         }
+      },
+      "KnowledgePublicationSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["publication", "entityCount", "relationshipCount"],
+        "properties": {
+          "publication": {
+            "$ref": "#/components/schemas/KnowledgePublication"
+          },
+          "entityCount": { "type": "integer", "minimum": 0 },
+          "relationshipCount": { "type": "integer", "minimum": 0 }
+        }
+      },
+      "PublishedEntity": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "publicationId",
+          "entityVersionId",
+          "versionNumber",
+          "entity"
+        ],
+        "properties": {
+          "publicationId": { "type": "string", "format": "ulid" },
+          "entityVersionId": { "type": "string", "format": "ulid" },
+          "versionNumber": { "type": "integer", "minimum": 1 },
+          "entity": { "$ref": "#/components/schemas/KnowledgeEntity" }
+        }
+      },
+      "PublishedRelationship": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "publicationId",
+          "relationshipVersionId",
+          "versionNumber",
+          "relationship"
+        ],
+        "properties": {
+          "publicationId": { "type": "string", "format": "ulid" },
+          "relationshipVersionId": { "type": "string", "format": "ulid" },
+          "versionNumber": { "type": "integer", "minimum": 1 },
+          "relationship": {
+            "$ref": "#/components/schemas/KnowledgeRelationship"
+          }
+        }
+      },
+      "KnowledgeSupportRecord": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["provenance", "evidenceExplanation"],
+        "properties": {
+          "provenance": { "$ref": "#/components/schemas/KnowledgeProvenance" },
+          "evidenceExplanation": {
+            "$ref": "#/components/schemas/EvidenceExplanation"
+          }
+        }
+      },
+      "KnowledgeProvenancePage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "publicationId",
+          "knowledgeObjectType",
+          "knowledgeObjectId",
+          "knowledgeVersionId",
+          "knowledgeVersionNumber",
+          "items",
+          "nextCursor"
+        ],
+        "properties": {
+          "publicationId": { "type": "string", "format": "ulid" },
+          "knowledgeObjectType": {
+            "type": "string",
+            "enum": ["entity", "relationship"]
+          },
+          "knowledgeObjectId": { "type": "string", "format": "ulid" },
+          "knowledgeVersionId": { "type": "string", "format": "ulid" },
+          "knowledgeVersionNumber": { "type": "integer", "minimum": 1 },
+          "items": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/KnowledgeSupportRecord" }
+          },
+          "nextCursor": { "type": ["string", "null"] }
+        }
+      },
+      "PublishedRelationshipTraversal": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "publicationId",
+          "relationshipVersionId",
+          "versionNumber",
+          "direction",
+          "relationship"
+        ],
+        "properties": {
+          "publicationId": { "type": "string", "format": "ulid" },
+          "relationshipVersionId": { "type": "string", "format": "ulid" },
+          "versionNumber": { "type": "integer", "minimum": 1 },
+          "direction": { "type": "string", "enum": ["incoming", "outgoing"] },
+          "relationship": {
+            "$ref": "#/components/schemas/KnowledgeRelationship"
+          }
+        }
+      },
+      "PublishedRelationshipPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["publicationId", "items", "nextCursor"],
+        "properties": {
+          "publicationId": { "type": "string", "format": "ulid" },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublishedRelationshipTraversal"
+            }
+          },
+          "nextCursor": { "type": ["string", "null"] }
+        }
+      },
+      "KnowledgeRelationshipType": {
+        "type": "string",
+        "enum": [
+          "CONTAINS",
+          "BELONGS_TO",
+          "REFERENCES",
+          "DOCUMENTS",
+          "DEPENDS_ON",
+          "USES",
+          "IMPLEMENTS",
+          "EXPOSES",
+          "CONSUMES",
+          "CLASSIFIED_AS",
+          "DERIVED_FROM"
+        ]
       },
       "KnowledgeModelPage": {
         "type": "object",

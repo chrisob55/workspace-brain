@@ -14,13 +14,15 @@ implementation history for Workspace Brain.
 
 ## Current implementation
 
-The current slice implements deterministic, read-only filesystem discovery and
-inventory. It does not yet process documents into Evidence or publish Knowledge
-Models. The [Slice 1 remediation report](implementation/slice-1-remediation-report.md)
-describes the current worker/API boundary. The earlier
-[Slice 1 implementation report](implementation/slice-1-report.md) is retained
-as a historical account of the initial implementation and its subsequently
-resolved discrepancy.
+Slices 0-5 implement deterministic filesystem discovery, evidence extraction,
+immutable Knowledge Model publication, publication-scoped lexical search, and
+publication-scoped knowledge exploration. The [Slice 5 implementation
+report](implementation/slice-5-report.md) records the current exploration API,
+provenance behavior, and validation. The [Slice 1 remediation
+report](implementation/slice-1-remediation-report.md) describes the worker/API
+boundary. The earlier [Slice 1 implementation
+report](implementation/slice-1-report.md) is retained as a historical account
+of the initial implementation and its subsequently resolved discrepancy.
 
 ## Changing architecture
 

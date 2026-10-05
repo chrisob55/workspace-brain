@@ -1,6 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto';
 
-import type { KnowledgePageRequest } from '@workspace-brain/catalogue';
+import {
+  CatalogueIntegrityError,
+  type KnowledgePageRequest,
+  type PublishedRelationshipRequest,
+} from '@workspace-brain/catalogue';
 import type { DuckDbConnection } from './index.js';
 import {
   createEntityVersionId,
@@ -32,9 +36,14 @@ import {
   type KnowledgeModel,
   type KnowledgeProvenance,
   type KnowledgePublication,
+  type KnowledgePublicationSummary,
   type KnowledgeRelationship,
   type KnowledgeRelationshipCandidate,
   type KnowledgeDocumentRemovalEvent,
+  type PublishedEntity,
+  type PublishedRelationship,
+  type PublishedRelationshipTraversal,
+  type StoredKnowledgeProvenance,
 } from '@workspace-brain/domain';
 import { z } from 'zod';
 
@@ -121,8 +130,8 @@ const entitySnapshotSchema = z
     knowledgeModelId: idSchema,
     type: z.enum(entityTypes),
     name: z.string(),
-    sourceEvidenceIds: z.array(idSchema),
-    provenance: z.array(provenanceSchema),
+    sourceEvidenceIds: z.array(idSchema).min(1),
+    provenance: z.array(provenanceSchema).min(1),
     lifecycleStatus: z.enum(entityStatuses),
     currentVersionId: idSchema,
     createdAt: z.string().datetime(),
@@ -136,8 +145,8 @@ const relationshipSnapshotSchema = z
     type: z.enum(knowledgeRelationshipTypes),
     sourceEntityId: idSchema,
     targetEntityId: idSchema,
-    sourceEvidenceIds: z.array(idSchema),
-    provenance: z.array(provenanceSchema),
+    sourceEvidenceIds: z.array(idSchema).min(1),
+    provenance: z.array(provenanceSchema).min(1),
     confidence: z.number().min(0).max(1),
     lifecycleStatus: z.enum(relationshipStatuses),
     currentVersionId: idSchema,
@@ -194,6 +203,31 @@ const knowledgePublicationRowSchema = z.object({
 });
 const priorCandidateRunSchema = z.object({
   payload_hash: z.string(),
+});
+const entityVersionSnapshotRowSchema = z.object({
+  id: idSchema,
+  entity_id: idSchema,
+  version_number: z.coerce.number().int().positive(),
+  snapshot_json: z.string(),
+});
+const relationshipVersionSnapshotRowSchema = z.object({
+  id: idSchema,
+  relationship_id: idSchema,
+  version_number: z.coerce.number().int().positive(),
+  snapshot_json: z.string(),
+});
+const provenanceEvidenceRowSchema = z.object({
+  evidence_id: idSchema,
+  document_version_id: idSchema,
+  locator_json: z.string(),
+  document_id: idSchema,
+  source_id: idSchema,
+  path: z.string(),
+  content_fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+  processor_id: z.string(),
+  processor_version: z.coerce.number().int().positive(),
+  extraction_rule_id: z.string(),
+  extraction_rule_version: z.coerce.number().int().positive(),
 });
 
 export async function ensureKnowledgeModels(
@@ -449,7 +483,25 @@ export async function listKnowledgePublications(
     `SELECT id, knowledge_model_id, version_number, schema_version, status, content_hash, CAST(entity_version_ids_json AS VARCHAR) AS entity_version_ids_json, CAST(relationship_version_ids_json AS VARCHAR) AS relationship_version_ids_json, strftime(published_at, '%Y-%m-%dT%H:%M:%S.%fZ') AS published_at FROM knowledge_publications ${whereClause(filters)} ORDER BY id LIMIT $${parameters.length}`,
     parameters,
   );
-  return { items: rows.getRowObjectsJson().map(parseKnowledgePublicationRow) };
+  const items = rows.getRowObjectsJson().map((row) => {
+    try {
+      return parseKnowledgePublicationRow(row);
+    } catch (error) {
+      throw asPublicationIntegrityError(error, 'publication metadata');
+    }
+  });
+  return { items };
+}
+
+export async function listAvailableKnowledgePublications(
+  connection: DuckDbConnection,
+  request: KnowledgePageRequest,
+): Promise<{ readonly items: readonly KnowledgePublication[] }> {
+  const page = await listKnowledgePublications(connection, request);
+  for (const publication of page.items) {
+    await assertPublicationIntegrity(connection, publication);
+  }
+  return page;
 }
 
 export async function getKnowledgePublication(
@@ -461,7 +513,552 @@ export async function getKnowledgePublication(
     [parseKnowledgePublicationId(publicationId)],
   );
   const row = rows.getRowObjectsJson()[0];
-  return row === undefined ? undefined : parseKnowledgePublicationRow(row);
+  if (row === undefined) {
+    return undefined;
+  }
+  try {
+    return parseKnowledgePublicationRow(row);
+  } catch (error) {
+    throw asPublicationIntegrityError(error, 'publication metadata');
+  }
+}
+
+export async function getAvailableKnowledgePublication(
+  connection: DuckDbConnection,
+  publicationId: string,
+): Promise<KnowledgePublication | undefined> {
+  const publication = await getKnowledgePublication(connection, publicationId);
+  if (publication !== undefined) {
+    await assertPublicationIntegrity(connection, publication);
+  }
+  return publication;
+}
+
+export async function getLatestKnowledgePublication(
+  connection: DuckDbConnection,
+  modelId: string,
+): Promise<KnowledgePublication | undefined> {
+  const rows = await connection.runAndReadAll(
+    "SELECT id FROM knowledge_publications WHERE knowledge_model_id = $1 AND status = 'published' ORDER BY version_number DESC LIMIT 1",
+    [parseKnowledgeModelId(modelId)],
+  );
+  const id = rows.getRowObjectsJson()[0]?.id;
+  if (id === undefined) {
+    return undefined;
+  }
+  return getAvailableKnowledgePublication(connection, z.string().parse(id));
+}
+
+export async function getKnowledgePublicationSummary(
+  connection: DuckDbConnection,
+  publicationId: string,
+): Promise<KnowledgePublicationSummary | undefined> {
+  const publication = await getAvailableKnowledgePublication(
+    connection,
+    publicationId,
+  );
+  if (publication === undefined) {
+    return undefined;
+  }
+  const entities = await loadPublishedEntities(connection, publication);
+  const relationships = await loadPublishedRelationships(
+    connection,
+    publication,
+  );
+  assertPublishedRelationshipEndpoints(relationships, entities, publication);
+  return {
+    publication,
+    entityCount: entities.length,
+    relationshipCount: relationships.length,
+  };
+}
+
+export async function getPublishedEntity(
+  connection: DuckDbConnection,
+  publicationId: string,
+  entityId: string,
+): Promise<PublishedEntity | undefined> {
+  const publication = await getAvailableKnowledgePublication(
+    connection,
+    publicationId,
+  );
+  if (publication === undefined) {
+    return undefined;
+  }
+  const parsedEntityId = parseKnowledgeEntityId(entityId);
+  const entities = await loadPublishedEntities(connection, publication);
+  return entities.find(({ entity }) => entity.id === parsedEntityId);
+}
+
+export async function getPublishedRelationship(
+  connection: DuckDbConnection,
+  publicationId: string,
+  relationshipId: string,
+): Promise<PublishedRelationship | undefined> {
+  const publication = await getAvailableKnowledgePublication(
+    connection,
+    publicationId,
+  );
+  if (publication === undefined) {
+    return undefined;
+  }
+  const relationships = await loadPublishedRelationships(
+    connection,
+    publication,
+  );
+  const entities = await loadPublishedEntities(connection, publication);
+  assertPublishedRelationshipEndpoints(relationships, entities, publication);
+  const parsedRelationshipId = parseKnowledgeRelationshipId(relationshipId);
+  return relationships.find(
+    ({ relationship }) => relationship.id === parsedRelationshipId,
+  );
+}
+
+export async function listPublishedEntityRelationships(
+  connection: DuckDbConnection,
+  request: PublishedRelationshipRequest,
+): Promise<{ readonly items: readonly PublishedRelationshipTraversal[] }> {
+  const publication = await getAvailableKnowledgePublication(
+    connection,
+    request.publicationId,
+  );
+  if (publication === undefined) {
+    return { items: [] };
+  }
+  const entityId = parseKnowledgeEntityId(request.entityId);
+  const entities = await loadPublishedEntities(connection, publication);
+  if (!entities.some(({ entity }) => entity.id === entityId)) {
+    return { items: [] };
+  }
+  const relationships = await loadPublishedRelationships(
+    connection,
+    publication,
+  );
+  assertPublishedRelationshipEndpoints(relationships, entities, publication);
+  const direction = z
+    .enum(['incoming', 'outgoing', 'both'])
+    .parse(request.direction);
+  const relationshipType =
+    request.relationshipType === undefined
+      ? undefined
+      : parseKnowledgeRelationshipType(request.relationshipType);
+  const afterId =
+    request.afterId === undefined
+      ? undefined
+      : parseKnowledgeRelationshipId(request.afterId);
+  if (
+    !Number.isInteger(request.limit) ||
+    request.limit < 1 ||
+    request.limit > 101
+  ) {
+    throw new Error(
+      'Published relationship page limit must be between 1 and 101',
+    );
+  }
+  const items = relationships
+    .map(({ relationshipVersionId, versionNumber, relationship }) => {
+      const isIncoming = relationship.targetEntityId === entityId;
+      const isOutgoing = relationship.sourceEntityId === entityId;
+      if (!isIncoming && !isOutgoing) {
+        return undefined;
+      }
+      return {
+        publicationId: publication.id,
+        relationshipVersionId,
+        versionNumber,
+        direction: isIncoming ? ('incoming' as const) : ('outgoing' as const),
+        relationship,
+      };
+    })
+    .filter(
+      (item): item is PublishedRelationshipTraversal =>
+        item !== undefined &&
+        (direction === 'both' || item.direction === direction) &&
+        (relationshipType === undefined ||
+          item.relationship.type === relationshipType) &&
+        (afterId === undefined || item.relationship.id > afterId),
+    )
+    .sort((left, right) =>
+      compareOrdinal(left.relationship.id, right.relationship.id),
+    )
+    .slice(0, request.limit);
+  return { items };
+}
+
+export async function getPublishedEntityProvenance(
+  connection: DuckDbConnection,
+  publicationId: string,
+  entityId: string,
+): Promise<StoredKnowledgeProvenance | undefined> {
+  const published = await getPublishedEntity(
+    connection,
+    publicationId,
+    entityId,
+  );
+  if (published === undefined) {
+    return undefined;
+  }
+  return {
+    publicationId: published.publicationId,
+    knowledgeObjectType: 'entity',
+    knowledgeObjectId: published.entity.id,
+    knowledgeVersionId: published.entityVersionId,
+    knowledgeVersionNumber: published.versionNumber,
+    provenance: validatePublishedProvenance(
+      published.entity.sourceEvidenceIds,
+      published.entity.provenance,
+      published.entity.id,
+    ),
+  };
+}
+
+export async function getPublishedRelationshipProvenance(
+  connection: DuckDbConnection,
+  publicationId: string,
+  relationshipId: string,
+): Promise<StoredKnowledgeProvenance | undefined> {
+  const published = await getPublishedRelationship(
+    connection,
+    publicationId,
+    relationshipId,
+  );
+  if (published === undefined) {
+    return undefined;
+  }
+  return {
+    publicationId: published.publicationId,
+    knowledgeObjectType: 'relationship',
+    knowledgeObjectId: published.relationship.id,
+    knowledgeVersionId: published.relationshipVersionId,
+    knowledgeVersionNumber: published.versionNumber,
+    provenance: validatePublishedProvenance(
+      published.relationship.sourceEvidenceIds,
+      published.relationship.provenance,
+      published.relationship.id,
+    ),
+  };
+}
+
+async function assertPublicationIntegrity(
+  connection: DuckDbConnection,
+  publication: KnowledgePublication,
+): Promise<void> {
+  const entities = await loadPublishedEntities(connection, publication);
+  const relationships = await loadPublishedRelationships(
+    connection,
+    publication,
+  );
+  assertPublishedRelationshipEndpoints(relationships, entities, publication);
+  const provenance = [
+    ...entities.flatMap(({ entity }) =>
+      validatePublishedProvenance(
+        entity.sourceEvidenceIds,
+        entity.provenance,
+        entity.id,
+      ),
+    ),
+    ...relationships.flatMap(({ relationship }) =>
+      validatePublishedProvenance(
+        relationship.sourceEvidenceIds,
+        relationship.provenance,
+        relationship.id,
+      ),
+    ),
+  ];
+  if (
+    createKnowledgePublicationContentHash(
+      entities.map(({ entity }) => entity),
+      relationships.map(({ relationship }) => relationship),
+    ) !== publication.contentHash
+  ) {
+    throw new CatalogueIntegrityError(
+      `Publication ${publication.id} content does not match its stored hash`,
+    );
+  }
+  const provenanceByEvidence = new Map<string, KnowledgeProvenance>();
+  for (const item of provenance) {
+    const previous = provenanceByEvidence.get(item.evidenceId);
+    if (previous !== undefined && stableJson(previous) !== stableJson(item)) {
+      throw new CatalogueIntegrityError(
+        `Publication ${publication.id} has conflicting provenance for shared evidence`,
+      );
+    }
+    provenanceByEvidence.set(item.evidenceId, item);
+  }
+  const evidenceIds = [...provenanceByEvidence.keys()].sort(compareOrdinal);
+  if (evidenceIds.length === 0) {
+    return;
+  }
+  const rows = await connection.runAndReadAll(
+    "SELECT e.id AS evidence_id, e.document_version_id, CAST(e.locator_json AS VARCHAR) AS locator_json, v.document_id, v.source_id, v.path, v.content_fingerprint, v.processor_id, v.processor_version, v.extraction_rule_id, v.extraction_rule_version FROM extracted_evidence e JOIN document_versions v ON v.id = e.document_version_id WHERE list_contains(CAST(json_extract($1, '$') AS VARCHAR[]), e.id)",
+    [JSON.stringify(evidenceIds)],
+  );
+  const foundEvidence = new Set<string>();
+  for (const row of rows.getRowObjectsJson()) {
+    let parsed: z.infer<typeof provenanceEvidenceRowSchema>;
+    try {
+      parsed = provenanceEvidenceRowSchema.parse(row);
+    } catch (error) {
+      throw asPublicationIntegrityError(error, 'evidence provenance');
+    }
+    const expected = provenanceByEvidence.get(parsed.evidence_id);
+    let locator: EvidenceLocator;
+    try {
+      locator = locatorSchema.parse(
+        JSON.parse(parsed.locator_json) as unknown,
+      ) as EvidenceLocator;
+    } catch (error) {
+      throw asPublicationIntegrityError(error, 'evidence locator');
+    }
+    if (
+      expected === undefined ||
+      expected.documentVersionId !== parsed.document_version_id ||
+      expected.documentId !== parsed.document_id ||
+      expected.sourceId !== parsed.source_id ||
+      expected.documentPath !== parsed.path ||
+      expected.contentFingerprint !== parsed.content_fingerprint ||
+      expected.processorId !== parsed.processor_id ||
+      expected.processorVersion !== parsed.processor_version ||
+      expected.extractionRuleId !== parsed.extraction_rule_id ||
+      expected.extractionRuleVersion !== parsed.extraction_rule_version ||
+      stableJson(expected.locator) !== stableJson(locator)
+    ) {
+      throw new CatalogueIntegrityError(
+        `Publication ${publication.id} has inconsistent mandatory evidence provenance`,
+      );
+    }
+    foundEvidence.add(parsed.evidence_id);
+  }
+  if (foundEvidence.size !== evidenceIds.length) {
+    throw new CatalogueIntegrityError(
+      `Publication ${publication.id} references missing mandatory evidence`,
+    );
+  }
+}
+
+async function loadPublishedEntities(
+  connection: DuckDbConnection,
+  publication: KnowledgePublication,
+): Promise<PublishedEntity[]> {
+  assertUniqueVersionMembership(
+    [...publication.entityVersionIds],
+    publication.id,
+    'entity',
+  );
+  if (publication.entityVersionIds.length === 0) {
+    return [];
+  }
+  const rows = await connection.runAndReadAll(
+    "SELECT id, entity_id, version_number, CAST(snapshot_json AS VARCHAR) AS snapshot_json FROM entity_versions WHERE list_contains(CAST(json_extract($1, '$') AS VARCHAR[]), id)",
+    [JSON.stringify(publication.entityVersionIds)],
+  );
+  const items = rows
+    .getRowObjectsJson()
+    .map((row): PublishedEntity => {
+      try {
+        const parsed = entityVersionSnapshotRowSchema.parse(row);
+        const entity = parseEntitySnapshotJson(parsed.snapshot_json);
+        if (
+          entity.id !== parsed.entity_id ||
+          entity.currentVersionId !== parsed.id ||
+          entity.knowledgeModelId !== publication.knowledgeModelId
+        ) {
+          throw new CatalogueIntegrityError(
+            `Publication ${publication.id} has an inconsistent entity version snapshot`,
+          );
+        }
+        return {
+          publicationId: publication.id,
+          entityVersionId: parseEntityVersionId(parsed.id),
+          versionNumber: parsed.version_number,
+          entity,
+        };
+      } catch (error) {
+        throw asPublicationIntegrityError(error, 'entity version snapshot');
+      }
+    })
+    .sort((left, right) => compareOrdinal(left.entity.id, right.entity.id));
+  assertCompleteVersionMembership(
+    publication.entityVersionIds,
+    items.map(({ entityVersionId }) => entityVersionId),
+    publication.id,
+    'entity',
+  );
+  assertUniqueObjectIds(
+    items.map(({ entity }) => entity.id),
+    publication.id,
+    'entity',
+  );
+  return items;
+}
+
+async function loadPublishedRelationships(
+  connection: DuckDbConnection,
+  publication: KnowledgePublication,
+): Promise<PublishedRelationship[]> {
+  assertUniqueVersionMembership(
+    [...publication.relationshipVersionIds],
+    publication.id,
+    'relationship',
+  );
+  if (publication.relationshipVersionIds.length === 0) {
+    return [];
+  }
+  const rows = await connection.runAndReadAll(
+    "SELECT id, relationship_id, version_number, CAST(snapshot_json AS VARCHAR) AS snapshot_json FROM relationship_versions WHERE list_contains(CAST(json_extract($1, '$') AS VARCHAR[]), id)",
+    [JSON.stringify(publication.relationshipVersionIds)],
+  );
+  const items = rows
+    .getRowObjectsJson()
+    .map((row): PublishedRelationship => {
+      try {
+        const parsed = relationshipVersionSnapshotRowSchema.parse(row);
+        const relationship = parseRelationshipSnapshotJson(
+          parsed.snapshot_json,
+        );
+        if (
+          relationship.id !== parsed.relationship_id ||
+          relationship.currentVersionId !== parsed.id ||
+          relationship.knowledgeModelId !== publication.knowledgeModelId
+        ) {
+          throw new CatalogueIntegrityError(
+            `Publication ${publication.id} has an inconsistent relationship version snapshot`,
+          );
+        }
+        return {
+          publicationId: publication.id,
+          relationshipVersionId: parseRelationshipVersionId(parsed.id),
+          versionNumber: parsed.version_number,
+          relationship,
+        };
+      } catch (error) {
+        throw asPublicationIntegrityError(
+          error,
+          'relationship version snapshot',
+        );
+      }
+    })
+    .sort((left, right) =>
+      compareOrdinal(left.relationship.id, right.relationship.id),
+    );
+  assertCompleteVersionMembership(
+    publication.relationshipVersionIds,
+    items.map(({ relationshipVersionId }) => relationshipVersionId),
+    publication.id,
+    'relationship',
+  );
+  assertUniqueObjectIds(
+    items.map(({ relationship }) => relationship.id),
+    publication.id,
+    'relationship',
+  );
+  return items;
+}
+
+function assertPublishedRelationshipEndpoints(
+  relationships: readonly PublishedRelationship[],
+  entities: readonly PublishedEntity[],
+  publication: KnowledgePublication,
+): void {
+  const entityIds = new Set(entities.map(({ entity }) => entity.id));
+  for (const { relationship } of relationships) {
+    if (
+      !entityIds.has(relationship.sourceEntityId) ||
+      !entityIds.has(relationship.targetEntityId)
+    ) {
+      throw new CatalogueIntegrityError(
+        `Publication ${publication.id} contains a relationship with an unpublished endpoint`,
+      );
+    }
+  }
+}
+
+function validatePublishedProvenance(
+  sourceEvidenceIds: readonly string[],
+  provenance: readonly KnowledgeProvenance[],
+  objectId: string,
+): KnowledgeProvenance[] {
+  const sourceIds = [...sourceEvidenceIds].sort(compareOrdinal);
+  const provenanceIds = provenance
+    .map(({ evidenceId }) => evidenceId)
+    .sort(compareOrdinal);
+  if (
+    sourceIds.length === 0 ||
+    provenanceIds.length === 0 ||
+    new Set(sourceIds).size !== sourceIds.length ||
+    new Set(provenanceIds).size !== provenanceIds.length ||
+    stableJson(sourceIds) !== stableJson(provenanceIds)
+  ) {
+    throw new CatalogueIntegrityError(
+      `Published knowledge object ${objectId} has missing or inconsistent mandatory provenance`,
+    );
+  }
+  return [...provenance].sort((left, right) =>
+    compareOrdinal(left.evidenceId, right.evidenceId),
+  );
+}
+
+function assertUniqueVersionMembership(
+  versionIds: readonly string[],
+  publicationId: string,
+  label: 'entity' | 'relationship',
+): void {
+  if (new Set(versionIds).size !== versionIds.length) {
+    throw new CatalogueIntegrityError(
+      `Publication ${publicationId} contains duplicate ${label} version membership`,
+    );
+  }
+}
+
+function assertCompleteVersionMembership(
+  expected: readonly string[],
+  actual: readonly string[],
+  publicationId: string,
+  label: 'entity' | 'relationship',
+): void {
+  const actualSet = new Set(actual);
+  if (
+    expected.length !== actualSet.size ||
+    expected.some((versionId) => !actualSet.has(versionId))
+  ) {
+    throw new CatalogueIntegrityError(
+      `Publication ${publicationId} references a missing ${label} version`,
+    );
+  }
+}
+
+function assertUniqueObjectIds(
+  objectIds: readonly string[],
+  publicationId: string,
+  label: 'entity' | 'relationship',
+): void {
+  if (new Set(objectIds).size !== objectIds.length) {
+    throw new CatalogueIntegrityError(
+      `Publication ${publicationId} includes multiple versions of one ${label}`,
+    );
+  }
+}
+
+function parseKnowledgeRelationshipType(
+  value: string,
+): (typeof knowledgeRelationshipTypes)[number] {
+  const type = knowledgeRelationshipTypes.find((item) => item === value);
+  if (type === undefined) {
+    throw new Error('Unknown knowledge relationship type');
+  }
+  return type;
+}
+
+function asPublicationIntegrityError(
+  error: unknown,
+  label: string,
+): CatalogueIntegrityError {
+  if (error instanceof CatalogueIntegrityError) {
+    return error;
+  }
+  return new CatalogueIntegrityError(
+    `Stored ${label} is invalid: ${error instanceof Error ? error.message : 'unknown validation error'}`,
+  );
 }
 
 export function createKnowledgePublicationContentHash(

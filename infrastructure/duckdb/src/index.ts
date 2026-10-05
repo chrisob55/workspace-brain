@@ -11,6 +11,7 @@ import type {
   ConfiguredSource,
   ConfiguredWorkspace,
   KnowledgePageRequest,
+  PublishedRelationshipRequest,
   KnowledgeModelPublishedEvent,
   SearchEntityRequest,
   SearchProjectionRequestedEvent,
@@ -20,6 +21,7 @@ import type {
   ScanPersistenceResult,
   SourceScanMetrics,
 } from '@workspace-brain/catalogue';
+import { CatalogueIntegrityError } from '@workspace-brain/catalogue';
 import {
   createDocumentId,
   createDocumentVersionId,
@@ -45,7 +47,14 @@ import {
   type KnowledgeInputEvidence,
   type KnowledgeModel,
   type KnowledgePublication,
+  type KnowledgePublicationSummary,
+  type KnowledgeObjectProvenance,
+  type KnowledgeSupportRecord,
   type KnowledgeRelationship,
+  type PublishedEntity,
+  type PublishedRelationship,
+  type PublishedRelationshipTraversal,
+  type StoredKnowledgeProvenance,
   type ProjectedEntity,
   type ProjectedRelationship,
   type ProjectionStatistics,
@@ -67,13 +76,22 @@ import { z } from 'zod';
 import {
   applyKnowledgeCandidates,
   ensureKnowledgeModels,
+  getAvailableKnowledgePublication,
   getKnowledgeEntity,
   getKnowledgeModel,
+  getKnowledgePublicationSummary,
+  getLatestKnowledgePublication,
   getKnowledgeRelationship,
+  getPublishedEntity,
+  getPublishedEntityProvenance,
+  getPublishedRelationship,
+  getPublishedRelationshipProvenance,
+  listPublishedEntityRelationships,
   listKnowledgeEntities,
   listKnowledgeInputEvidence,
   listKnowledgeModels,
   listKnowledgePublications,
+  listAvailableKnowledgePublications,
   listKnowledgeRelationships,
   withdrawKnowledgeDocument,
 } from './knowledge.js';
@@ -351,6 +369,7 @@ const evidenceExplanationRowSchema = z.object({
   version_id: z.string(),
   document_id: z.string(),
   content_fingerprint: z.string(),
+  content_hash: z.string(),
   processed_at: z.string(),
   processor_id: z.string(),
   processor_version: z.coerce.number().int(),
@@ -887,6 +906,82 @@ export async function createDuckDbCatalogue(
       return listKnowledgePublications(connection, request);
     },
 
+    async listAvailableKnowledgePublications(
+      request: KnowledgePageRequest,
+    ): Promise<CataloguePage<KnowledgePublication>> {
+      return listAvailableKnowledgePublications(connection, request);
+    },
+
+    async getKnowledgePublication(
+      publicationId: string,
+    ): Promise<KnowledgePublication | undefined> {
+      return getAvailableKnowledgePublication(connection, publicationId);
+    },
+
+    async getLatestKnowledgePublication(
+      modelId: string,
+    ): Promise<KnowledgePublication | undefined> {
+      return getLatestKnowledgePublication(connection, modelId);
+    },
+
+    async getKnowledgePublicationSummary(
+      publicationId: string,
+    ): Promise<KnowledgePublicationSummary | undefined> {
+      return getKnowledgePublicationSummary(connection, publicationId);
+    },
+
+    async getPublishedEntity(
+      publicationId: string,
+      entityId: string,
+    ): Promise<PublishedEntity | undefined> {
+      return getPublishedEntity(connection, publicationId, entityId);
+    },
+
+    async getPublishedRelationship(
+      publicationId: string,
+      relationshipId: string,
+    ): Promise<PublishedRelationship | undefined> {
+      return getPublishedRelationship(
+        connection,
+        publicationId,
+        relationshipId,
+      );
+    },
+
+    async listPublishedEntityRelationships(
+      request: PublishedRelationshipRequest,
+    ): Promise<CataloguePage<PublishedRelationshipTraversal>> {
+      return listPublishedEntityRelationships(connection, request);
+    },
+
+    async getPublishedEntityProvenance(
+      publicationId: string,
+      entityId: string,
+    ): Promise<KnowledgeObjectProvenance | undefined> {
+      const stored = await getPublishedEntityProvenance(
+        connection,
+        publicationId,
+        entityId,
+      );
+      return stored === undefined
+        ? undefined
+        : resolveKnowledgeProvenance(connection, stored);
+    },
+
+    async getPublishedRelationshipProvenance(
+      publicationId: string,
+      relationshipId: string,
+    ): Promise<KnowledgeObjectProvenance | undefined> {
+      const stored = await getPublishedRelationshipProvenance(
+        connection,
+        publicationId,
+        relationshipId,
+      );
+      return stored === undefined
+        ? undefined
+        : resolveKnowledgeProvenance(connection, stored);
+    },
+
     async searchProjectedEntities(
       request: SearchEntityRequest,
     ): Promise<CataloguePage<ProjectedEntity>> {
@@ -973,60 +1068,7 @@ export async function createDuckDbCatalogue(
     async explainEvidence(
       evidenceId: string,
     ): Promise<EvidenceExplanation | undefined> {
-      const parsedId = parseEvidenceId(evidenceId);
-      const rows = await connection.runAndReadAll(
-        "SELECT e.id AS evidence_id, e.document_version_id, e.evidence_key, e.evidence_kind, e.excerpt, e.truncated, CAST(e.locator_json AS VARCHAR) AS locator_json, v.id AS version_id, v.document_id, v.content_fingerprint, strftime(v.processed_at, '%Y-%m-%dT%H:%M:%S.%fZ') AS processed_at, v.processor_id, v.processor_version, v.extraction_rule_id, v.extraction_rule_version, v.evidence_count, v.source_id, v.path, v.filename FROM extracted_evidence e JOIN document_versions v ON v.id = e.document_version_id WHERE e.id = $1",
-        [parsedId],
-      );
-      const row = rows.getRowObjectsJson()[0];
-      if (row === undefined) {
-        return undefined;
-      }
-      const parsed = evidenceExplanationRowSchema.parse(row);
-      const evidence = parseEvidenceRow({
-        id: parsed.evidence_id,
-        document_version_id: parsed.document_version_id,
-        evidence_key: parsed.evidence_key,
-        evidence_kind: parsed.evidence_kind,
-        excerpt: parsed.excerpt,
-        truncated: parsed.truncated,
-        locator_json: parsed.locator_json,
-      });
-      const documentVersion: DocumentVersion = {
-        id: parseDocumentVersionId(parsed.version_id),
-        documentId: parseDocumentId(parsed.document_id),
-        contentHash: parsed.content_fingerprint,
-        hashAlgorithm: 'sha256',
-        discoveredAt: parsed.processed_at,
-        processorId: parsed.processor_id,
-        processorVersion: parsed.processor_version,
-        extractionRuleId: parsed.extraction_rule_id,
-        extractionRuleVersion: parsed.extraction_rule_version,
-        evidenceCount: parsed.evidence_count,
-      };
-      const documentIdValue = parseDocumentId(parsed.document_id);
-      const sourceIdValue = parseSourceId(parsed.source_id);
-      return {
-        evidence,
-        documentVersion,
-        document: {
-          id: documentIdValue,
-          sourceId: sourceIdValue,
-          path: parsed.path,
-          filename: parsed.filename,
-          fingerprint: parsed.content_fingerprint,
-        },
-        provenance: {
-          sourceId: sourceIdValue,
-          provider: 'filesystem',
-          documentPath: parsed.path,
-          contentFingerprint: parsed.content_fingerprint,
-          processorId: parsed.processor_id,
-          processorVersion: parsed.processor_version,
-          extractionRuleId: parsed.extraction_rule_id,
-          extractionRuleVersion: parsed.extraction_rule_version,
-        },
-      };
+      return loadEvidenceExplanation(connection, evidenceId);
     },
 
     async listPendingDiscoveryEvents(limit: number): Promise<DiscoveryEvent[]> {
@@ -1209,6 +1251,112 @@ function parseSourceRow(row: unknown): Source {
       : { maxFileSizeBytes: config.maxFileSizeBytes }),
     workspaceRules: config.workspaceRules,
     createdAt: parsedRow.created_at,
+  };
+}
+
+async function resolveKnowledgeProvenance(
+  connection: DuckDbConnection,
+  stored: StoredKnowledgeProvenance,
+): Promise<KnowledgeObjectProvenance> {
+  const items: KnowledgeSupportRecord[] = [];
+  for (const provenance of stored.provenance) {
+    const evidenceExplanation = await loadEvidenceExplanation(
+      connection,
+      provenance.evidenceId,
+    );
+    if (evidenceExplanation === undefined) {
+      throw new CatalogueIntegrityError(
+        `Published knowledge object ${stored.knowledgeObjectId} references missing evidence`,
+      );
+    }
+    const { evidence, documentVersion, document } = evidenceExplanation;
+    if (
+      evidence.documentVersionId !== provenance.documentVersionId ||
+      documentVersion.id !== provenance.documentVersionId ||
+      document.id !== provenance.documentId ||
+      document.sourceId !== provenance.sourceId ||
+      document.path !== provenance.documentPath ||
+      document.fingerprint !== provenance.contentFingerprint ||
+      evidence.locator === undefined ||
+      stableJson(evidence.locator) !== stableJson(provenance.locator) ||
+      documentVersion.processorId !== provenance.processorId ||
+      documentVersion.processorVersion !== provenance.processorVersion ||
+      documentVersion.extractionRuleId !== provenance.extractionRuleId ||
+      documentVersion.extractionRuleVersion !== provenance.extractionRuleVersion
+    ) {
+      throw new CatalogueIntegrityError(
+        `Published knowledge object ${stored.knowledgeObjectId} has inconsistent evidence provenance`,
+      );
+    }
+    items.push({ provenance, evidenceExplanation });
+  }
+  return {
+    publicationId: stored.publicationId,
+    knowledgeObjectType: stored.knowledgeObjectType,
+    knowledgeObjectId: stored.knowledgeObjectId,
+    knowledgeVersionId: stored.knowledgeVersionId,
+    knowledgeVersionNumber: stored.knowledgeVersionNumber,
+    items,
+  };
+}
+
+async function loadEvidenceExplanation(
+  connection: DuckDbConnection,
+  evidenceId: string,
+): Promise<EvidenceExplanation | undefined> {
+  const parsedId = parseEvidenceId(evidenceId);
+  const rows = await connection.runAndReadAll(
+    "SELECT e.id AS evidence_id, e.document_version_id, e.evidence_key, e.evidence_kind, e.excerpt, e.truncated, CAST(e.locator_json AS VARCHAR) AS locator_json, v.id AS version_id, v.document_id, v.content_fingerprint, v.content_hash, strftime(v.processed_at, '%Y-%m-%dT%H:%M:%S.%fZ') AS processed_at, v.processor_id, v.processor_version, v.extraction_rule_id, v.extraction_rule_version, v.evidence_count, v.source_id, v.path, v.filename FROM extracted_evidence e JOIN document_versions v ON v.id = e.document_version_id WHERE e.id = $1",
+    [parsedId],
+  );
+  const row = rows.getRowObjectsJson()[0];
+  if (row === undefined) {
+    return undefined;
+  }
+  const parsed = evidenceExplanationRowSchema.parse(row);
+  const evidence = parseEvidenceRow({
+    id: parsed.evidence_id,
+    document_version_id: parsed.document_version_id,
+    evidence_key: parsed.evidence_key,
+    evidence_kind: parsed.evidence_kind,
+    excerpt: parsed.excerpt,
+    truncated: parsed.truncated,
+    locator_json: parsed.locator_json,
+  });
+  const documentVersion: DocumentVersion = {
+    id: parseDocumentVersionId(parsed.version_id),
+    documentId: parseDocumentId(parsed.document_id),
+    contentHash: parsed.content_hash,
+    hashAlgorithm: 'sha256',
+    discoveredAt: parsed.processed_at,
+    processorId: parsed.processor_id,
+    processorVersion: parsed.processor_version,
+    extractionRuleId: parsed.extraction_rule_id,
+    extractionRuleVersion: parsed.extraction_rule_version,
+    evidenceCount: parsed.evidence_count,
+  };
+  const documentIdValue = parseDocumentId(parsed.document_id);
+  const sourceIdValue = parseSourceId(parsed.source_id);
+  return {
+    evidence,
+    documentVersion,
+    document: {
+      id: documentIdValue,
+      sourceId: sourceIdValue,
+      path: parsed.path,
+      filename: parsed.filename,
+      fingerprint: parsed.content_fingerprint,
+    },
+    provenance: {
+      sourceId: sourceIdValue,
+      provider: 'filesystem',
+      documentPath: parsed.path,
+      contentFingerprint: parsed.content_fingerprint,
+      processorId: parsed.processor_id,
+      processorVersion: parsed.processor_version,
+      extractionRuleId: parsed.extraction_rule_id,
+      extractionRuleVersion: parsed.extraction_rule_version,
+    },
   };
 }
 

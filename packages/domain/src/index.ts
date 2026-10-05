@@ -302,6 +302,55 @@ export type KnowledgePublication = {
   readonly publishedAt: string;
 };
 
+export type KnowledgePublicationSummary = {
+  readonly publication: KnowledgePublication;
+  readonly entityCount: number;
+  readonly relationshipCount: number;
+};
+
+export type PublishedEntity = {
+  readonly publicationId: KnowledgePublicationId;
+  readonly entityVersionId: EntityVersionId;
+  readonly versionNumber: number;
+  readonly entity: KnowledgeEntity;
+};
+
+export type PublishedRelationship = {
+  readonly publicationId: KnowledgePublicationId;
+  readonly relationshipVersionId: RelationshipVersionId;
+  readonly versionNumber: number;
+  readonly relationship: KnowledgeRelationship;
+};
+
+export type KnowledgeSupportRecord = {
+  readonly provenance: KnowledgeProvenance;
+  readonly evidenceExplanation: EvidenceExplanation;
+};
+
+export type KnowledgeObjectProvenance = {
+  readonly publicationId: KnowledgePublicationId;
+  readonly knowledgeObjectType: 'entity' | 'relationship';
+  readonly knowledgeObjectId: KnowledgeEntityId | KnowledgeRelationshipId;
+  readonly knowledgeVersionId: EntityVersionId | RelationshipVersionId;
+  readonly knowledgeVersionNumber: number;
+  readonly items: readonly KnowledgeSupportRecord[];
+};
+
+export type StoredKnowledgeProvenance = Omit<
+  KnowledgeObjectProvenance,
+  'items'
+> & {
+  readonly provenance: readonly KnowledgeProvenance[];
+};
+
+export type PublishedRelationshipTraversal = {
+  readonly publicationId: KnowledgePublicationId;
+  readonly relationshipVersionId: RelationshipVersionId;
+  readonly versionNumber: number;
+  readonly direction: 'incoming' | 'outgoing';
+  readonly relationship: KnowledgeRelationship;
+};
+
 export const searchProjectionSchemaVersion = 1 as const;
 export const searchMatchModes = ['contains', 'prefix', 'exact'] as const;
 export type SearchMatchMode = (typeof searchMatchModes)[number];
