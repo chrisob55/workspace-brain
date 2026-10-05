@@ -246,7 +246,10 @@ export class FilesystemSourceScanner implements SourceScanner {
         continue;
       }
 
-      const extension = normalizeExtension(extname(entry.name));
+      const extension =
+        entry.name.toLocaleLowerCase('en-US') === 'dockerfile'
+          ? '.dockerfile'
+          : normalizeExtension(extname(entry.name));
       if (
         context.includedExtensions.size > 0 &&
         !context.includedExtensions.has(extension)

@@ -83,3 +83,22 @@ Before any multi-user, remotely accessible, or independently administered
 deployment, supersede ADR-024 and define authenticated service identities,
 NATS accounts/subject authorization, source-read and candidate-submission
 authorization, isolation, secret management and audit requirements.
+
+## DEV-003 Relationship Version Referential Constraint
+
+- **Status:** Documented Slice 3 storage limitation
+- **Introduced:** Slice 3 reconciliation and relationship versioning
+
+DuckDB rejected updates to a versioned relationship row while
+`relationship_versions.relationship_id` declared a foreign key to
+`knowledge_relationships.id`. Reconciliation must append a new immutable
+relationship version and update the current projection as one transaction.
+
+Migration `010-relationship-version-storage.sql` preserves existing version
+rows and removes that specific database FK. Relationship versions are created
+only by API catalogue transactions after the relationship has been validated;
+the API remains the sole writer and no public API accepts version rows
+directly. This trades a database-enforced child-to-parent check for correct
+immutable version updates under the supported DuckDB behavior. Revisit if a
+DuckDB version supports these updates with the FK or if the storage engine
+changes.

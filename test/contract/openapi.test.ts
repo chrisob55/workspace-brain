@@ -58,6 +58,22 @@ describe('OpenAPI contract', () => {
       document.paths['/api/v1/evidence/{evidenceId}/explanation']?.get
         ?.operationId,
     ).toBe('getEvidenceExplanation');
+    const knowledgeOperations = [
+      ['/api/v1/knowledge/models', 'listKnowledgeModels'],
+      ['/api/v1/knowledge/models/{modelId}', 'getKnowledgeModel'],
+      ['/api/v1/knowledge/entities', 'listKnowledgeEntities'],
+      ['/api/v1/knowledge/entities/{entityId}', 'getKnowledgeEntity'],
+      ['/api/v1/knowledge/relationships', 'listKnowledgeRelationships'],
+      [
+        '/api/v1/knowledge/relationships/{relationshipId}',
+        'getKnowledgeRelationship',
+      ],
+      ['/api/v1/knowledge/publications', 'listKnowledgePublications'],
+    ] as const;
+    for (const [path, operationId] of knowledgeOperations) {
+      expect(document.paths[path]?.get?.operationId).toBe(operationId);
+      expect(Object.keys(document.paths[path] ?? {})).toEqual(['get']);
+    }
     expect(
       document.paths['/api/v1/sources']?.get?.responses?.['200']?.content?.[
         'application/json'
@@ -76,6 +92,34 @@ describe('OpenAPI contract', () => {
     expect(document.components.schemas.Evidence).toBeDefined();
     expect(document.components.schemas.EvidenceLocator).toBeDefined();
     expect(document.components.schemas.EvidenceExplanation).toBeDefined();
+    expect(document.components.schemas.KnowledgeModel).toBeDefined();
+    expect(document.components.schemas.KnowledgeEntity).toBeDefined();
+    expect(document.components.schemas.KnowledgeRelationship).toBeDefined();
+    expect(document.components.schemas.KnowledgePublication).toBeDefined();
+    expect(document.components.schemas.KnowledgeEntity?.required).toContain(
+      'provenance',
+    );
+    expect(
+      document.components.schemas.KnowledgeRelationship?.required,
+    ).toContain('sourceEvidenceIds');
+    expect(
+      document.components.schemas.KnowledgeRelationship?.required,
+    ).toContain('confidence');
+    const relationshipType = document.components.schemas.KnowledgeRelationship
+      ?.properties?.type as { enum?: string[] } | undefined;
+    expect(relationshipType?.enum).toEqual([
+      'CONTAINS',
+      'BELONGS_TO',
+      'REFERENCES',
+      'DOCUMENTS',
+      'DEPENDS_ON',
+      'USES',
+      'IMPLEMENTS',
+      'EXPOSES',
+      'CONSUMES',
+      'CLASSIFIED_AS',
+      'DERIVED_FROM',
+    ]);
     expect(
       document.paths['/api/v1/documents/{documentId}/evidence']?.get
         ?.responses?.['200']?.content?.['application/json']?.schema?.$ref,

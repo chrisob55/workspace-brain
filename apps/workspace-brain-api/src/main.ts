@@ -3,6 +3,7 @@ import { dirname, resolve } from 'node:path';
 
 import { parseWorkspaceBrainConfig } from '@workspace-brain/configuration';
 import { createDuckDbCatalogue } from '@workspace-brain/duckdb';
+import { discoveryEventSubject } from '@workspace-brain/domain';
 import { connectNatsDiscoveryBus } from '@workspace-brain/nats';
 import pino from 'pino';
 import { z } from 'zod';
@@ -33,6 +34,11 @@ const sourcePageSchema = z
   .object({
     afterId: z.string().optional(),
     limit: z.number().int().min(1).max(100),
+  })
+  .strict();
+const knowledgeEvidenceRequestSchema = z
+  .object({
+    documentVersionId: z.string().regex(/^[0-7][0-9A-HJKMNP-TV-Z]{25}$/),
   })
   .strict();
 
@@ -69,6 +75,13 @@ try {
       });
     },
   );
+  bus.subscribeRequests(
+    'workspace.catalogue.knowledge.document-evidence',
+    async (body) => {
+      const request = knowledgeEvidenceRequestSchema.parse(body);
+      return catalogue.listKnowledgeInputEvidence(request.documentVersionId);
+    },
+  );
   for (const [subject, durableName] of [
     [
       'workspace.discovery.source.scan.started',
@@ -83,8 +96,12 @@ try {
       'workspace-api-source-scan-failed',
     ],
     [
-      'workspace.discovery.document.processing.submitted',
+      discoveryEventSubject('DocumentProcessingSubmitted'),
       'workspace-api-document-processing-submitted',
+    ],
+    [
+      discoveryEventSubject('KnowledgeCandidatesSubmitted'),
+      'workspace-api-knowledge-candidates-submitted',
     ],
   ] as const) {
     await bus.subscribe(subject, durableName, (event) =>

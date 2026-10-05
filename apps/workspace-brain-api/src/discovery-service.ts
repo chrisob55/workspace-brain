@@ -17,6 +17,7 @@ type DiscoveryCatalogue = Pick<
   | 'recordScanStarted'
   | 'recordScanFailed'
   | 'applyDocumentProcessing'
+  | 'applyKnowledgeCandidates'
 >;
 
 export function createDiscoveryService(
@@ -64,6 +65,20 @@ export function createDiscoveryService(
           );
         }
         await catalogue.applyDocumentProcessing(event);
+        await publishPendingEvents(catalogue, events);
+        return;
+      }
+
+      if (event.eventType === 'KnowledgeCandidatesSubmitted') {
+        if (
+          event.producer !== 'workspace-brain-knowledge-worker' ||
+          event.partitionKey !== event.payload.sourceId
+        ) {
+          throw new Error(
+            'Knowledge candidate source does not match event ownership',
+          );
+        }
+        await catalogue.applyKnowledgeCandidates(event);
         await publishPendingEvents(catalogue, events);
         return;
       }

@@ -208,10 +208,11 @@ All event envelopes use version 1.
   `workspace.discovery.document.modified`; the knowledge-worker consumes
   them through durable JetStream consumers.
 - **Submission:** `DocumentProcessingSubmitted` on
-  `workspace.discovery.document.processing.submitted`; producer is
+  `workspace.processing.document.submitted`; producer is
   `workspace-brain-knowledge-worker`.
 - **Catalogue fact:** `DocumentExtracted`, published by the API only after
-  persistence and outbox commit.
+  persistence and outbox commit on
+  `workspace.processing.document.extracted`.
 - Retries and exhausted-message handling use the existing bounded processing
   attempts and `workspace.discovery.dead-letter`. The API does not consume its
   own `DocumentExtracted` fact.

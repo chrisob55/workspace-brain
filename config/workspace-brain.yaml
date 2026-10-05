@@ -22,6 +22,7 @@ sources:
         - .json
         - .ts
         - .js
+        - .dockerfile
       max_file_size_mb: 50
       follow_symbolic_links: false
 workspaces:

@@ -4,6 +4,7 @@ import type {
   CatalogueHealth,
   CatalogueReader,
 } from '@workspace-brain/catalogue';
+import { knowledgeRelationshipTypes } from '@workspace-brain/domain';
 import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
 import { z } from 'zod';
 
@@ -27,6 +28,37 @@ const documentQuerySchema = repositoryQuerySchema
       .regex(/^\.[a-zA-Z0-9]+$/)
       .optional(),
   })
+  .strict();
+const knowledgeModelQuerySchema = pageQuerySchema.strict();
+const knowledgeEntityQuerySchema = pageQuerySchema
+  .extend({
+    knowledgeModelId: sourceIdSchema.optional(),
+    publicationId: sourceIdSchema.optional(),
+    lifecycleStatus: z
+      .enum(['observed', 'verified', 'established', 'rejected', 'superseded'])
+      .optional(),
+    type: z.enum(['package', 'container', 'api', 'module']).optional(),
+  })
+  .strict();
+const knowledgeRelationshipQuerySchema = pageQuerySchema
+  .extend({
+    knowledgeModelId: sourceIdSchema.optional(),
+    publicationId: sourceIdSchema.optional(),
+    lifecycleStatus: z
+      .enum([
+        'observed',
+        'related',
+        'verified',
+        'established',
+        'rejected',
+        'superseded',
+      ])
+      .optional(),
+    type: z.enum(knowledgeRelationshipTypes).optional(),
+  })
+  .strict();
+const knowledgePublicationQuerySchema = pageQuerySchema
+  .extend({ knowledgeModelId: sourceIdSchema.optional() })
   .strict();
 
 type ApiServerOptions = {
@@ -143,6 +175,148 @@ export function createApiServer(
       ...(query.extension === undefined
         ? {}
         : { extension: query.extension.toLocaleLowerCase('en-US') }),
+      limit: query.limit + 1,
+    });
+    return sendPage(reply, page.items, query.limit);
+  });
+
+  server.get('/api/v1/knowledge/models', async (request, reply) => {
+    const query = parseCatalogueQuery(request.query, knowledgeModelQuerySchema);
+    const page = await catalogue.listKnowledgeModels({
+      ...(query.cursor === undefined
+        ? {}
+        : { afterId: decodeCursor(query.cursor) }),
+      limit: query.limit + 1,
+    });
+    return sendPage(reply, page.items, query.limit);
+  });
+
+  server.get('/api/v1/knowledge/models/:modelId', async (request, reply) => {
+    const params = z
+      .object({ modelId: sourceIdSchema })
+      .strict()
+      .safeParse(request.params);
+    if (!params.success) {
+      throw new ApiError(
+        400,
+        'Invalid Request',
+        'Knowledge Model ID is invalid.',
+      );
+    }
+    const model = await catalogue.getKnowledgeModel(params.data.modelId);
+    if (model === undefined) {
+      throw new ApiError(404, 'Not Found', 'Knowledge Model was not found.');
+    }
+    return reply.send(model);
+  });
+
+  server.get('/api/v1/knowledge/entities', async (request, reply) => {
+    const query = parseCatalogueQuery(
+      request.query,
+      knowledgeEntityQuerySchema,
+    );
+    const page = await catalogue.listKnowledgeEntities({
+      ...(query.cursor === undefined
+        ? {}
+        : { afterId: decodeCursor(query.cursor) }),
+      ...(query.knowledgeModelId === undefined
+        ? {}
+        : { knowledgeModelId: query.knowledgeModelId }),
+      ...(query.publicationId === undefined
+        ? {}
+        : { publicationId: query.publicationId }),
+      ...(query.lifecycleStatus === undefined
+        ? {}
+        : { lifecycleStatus: query.lifecycleStatus }),
+      ...(query.type === undefined ? {} : { type: query.type }),
+      limit: query.limit + 1,
+    });
+    return sendPage(reply, page.items, query.limit);
+  });
+
+  server.get('/api/v1/knowledge/entities/:entityId', async (request, reply) => {
+    const params = z
+      .object({ entityId: sourceIdSchema })
+      .strict()
+      .safeParse(request.params);
+    if (!params.success) {
+      throw new ApiError(
+        400,
+        'Invalid Request',
+        'Knowledge Entity ID is invalid.',
+      );
+    }
+    const entity = await catalogue.getKnowledgeEntity(params.data.entityId);
+    if (entity === undefined) {
+      throw new ApiError(404, 'Not Found', 'Knowledge Entity was not found.');
+    }
+    return reply.send(entity);
+  });
+
+  server.get('/api/v1/knowledge/relationships', async (request, reply) => {
+    const query = parseCatalogueQuery(
+      request.query,
+      knowledgeRelationshipQuerySchema,
+    );
+    const page = await catalogue.listKnowledgeRelationships({
+      ...(query.cursor === undefined
+        ? {}
+        : { afterId: decodeCursor(query.cursor) }),
+      ...(query.knowledgeModelId === undefined
+        ? {}
+        : { knowledgeModelId: query.knowledgeModelId }),
+      ...(query.publicationId === undefined
+        ? {}
+        : { publicationId: query.publicationId }),
+      ...(query.lifecycleStatus === undefined
+        ? {}
+        : { lifecycleStatus: query.lifecycleStatus }),
+      ...(query.type === undefined ? {} : { type: query.type }),
+      limit: query.limit + 1,
+    });
+    return sendPage(reply, page.items, query.limit);
+  });
+
+  server.get(
+    '/api/v1/knowledge/relationships/:relationshipId',
+    async (request, reply) => {
+      const params = z
+        .object({ relationshipId: sourceIdSchema })
+        .strict()
+        .safeParse(request.params);
+      if (!params.success) {
+        throw new ApiError(
+          400,
+          'Invalid Request',
+          'Knowledge Relationship ID is invalid.',
+        );
+      }
+      const relationship = await catalogue.getKnowledgeRelationship(
+        params.data.relationshipId,
+      );
+      if (relationship === undefined) {
+        throw new ApiError(
+          404,
+          'Not Found',
+          'Knowledge Relationship was not found.',
+        );
+      }
+      return reply.send(relationship);
+    },
+  );
+
+  server.get('/api/v1/knowledge/publications', async (request, reply) => {
+    const query = parseCatalogueQuery(
+      request.query,
+      knowledgePublicationQuerySchema,
+    );
+    const page = await catalogue.listKnowledgePublications({
+      ...(query.cursor === undefined
+        ? {}
+        : { afterId: decodeCursor(query.cursor) }),
+      ...(query.knowledgeModelId === undefined
+        ? {}
+        : { knowledgeModelId: query.knowledgeModelId }),
       limit: query.limit + 1,
     });
     return sendPage(reply, page.items, query.limit);

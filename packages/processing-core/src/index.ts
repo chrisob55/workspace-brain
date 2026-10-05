@@ -1,5 +1,7 @@
 import { isMap, isScalar, isSeq, parseDocument, type Node } from 'yaml';
 
+import { processingDefinitionRegistry } from '@workspace-brain/domain';
+
 export type EvidenceLocator =
   | {
       readonly kind: 'markdown-lines' | 'text-lines' | 'yaml-lines';
@@ -56,28 +58,63 @@ export type ProcessedDocument = {
 };
 
 const maximumExcerptCharacters = 4_000;
-const markdownExtensions = new Set(['.md', '.markdown']);
-const yamlExtensions = new Set(['.yaml', '.yml']);
-const jsonExtensions = new Set(['.json']);
-const textExtensions = new Set(['.txt']);
+function definitionFor(processorId: string) {
+  const definition = processingDefinitionRegistry.find(
+    ({ processorId: registeredProcessorId }) =>
+      registeredProcessorId === processorId,
+  );
+  if (definition === undefined) {
+    throw new Error(`No processing definition registered for ${processorId}`);
+  }
+  return definition;
+}
+
+function extensionsFor(processorId: string): readonly string[] {
+  return processingDefinitionRegistry
+    .filter(
+      (definition) =>
+        definition.processorId === processorId &&
+        definition.filenameMatchKind === 'suffix',
+    )
+    .map(({ filenameMatch }) => filenameMatch);
+}
+
 export const documentProcessors: readonly DocumentProcessor[] = [
   createProcessor(
     'markdown',
-    [...markdownExtensions],
-    'markdown-blocks',
+    extensionsFor('markdown'),
+    definitionFor('markdown').extractionRuleId,
     normalizeMarkdown,
   ),
-  createProcessor('yaml', [...yamlExtensions], 'yaml-scalar-values', (text) =>
-    normalizeYaml(text),
+  createProcessor(
+    'yaml',
+    extensionsFor('yaml'),
+    definitionFor('yaml').extractionRuleId,
+    (text) => normalizeYaml(text),
   ),
-  createProcessor('json', [...jsonExtensions], 'json-scalar-values', (text) =>
-    normalizeJson(text),
+  createProcessor(
+    'json',
+    extensionsFor('json'),
+    definitionFor('json').extractionRuleId,
+    (text) => normalizeJson(text),
   ),
   createProcessor(
     'plain-text',
-    [...textExtensions],
-    'text-paragraphs',
+    extensionsFor('plain-text'),
+    definitionFor('plain-text').extractionRuleId,
     (text) => normalizeText(text),
+  ),
+  createProcessor(
+    'typescript',
+    extensionsFor('typescript'),
+    definitionFor('typescript').extractionRuleId,
+    normalizeTypeScript,
+  ),
+  createProcessor(
+    'dockerfile',
+    extensionsFor('dockerfile'),
+    definitionFor('dockerfile').extractionRuleId,
+    normalizeDockerfile,
   ),
 ];
 
@@ -113,7 +150,10 @@ function createProcessor(
     id,
     version: 1,
     supportedExtensions: extensions,
-    supports: (filename) => extensions.includes(extensionOf(filename)),
+    supports: (filename) =>
+      extensions.includes(extensionOf(filename)) ||
+      (id === 'dockerfile' &&
+        filename.toLocaleLowerCase('en-US') === 'dockerfile'),
     process: (content) => ({ blocks: normalize(content) }),
     extractionRuleId,
     extractionRuleVersion: 1,
@@ -282,6 +322,44 @@ function normalizeText(content: string): NormalizedBlock[] {
         { kind: 'text-lines', lineStart: start + 1, lineEnd: index },
       ),
     );
+  }
+  return blocks;
+}
+
+function normalizeTypeScript(content: string): NormalizedBlock[] {
+  const lines = content.replace(/\r\n?/g, '\n').split('\n');
+  const blocks: NormalizedBlock[] = [];
+  for (const [index, line] of lines.entries()) {
+    if (
+      /^\s*(?:import|export)\b/.test(line) ||
+      /^\s*(?:const|let|var|function|class|interface|type)\s+\w+/.test(line)
+    ) {
+      blocks.push(
+        makeBlock(
+          `typescript:${index + 1}:declaration`,
+          'code-block',
+          line.trim(),
+          { kind: 'text-lines', lineStart: index + 1, lineEnd: index + 1 },
+        ),
+      );
+    }
+  }
+  return blocks;
+}
+
+function normalizeDockerfile(content: string): NormalizedBlock[] {
+  const lines = content.replace(/\r\n?/g, '\n').split('\n');
+  const blocks: NormalizedBlock[] = [];
+  for (const [index, line] of lines.entries()) {
+    if (/^\s*FROM\s+/i.test(line)) {
+      blocks.push(
+        makeBlock(`dockerfile:${index + 1}:from`, 'code-block', line.trim(), {
+          kind: 'text-lines',
+          lineStart: index + 1,
+          lineEnd: index + 1,
+        }),
+      );
+    }
   }
   return blocks;
 }
