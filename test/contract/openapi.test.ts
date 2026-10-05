@@ -3,37 +3,43 @@ import { resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+import { createApiServer } from '../../apps/workspace-brain-api/src/server.js';
+
 const openApiPath = resolve(process.cwd(), 'openapi/openapi.json');
 
-describe('OpenAPI contract', () => {
-  it('declares the Slice 0 health and read-only catalogue routes', async () => {
-    const document = JSON.parse(await readFile(openApiPath, 'utf8')) as {
-      openapi: string;
-      paths: Record<
-        string,
-        {
-          get?: {
-            operationId?: string;
-            parameters?: { name: string }[];
-            responses?: Record<
-              string,
-              {
-                content?: Record<string, { schema?: { $ref?: string } }>;
-              }
-            >;
-          };
-        }
-      >;
-      components: {
-        schemas: Record<
+type OpenApiDocument = {
+  openapi: string;
+  paths: Record<
+    string,
+    {
+      get?: {
+        operationId?: string;
+        parameters?: { name: string }[];
+        responses?: Record<
           string,
           {
-            required?: string[];
-            properties?: Record<string, unknown>;
+            content?: Record<string, { schema?: { $ref?: string } }>;
           }
         >;
       };
-    };
+    }
+  >;
+  components: {
+    schemas: Record<
+      string,
+      {
+        required?: string[];
+        properties?: Record<string, unknown>;
+      }
+    >;
+  };
+};
+
+describe('OpenAPI contract', () => {
+  it('declares the Slice 0 health and read-only catalogue routes', async () => {
+    const document = JSON.parse(
+      await readFile(openApiPath, 'utf8'),
+    ) as OpenApiDocument;
 
     expect(document.openapi).toBe('3.1.0');
     expect(document.paths['/health']?.get?.operationId).toBe('getHealth');
@@ -173,5 +179,135 @@ describe('OpenAPI contract', () => {
         (parameter) => parameter.name,
       ),
     ).toContain('extension');
+  });
+
+  it('declares the Slice 4 read-only search projection routes and schemas', async () => {
+    const document = JSON.parse(
+      await readFile(openApiPath, 'utf8'),
+    ) as OpenApiDocument;
+    const searchOperations = [
+      [
+        '/api/v1/search/entities',
+        'searchProjectedEntities',
+        'ProjectedEntitySearchResults',
+        [
+          'cursor',
+          'limit',
+          'publicationId',
+          'type',
+          'lifecycleStatus',
+          'query',
+          'match',
+          'field',
+        ],
+      ],
+      [
+        '/api/v1/search/relationships',
+        'searchProjectedRelationships',
+        'ProjectedRelationshipSearchResults',
+        [
+          'cursor',
+          'limit',
+          'publicationId',
+          'type',
+          'entityId',
+          'query',
+          'match',
+          'field',
+        ],
+      ],
+      [
+        '/api/v1/search/entity/{entityId}',
+        'getProjectedEntity',
+        'ProjectedEntity',
+        ['entityId', 'publicationId'],
+      ],
+      [
+        '/api/v1/search/relationship/{relationshipId}',
+        'getProjectedRelationship',
+        'ProjectedRelationship',
+        ['relationshipId', 'publicationId'],
+      ],
+      [
+        '/api/v1/search/publication/{publicationId}',
+        'getProjectionStatistics',
+        'ProjectionStatistics',
+        ['publicationId'],
+      ],
+    ] as const;
+    const documentedSearchPaths = Object.keys(document.paths).filter((path) =>
+      path.startsWith('/api/v1/search/'),
+    );
+    expect(documentedSearchPaths.sort()).toEqual(
+      searchOperations.map(([path]) => path).sort(),
+    );
+    const server = createApiServer(
+      {} as Parameters<typeof createApiServer>[0],
+      { logger: false },
+    );
+    await server.ready();
+    for (const [path, operationId, schema, parameters] of searchOperations) {
+      const operation = document.paths[path]?.get;
+      expect(Object.keys(document.paths[path] ?? {})).toEqual(['get']);
+      expect(operation?.operationId).toBe(operationId);
+      expect(operation?.parameters?.map(({ name }) => name)).toEqual(
+        parameters,
+      );
+      expect(
+        operation?.responses?.['200']?.content?.['application/json']?.schema
+          ?.$ref,
+      ).toBe(`#/components/schemas/${schema}`);
+      expect(
+        operation?.responses?.['400']?.content?.['application/problem+json']
+          ?.schema?.$ref,
+      ).toBe('#/components/schemas/ProblemDetails');
+      expect(
+        server.hasRoute({
+          method: 'GET',
+          url: path.replace(/\{([^}]+)\}/g, ':$1'),
+        }),
+      ).toBe(true);
+    }
+    await server.close();
+
+    const schemas = document.components.schemas;
+    expect(schemas.ProjectedEntity?.required).toEqual([
+      'entityId',
+      'modelId',
+      'publicationId',
+      'type',
+      'name',
+      'lifecycleStatus',
+      'sourceEvidenceIds',
+      'relationshipCount',
+      'publishedAt',
+    ]);
+    expect(schemas.ProjectedRelationship?.required).toEqual([
+      'relationshipId',
+      'modelId',
+      'publicationId',
+      'type',
+      'sourceEntityId',
+      'targetEntityId',
+      'lifecycleStatus',
+      'sourceEvidenceIds',
+      'publishedAt',
+    ]);
+    expect(schemas.ProjectionStatistics?.required).toEqual(
+      expect.arrayContaining([
+        'publication',
+        'projectedEntityCount',
+        'projectedRelationshipCount',
+      ]),
+    );
+    expect(schemas.ProjectionStatistics?.properties?.publication).toEqual({
+      $ref: '#/components/schemas/KnowledgePublication',
+    });
+    expect(schemas.SearchResults).toBeDefined();
+    const match = document.paths[
+      '/api/v1/search/entities'
+    ]?.get?.parameters?.find(({ name }) => name === 'match') as
+      { schema?: { enum?: string[] } } | undefined;
+    expect(match?.schema?.enum).toEqual(['contains', 'prefix', 'exact']);
   });
 });

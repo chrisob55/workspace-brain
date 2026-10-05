@@ -1,6 +1,8 @@
 import {
   createDocumentId,
   createDocumentVersionId,
+  createKnowledgeModelId,
+  createKnowledgePublicationId,
   createRepositoryId,
   createSourceId,
   createSourceRootId,
@@ -99,6 +101,32 @@ const processingEvent: DiscoveryEvent = {
       evidence: [],
     },
   },
+};
+
+const publication = {
+  id: createKnowledgePublicationId(),
+  knowledgeModelId: createKnowledgeModelId(),
+  version: 1,
+  schemaVersion: 1 as const,
+  status: 'published' as const,
+  contentHash: 'c'.repeat(64),
+  entityVersionIds: [],
+  relationshipVersionIds: [],
+  publishedAt: '2026-10-05T08:00:01.000Z',
+};
+const publishedEvent: Extract<
+  DiscoveryEvent,
+  { readonly eventType: 'KnowledgeModelPublished' }
+> = {
+  eventId: 'knowledge-model-published-event',
+  eventType: 'KnowledgeModelPublished',
+  eventVersion: 1,
+  occurredAt: publication.publishedAt,
+  producer: 'workspace-brain-api',
+  correlationId: 'knowledge-correlation',
+  idempotencyKey: `knowledge-model-published:${publication.knowledgeModelId}:1`,
+  partitionKey: sourceId,
+  payload: { publication },
 };
 
 describe('DiscoveryService', () => {
@@ -312,6 +340,66 @@ describe('DiscoveryService', () => {
       service.handle({ ...event, partitionKey: createSourceId() }),
     ).rejects.toThrow('source does not match event ownership');
   });
+
+  it('requests and builds search projections from catalogue-owned publication events', async () => {
+    const calls: string[] = [];
+    const published: DiscoveryEvent[] = [];
+    const service = createDiscoveryService(
+      createCatalogue(source, calls),
+      createPublisher(published, calls),
+    );
+
+    await service.handle(publishedEvent);
+    const requested = published.find(
+      ({ eventType }) => eventType === 'SearchProjectionRequested',
+    );
+    if (requested === undefined) {
+      throw new Error('Search projection request was not published');
+    }
+    await service.handle(requested);
+
+    expect(calls).toEqual([
+      'search-projection-requested',
+      'publish:SearchProjectionRequested',
+      `mark:${requested.eventId}`,
+      'search-projection-built',
+      'publish:SearchProjectionBuilt',
+      'mark:event-SearchProjectionBuilt',
+    ]);
+    expect(published.map(({ eventType }) => eventType)).toEqual([
+      'SearchProjectionRequested',
+      'SearchProjectionBuilt',
+    ]);
+  });
+
+  it('rejects projection events that were not produced by the catalogue owner', async () => {
+    const calls: string[] = [];
+    const service = createDiscoveryService(
+      createCatalogue(source, calls),
+      createPublisher([], calls),
+    );
+    const forged = {
+      ...publishedEvent,
+      producer: 'workspace-brain-knowledge-worker' as const,
+    };
+
+    await expect(service.handle(forged)).rejects.toThrow(
+      'must be produced by the catalogue owner',
+    );
+    await expect(
+      service.handle({
+        ...forged,
+        eventType: 'SearchProjectionRequested',
+        payload: {
+          publicationId: publication.id,
+          knowledgeModelId: publication.knowledgeModelId,
+          publicationVersion: 1,
+          publicationContentHash: publication.contentHash,
+        },
+      }),
+    ).rejects.toThrow('must be produced by the catalogue owner');
+    expect(calls).toEqual([]);
+  });
 });
 
 function createCatalogue(source: Source, calls: string[]) {
@@ -384,6 +472,54 @@ function createCatalogue(source: Source, calls: string[]) {
     },
     async applyKnowledgeCandidates() {
       calls.push('knowledge-candidates');
+    },
+    async requestSearchProjection(
+      event: Extract<
+        DiscoveryEvent,
+        { readonly eventType: 'KnowledgeModelPublished' }
+      >,
+    ) {
+      calls.push('search-projection-requested');
+      addPending(pending, {
+        ...event,
+        eventId: 'event-SearchProjectionRequested',
+        eventType: 'SearchProjectionRequested',
+        idempotencyKey: `search-projection-requested:${event.payload.publication.id}`,
+        payload: {
+          publicationId: event.payload.publication.id,
+          knowledgeModelId: event.payload.publication.knowledgeModelId,
+          publicationVersion: event.payload.publication.version,
+          publicationContentHash: event.payload.publication.contentHash,
+        },
+      });
+    },
+    async buildSearchProjection(
+      event: Extract<
+        DiscoveryEvent,
+        { readonly eventType: 'SearchProjectionRequested' }
+      >,
+    ) {
+      calls.push('search-projection-built');
+      const projection = {
+        publicationId: event.payload.publicationId,
+        modelId: event.payload.knowledgeModelId,
+        publicationVersion: event.payload.publicationVersion,
+        publicationContentHash: event.payload.publicationContentHash,
+        projectionSchemaVersion: 1 as const,
+        projectionContentHash: 'd'.repeat(64),
+        projectedEntityCount: 0,
+        projectedRelationshipCount: 0,
+        projectedSearchDocumentCount: 0,
+        builtAt: event.occurredAt,
+      };
+      addPending(pending, {
+        ...event,
+        eventId: 'event-SearchProjectionBuilt',
+        eventType: 'SearchProjectionBuilt',
+        idempotencyKey: `search-projection-built:${event.payload.publicationId}`,
+        payload: { projection },
+      });
+      return projection;
     },
     async recordScanStarted() {
       calls.push('started');

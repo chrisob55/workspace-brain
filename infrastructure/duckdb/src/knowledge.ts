@@ -452,6 +452,18 @@ export async function listKnowledgePublications(
   return { items: rows.getRowObjectsJson().map(parseKnowledgePublicationRow) };
 }
 
+export async function getKnowledgePublication(
+  connection: DuckDbConnection,
+  publicationId: string,
+): Promise<KnowledgePublication | undefined> {
+  const rows = await connection.runAndReadAll(
+    "SELECT id, knowledge_model_id, version_number, schema_version, status, content_hash, CAST(entity_version_ids_json AS VARCHAR) AS entity_version_ids_json, CAST(relationship_version_ids_json AS VARCHAR) AS relationship_version_ids_json, strftime(published_at, '%Y-%m-%dT%H:%M:%S.%fZ') AS published_at FROM knowledge_publications WHERE id = $1",
+    [parseKnowledgePublicationId(publicationId)],
+  );
+  const row = rows.getRowObjectsJson()[0];
+  return row === undefined ? undefined : parseKnowledgePublicationRow(row);
+}
+
 export function createKnowledgePublicationContentHash(
   entities: readonly KnowledgeEntity[],
   relationships: readonly KnowledgeRelationship[],
@@ -1766,7 +1778,7 @@ function parseKnowledgeRelationshipRow(row: unknown): KnowledgeRelationship {
   return relationship;
 }
 
-function parseEntitySnapshotJson(value: unknown): KnowledgeEntity {
+export function parseEntitySnapshotJson(value: unknown): KnowledgeEntity {
   const snapshot = entitySnapshotSchema.parse(
     JSON.parse(z.string().parse(value)) as unknown,
   );
@@ -1780,7 +1792,9 @@ function parseEntitySnapshotJson(value: unknown): KnowledgeEntity {
   };
 }
 
-function parseRelationshipSnapshotJson(value: unknown): KnowledgeRelationship {
+export function parseRelationshipSnapshotJson(
+  value: unknown,
+): KnowledgeRelationship {
   const snapshot = relationshipSnapshotSchema.parse(
     JSON.parse(z.string().parse(value)) as unknown,
   );

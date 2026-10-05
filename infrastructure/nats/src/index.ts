@@ -20,6 +20,7 @@ const streamSubjects = [
   'workspace.discovery.>',
   'workspace.processing.>',
   'workspace.knowledge.>',
+  'workspace.search.>',
 ];
 const deadLetterSubject = 'workspace.discovery.dead-letter';
 const maxProcessingAttempts = 5;

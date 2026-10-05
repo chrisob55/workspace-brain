@@ -18,6 +18,8 @@ type DiscoveryCatalogue = Pick<
   | 'recordScanFailed'
   | 'applyDocumentProcessing'
   | 'applyKnowledgeCandidates'
+  | 'requestSearchProjection'
+  | 'buildSearchProjection'
 >;
 
 export function createDiscoveryService(
@@ -83,6 +85,22 @@ export function createDiscoveryService(
         return;
       }
 
+      // Search projection is a derived read model: publications drive the
+      // projection, never the reverse (ADR-010, Slice 4).
+      if (event.eventType === 'KnowledgeModelPublished') {
+        requireApiProducedEvent(event);
+        await catalogue.requestSearchProjection(event);
+        await publishPendingEvents(catalogue, events);
+        return;
+      }
+
+      if (event.eventType === 'SearchProjectionRequested') {
+        requireApiProducedEvent(event);
+        await catalogue.buildSearchProjection(event);
+        await publishPendingEvents(catalogue, events);
+        return;
+      }
+
       if (event.eventType !== 'SourceInventorySubmitted') {
         throw new Error(`Unexpected discovery event: ${event.eventType}`);
       }
@@ -122,6 +140,14 @@ export function createDiscoveryService(
   };
 }
 
+function requireApiProducedEvent(event: DiscoveryEvent): void {
+  if (event.producer !== 'workspace-brain-api') {
+    throw new Error(
+      `${event.eventType} must be produced by the catalogue owner`,
+    );
+  }
+}
+
 function isSafeInventoryPath(
   path: string,
   registeredRootIds: ReadonlySet<string>,
@@ -148,8 +174,11 @@ function isSafeInventoryPath(
   return true;
 }
 
-async function publishPendingEvents(
-  catalogue: DiscoveryCatalogue,
+export async function publishPendingEvents(
+  catalogue: Pick<
+    DiscoveryCatalogue,
+    'listPendingDiscoveryEvents' | 'markDiscoveryEventPublished'
+  >,
   events: InternalEventPublisher,
 ): Promise<void> {
   while (true) {

@@ -11,6 +11,10 @@ import type {
   ConfiguredSource,
   ConfiguredWorkspace,
   KnowledgePageRequest,
+  KnowledgeModelPublishedEvent,
+  SearchEntityRequest,
+  SearchProjectionRequestedEvent,
+  SearchRelationshipRequest,
   DocumentProcessingEvent,
   DocumentProcessingApplyResult,
   ScanPersistenceResult,
@@ -42,6 +46,10 @@ import {
   type KnowledgeModel,
   type KnowledgePublication,
   type KnowledgeRelationship,
+  type ProjectedEntity,
+  type ProjectedRelationship,
+  type ProjectionStatistics,
+  type SearchProjectionSummary,
   parseRepositoryId,
   parseSourceId,
   parseSourceRootId,
@@ -69,6 +77,24 @@ import {
   listKnowledgeRelationships,
   withdrawKnowledgeDocument,
 } from './knowledge.js';
+import {
+  buildSearchProjectionFromRequest,
+  getProjectedEntity,
+  getProjectedRelationship,
+  getProjectionStatistics,
+  rebuildSearchProjections,
+  requestSearchProjection,
+  searchProjectedEntities,
+  searchProjectedRelationships,
+} from './search-projection.js';
+
+export {
+  buildSearchProjection,
+  normalizeSearchText,
+  tokenizeSearchText,
+  type PublishedEntitySnapshot,
+  type PublishedRelationshipSnapshot,
+} from './search-projection-builder.js';
 
 const sourceRootSchema = z
   .object({
@@ -180,6 +206,8 @@ const discoveryEventEnvelopeSchema = z
       'KnowledgeRelationshipDiscovered',
       'KnowledgeRelationshipSuperseded',
       'KnowledgeModelPublished',
+      'SearchProjectionRequested',
+      'SearchProjectionBuilt',
     ]),
     eventVersion: z.literal(1),
     occurredAt: z.string(),
@@ -857,6 +885,65 @@ export async function createDuckDbCatalogue(
       request: KnowledgePageRequest,
     ): Promise<CataloguePage<KnowledgePublication>> {
       return listKnowledgePublications(connection, request);
+    },
+
+    async searchProjectedEntities(
+      request: SearchEntityRequest,
+    ): Promise<CataloguePage<ProjectedEntity>> {
+      return searchProjectedEntities(connection, request);
+    },
+
+    async searchProjectedRelationships(
+      request: SearchRelationshipRequest,
+    ): Promise<CataloguePage<ProjectedRelationship>> {
+      return searchProjectedRelationships(connection, request);
+    },
+
+    async getProjectedEntity(
+      entityId: string,
+      publicationId?: string,
+    ): Promise<ProjectedEntity | undefined> {
+      return getProjectedEntity(connection, entityId, publicationId);
+    },
+
+    async getProjectedRelationship(
+      relationshipId: string,
+      publicationId?: string,
+    ): Promise<ProjectedRelationship | undefined> {
+      return getProjectedRelationship(
+        connection,
+        relationshipId,
+        publicationId,
+      );
+    },
+
+    async getProjectionStatistics(
+      publicationId: string,
+    ): Promise<ProjectionStatistics | undefined> {
+      return getProjectionStatistics(connection, publicationId);
+    },
+
+    async requestSearchProjection(
+      event: KnowledgeModelPublishedEvent,
+    ): Promise<void> {
+      await requestSearchProjection(connection, event);
+    },
+
+    async buildSearchProjection(
+      event: SearchProjectionRequestedEvent,
+    ): Promise<SearchProjectionSummary> {
+      return buildSearchProjectionFromRequest(connection, event);
+    },
+
+    async rebuildSearchProjections(request: {
+      readonly mode: 'missing' | 'all';
+      readonly correlationId: string;
+    }): Promise<readonly SearchProjectionSummary[]> {
+      return rebuildSearchProjections(
+        connection,
+        request.mode,
+        request.correlationId,
+      );
     },
 
     async listDocumentEvidence(

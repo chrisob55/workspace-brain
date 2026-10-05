@@ -100,6 +100,12 @@ describe('branded domain identifiers', () => {
     expect(discoveryEventSubject('KnowledgeModelPublished')).toBe(
       'workspace.knowledge.model.published',
     );
+    expect(discoveryEventSubject('SearchProjectionRequested')).toBe(
+      'workspace.search.projection.requested',
+    );
+    expect(discoveryEventSubject('SearchProjectionBuilt')).toBe(
+      'workspace.search.projection.built',
+    );
     expect(discoveryEventSubject('DocumentModified')).toBe(
       'workspace.discovery.document.modified',
     );

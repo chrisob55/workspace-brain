@@ -302,6 +302,78 @@ export type KnowledgePublication = {
   readonly publishedAt: string;
 };
 
+export const searchProjectionSchemaVersion = 1 as const;
+export const searchMatchModes = ['contains', 'prefix', 'exact'] as const;
+export type SearchMatchMode = (typeof searchMatchModes)[number];
+
+export type ProjectedEntity = {
+  readonly entityId: KnowledgeEntityId;
+  readonly modelId: KnowledgeModelId;
+  readonly publicationId: KnowledgePublicationId;
+  readonly type: KnowledgeEntityType;
+  readonly name: string;
+  readonly lifecycleStatus: EntityLifecycleStatus;
+  readonly sourceEvidenceIds: readonly EvidenceId[];
+  readonly relationshipCount: number;
+  readonly publishedAt: string;
+};
+
+export type ProjectedRelationship = {
+  readonly relationshipId: KnowledgeRelationshipId;
+  readonly modelId: KnowledgeModelId;
+  readonly publicationId: KnowledgePublicationId;
+  readonly type: KnowledgeRelationshipType;
+  readonly sourceEntityId: KnowledgeEntityId;
+  readonly targetEntityId: KnowledgeEntityId;
+  readonly lifecycleStatus: RelationshipLifecycleStatus;
+  readonly sourceEvidenceIds: readonly EvidenceId[];
+  readonly publishedAt: string;
+};
+
+export type ProjectedSearchDocument = {
+  readonly documentId: string;
+  readonly publicationId: KnowledgePublicationId;
+  readonly searchableText: string;
+  readonly searchableTerms: readonly string[];
+  readonly publishedAt: string;
+};
+
+export type SearchProjection = {
+  readonly publicationId: KnowledgePublicationId;
+  readonly modelId: KnowledgeModelId;
+  readonly publicationVersion: number;
+  readonly publicationContentHash: string;
+  readonly schemaVersion: typeof searchProjectionSchemaVersion;
+  readonly contentHash: string;
+  readonly entities: readonly ProjectedEntity[];
+  readonly relationships: readonly ProjectedRelationship[];
+  readonly documents: readonly ProjectedSearchDocument[];
+};
+
+export type ProjectionStatistics = {
+  readonly publication: KnowledgePublication;
+  readonly projectionStatus: 'built' | 'pending';
+  readonly projectionSchemaVersion: typeof searchProjectionSchemaVersion | null;
+  readonly projectionContentHash: string | null;
+  readonly projectedEntityCount: number;
+  readonly projectedRelationshipCount: number;
+  readonly projectedSearchDocumentCount: number;
+  readonly builtAt: string | null;
+};
+
+export type SearchProjectionSummary = {
+  readonly publicationId: KnowledgePublicationId;
+  readonly modelId: KnowledgeModelId;
+  readonly publicationVersion: number;
+  readonly publicationContentHash: string;
+  readonly projectionSchemaVersion: typeof searchProjectionSchemaVersion;
+  readonly projectionContentHash: string;
+  readonly projectedEntityCount: number;
+  readonly projectedRelationshipCount: number;
+  readonly projectedSearchDocumentCount: number;
+  readonly builtAt: string;
+};
+
 export type KnowledgeCandidateEvent = Extract<
   DiscoveryEvent,
   { readonly eventType: 'KnowledgeCandidatesSubmitted' }
@@ -369,10 +441,16 @@ export type DiscoveryEventName =
   | 'KnowledgeEntitySuperseded'
   | 'KnowledgeRelationshipDiscovered'
   | 'KnowledgeRelationshipSuperseded'
-  | 'KnowledgeModelPublished';
+  | 'KnowledgeModelPublished'
+  | 'SearchProjectionRequested'
+  | 'SearchProjectionBuilt';
 
 export function discoveryEventSubject(eventType: DiscoveryEventName): string {
   switch (eventType) {
+    case 'SearchProjectionRequested':
+      return 'workspace.search.projection.requested';
+    case 'SearchProjectionBuilt':
+      return 'workspace.search.projection.built';
     case 'DocumentProcessingSubmitted':
       return 'workspace.processing.document.submitted';
     case 'DocumentExtracted':
@@ -534,6 +612,13 @@ export type DiscoveryEventPayloads = {
     readonly relationship: KnowledgeRelationship;
   };
   KnowledgeModelPublished: { readonly publication: KnowledgePublication };
+  SearchProjectionRequested: {
+    readonly publicationId: KnowledgePublicationId;
+    readonly knowledgeModelId: KnowledgeModelId;
+    readonly publicationVersion: number;
+    readonly publicationContentHash: string;
+  };
+  SearchProjectionBuilt: { readonly projection: SearchProjectionSummary };
 };
 
 export type DiscoveryEvent = {

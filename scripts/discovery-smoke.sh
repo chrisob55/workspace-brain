@@ -138,6 +138,27 @@ while [ "$attempt" -lt 60 ]; do
         publication.entityVersionIds.length < 2 ||
         publication.relationshipVersionIds.length < 1
       ) process.exit(1);
+      const [statisticsResponse, searchEntitiesResponse, searchRelationshipsResponse] = await Promise.all([
+        fetch(`${base}/api/v1/search/publication/${publication.id}`),
+        fetch(`${base}/api/v1/search/entities?publicationId=${publication.id}&query=${encodeURIComponent(process.env.EXPECTED_PACKAGE_NAME)}&match=exact`),
+        fetch(`${base}/api/v1/search/relationships?publicationId=${publication.id}&entityId=${serviceEntity.id}&type=DEPENDS_ON`),
+      ]);
+      if (!statisticsResponse.ok || !searchEntitiesResponse.ok || !searchRelationshipsResponse.ok) process.exit(1);
+      const [statistics, searchEntities, searchRelationships] = await Promise.all([
+        statisticsResponse.json(),
+        searchEntitiesResponse.json(),
+        searchRelationshipsResponse.json(),
+      ]);
+      const entityLookup = await fetch(`${base}/api/v1/search/entity/${serviceEntity.id}?publicationId=${publication.id}`);
+      if (
+        statistics.projectionStatus !== "built" ||
+        statistics.projectedEntityCount !== publication.entityVersionIds.length ||
+        statistics.projectedRelationshipCount !== publication.relationshipVersionIds.length ||
+        searchEntities.items.length !== 1 ||
+        searchEntities.items[0].entityId !== serviceEntity.id ||
+        !searchRelationships.items.some((item) => item.relationshipId === dependency.id) ||
+        !entityLookup.ok
+      ) process.exit(1);
     ' >/dev/null 2>&1; then
     if [[ $(shasum -a 256 "$source_root/project/README.md" | cut -d ' ' -f 1) != "$readme_hash" ]] ||
       [[ $(shasum -a 256 "$source_root/project/settings.json" | cut -d ' ' -f 1) != "$settings_hash" ]]; then
@@ -153,7 +174,7 @@ while [ "$attempt" -lt 60 ]; do
       -e NATS_EXPECTED_PACKAGE_NAME="$package_name" \
       workspace-brain-api pnpm exec vitest run \
       infrastructure/nats/src/index.integration.test.ts
-    printf 'Discovery, evidence, and knowledge publication smoke test passed.\n'
+    printf 'Discovery, evidence, knowledge publication, and search projection smoke test passed.\n'
     exit 0
   fi
   attempt=$((attempt + 1))

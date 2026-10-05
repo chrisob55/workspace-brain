@@ -785,6 +785,384 @@
           }
         }
       }
+    },
+    "/api/v1/search/entities": {
+      "get": {
+        "operationId": "searchProjectedEntities",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Opaque cursor; results are ordered by ID"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            }
+          },
+          {
+            "name": "publicationId",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "ulid"
+            },
+            "description": "Immutable publication to search; defaults to the latest publication of each Knowledge Model"
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "schema": {
+              "enum": ["package", "container", "api", "module"]
+            }
+          },
+          {
+            "name": "lifecycleStatus",
+            "in": "query",
+            "schema": {
+              "enum": [
+                "observed",
+                "verified",
+                "established",
+                "rejected",
+                "superseded"
+              ]
+            }
+          },
+          {
+            "name": "query",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "description": "Deterministic, case-insensitive (NFKC + lower-case) search text. No fuzzy, semantic or ranked matching."
+          },
+          {
+            "name": "match",
+            "in": "query",
+            "schema": {
+              "enum": ["contains", "prefix", "exact"],
+              "default": "contains"
+            },
+            "description": "Requires query. For field=text, prefix and exact apply to individual searchable terms"
+          },
+          {
+            "name": "field",
+            "in": "query",
+            "schema": {
+              "enum": ["name", "text"],
+              "default": "name"
+            },
+            "description": "Requires query. name matches entity names; text matches entity searchable text (name and type)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deterministically filtered projected entities from the search projection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectedEntitySearchResults"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid filters, search text or pagination parameters",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/search/relationships": {
+      "get": {
+        "operationId": "searchProjectedRelationships",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Opaque cursor; results are ordered by ID"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            }
+          },
+          {
+            "name": "publicationId",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "ulid"
+            },
+            "description": "Immutable publication to search; defaults to the latest publication of each Knowledge Model"
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "schema": {
+              "enum": [
+                "CONTAINS",
+                "BELONGS_TO",
+                "REFERENCES",
+                "DOCUMENTS",
+                "DEPENDS_ON",
+                "USES",
+                "IMPLEMENTS",
+                "EXPOSES",
+                "CONSUMES",
+                "CLASSIFIED_AS",
+                "DERIVED_FROM"
+              ]
+            }
+          },
+          {
+            "name": "entityId",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "ulid"
+            },
+            "description": "Matches relationships whose source or target is this entity"
+          },
+          {
+            "name": "query",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "description": "Deterministic, case-insensitive (NFKC + lower-case) search text. No fuzzy, semantic or ranked matching."
+          },
+          {
+            "name": "match",
+            "in": "query",
+            "schema": {
+              "enum": ["contains", "prefix", "exact"],
+              "default": "contains"
+            },
+            "description": "Requires query. For field=text, prefix and exact apply to individual searchable terms"
+          },
+          {
+            "name": "field",
+            "in": "query",
+            "schema": {
+              "enum": ["type", "text"],
+              "default": "type"
+            },
+            "description": "Requires query. type matches relationship types; text matches relationship type and endpoint entity names"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deterministically filtered projected relationships from the search projection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectedRelationshipSearchResults"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid filters, search text or pagination parameters",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/search/entity/{entityId}": {
+      "get": {
+        "operationId": "getProjectedEntity",
+        "parameters": [
+          {
+            "name": "entityId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "ulid"
+            }
+          },
+          {
+            "name": "publicationId",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "ulid"
+            },
+            "description": "Publication to read; defaults to the latest publication of the owning Knowledge Model"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Projected entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectedEntity"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid entity or publication ID",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Projected entity was not found in the selected publication",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/search/relationship/{relationshipId}": {
+      "get": {
+        "operationId": "getProjectedRelationship",
+        "parameters": [
+          {
+            "name": "relationshipId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "ulid"
+            }
+          },
+          {
+            "name": "publicationId",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "ulid"
+            },
+            "description": "Publication to read; defaults to the latest publication of the owning Knowledge Model"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Projected relationship",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectedRelationship"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid relationship or publication ID",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Projected relationship was not found in the selected publication",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/search/publication/{publicationId}": {
+      "get": {
+        "operationId": "getProjectionStatistics",
+        "parameters": [
+          {
+            "name": "publicationId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "ulid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Publication with its search projection statistics",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectionStatistics"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid publication ID",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Knowledge publication was not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1646,6 +2024,227 @@
           },
           "nextCursor": {
             "type": ["string", "null"]
+          }
+        }
+      },
+      "ProjectedEntity": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Publication-derived, disposable search projection of an immutable entity version snapshot",
+        "required": [
+          "entityId",
+          "modelId",
+          "publicationId",
+          "type",
+          "name",
+          "lifecycleStatus",
+          "sourceEvidenceIds",
+          "relationshipCount",
+          "publishedAt"
+        ],
+        "properties": {
+          "entityId": {
+            "type": "string",
+            "format": "ulid"
+          },
+          "modelId": {
+            "type": "string",
+            "format": "ulid"
+          },
+          "publicationId": {
+            "type": "string",
+            "format": "ulid"
+          },
+          "type": {
+            "enum": ["package", "container", "api", "module"]
+          },
+          "name": {
+            "type": "string"
+          },
+          "lifecycleStatus": {
+            "enum": [
+              "observed",
+              "verified",
+              "established",
+              "rejected",
+              "superseded"
+            ]
+          },
+          "sourceEvidenceIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "ulid"
+            }
+          },
+          "relationshipCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "publishedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ProjectedRelationship": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Publication-derived, disposable search projection of an immutable relationship version snapshot",
+        "required": [
+          "relationshipId",
+          "modelId",
+          "publicationId",
+          "type",
+          "sourceEntityId",
+          "targetEntityId",
+          "lifecycleStatus",
+          "sourceEvidenceIds",
+          "publishedAt"
+        ],
+        "properties": {
+          "relationshipId": {
+            "type": "string",
+            "format": "ulid"
+          },
+          "modelId": {
+            "type": "string",
+            "format": "ulid"
+          },
+          "publicationId": {
+            "type": "string",
+            "format": "ulid"
+          },
+          "type": {
+            "enum": [
+              "CONTAINS",
+              "BELONGS_TO",
+              "REFERENCES",
+              "DOCUMENTS",
+              "DEPENDS_ON",
+              "USES",
+              "IMPLEMENTS",
+              "EXPOSES",
+              "CONSUMES",
+              "CLASSIFIED_AS",
+              "DERIVED_FROM"
+            ]
+          },
+          "sourceEntityId": {
+            "type": "string",
+            "format": "ulid"
+          },
+          "targetEntityId": {
+            "type": "string",
+            "format": "ulid"
+          },
+          "lifecycleStatus": {
+            "enum": [
+              "observed",
+              "related",
+              "verified",
+              "established",
+              "rejected",
+              "superseded"
+            ]
+          },
+          "sourceEvidenceIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "ulid"
+            }
+          },
+          "publishedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ProjectedEntitySearchResults": {
+        "type": "object",
+        "required": ["items", "nextCursor"],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProjectedEntity"
+            }
+          },
+          "nextCursor": {
+            "type": ["string", "null"]
+          }
+        }
+      },
+      "ProjectedRelationshipSearchResults": {
+        "type": "object",
+        "required": ["items", "nextCursor"],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProjectedRelationship"
+            }
+          },
+          "nextCursor": {
+            "type": ["string", "null"]
+          }
+        }
+      },
+      "SearchResults": {
+        "description": "Deterministically filtered, ID-ordered page of projection records (no scoring or ranking)",
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/ProjectedEntitySearchResults"
+          },
+          {
+            "$ref": "#/components/schemas/ProjectedRelationshipSearchResults"
+          }
+        ]
+      },
+      "ProjectionStatistics": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "publication",
+          "projectionStatus",
+          "projectionSchemaVersion",
+          "projectionContentHash",
+          "projectedEntityCount",
+          "projectedRelationshipCount",
+          "projectedSearchDocumentCount",
+          "builtAt"
+        ],
+        "properties": {
+          "publication": {
+            "$ref": "#/components/schemas/KnowledgePublication"
+          },
+          "projectionStatus": {
+            "enum": ["built", "pending"]
+          },
+          "projectionSchemaVersion": {
+            "type": ["integer", "null"],
+            "minimum": 1
+          },
+          "projectionContentHash": {
+            "type": ["string", "null"],
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "projectedEntityCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "projectedRelationshipCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "projectedSearchDocumentCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "builtAt": {
+            "type": ["string", "null"],
+            "format": "date-time"
           }
         }
       },
