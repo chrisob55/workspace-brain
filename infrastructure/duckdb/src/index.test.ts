@@ -1,13 +1,23 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 
 import { DuckDBInstance } from '@duckdb/node-api';
-import type { DiscoveryEvent } from '@workspace-brain/domain';
+import type {
+  DiscoveryEvent,
+  KnowledgeCandidateEvent,
+  KnowledgeInputEvidence,
+} from '@workspace-brain/domain';
+import {
+  createKnowledgeEntityKey,
+  createKnowledgeModelId,
+  processingDefinitionRegistry,
+} from '@workspace-brain/domain';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { createDuckDbCatalogue } from './index.js';
+import { createKnowledgePublicationContentHash } from './knowledge.js';
 
 const migrationsDirectory = resolve(
   process.cwd(),
@@ -47,6 +57,853 @@ function createProcessingEvent(
 }
 
 describe('DuckDB catalogue migrations', () => {
+  it('preserves relationship history while removing the DuckDB update blocker', async () => {
+    const instance = await DuckDBInstance.create(':memory:');
+    const connection = await instance.connect();
+    try {
+      await connection.run(
+        'CREATE TABLE knowledge_relationships (id VARCHAR PRIMARY KEY, lifecycle_status VARCHAR NOT NULL)',
+      );
+      await connection.run(
+        'CREATE TABLE relationship_versions (id VARCHAR PRIMARY KEY, relationship_id VARCHAR NOT NULL REFERENCES knowledge_relationships(id), version_number BIGINT NOT NULL, snapshot_json JSON NOT NULL, created_at TIMESTAMP NOT NULL, UNIQUE (relationship_id, version_number))',
+      );
+      await connection.run(
+        "INSERT INTO knowledge_relationships VALUES ('relationship-1', 'related')",
+      );
+      await connection.run(
+        "INSERT INTO relationship_versions VALUES ('version-1', 'relationship-1', 1, '{\"version\":1}', '2026-10-05T08:00:00Z')",
+      );
+      await connection.run(
+        await readFile(
+          resolve(
+            process.cwd(),
+            'infrastructure/duckdb/migrations/010-relationship-version-storage.sql',
+          ),
+          'utf8',
+        ),
+      );
+
+      const historicalVersions = await connection.runAndReadAll(
+        'SELECT id, relationship_id, version_number FROM relationship_versions',
+      );
+      expect(historicalVersions.getRowObjectsJson()).toEqual([
+        {
+          id: 'version-1',
+          relationship_id: 'relationship-1',
+          version_number: '1',
+        },
+      ]);
+      await connection.run(
+        "UPDATE knowledge_relationships SET lifecycle_status = 'superseded' WHERE id = 'relationship-1'",
+      );
+      await connection.run(
+        "INSERT INTO relationship_versions VALUES ('version-2', 'relationship-1', 2, '{\"version\":2}', '2026-10-05T08:00:01Z')",
+      );
+    } finally {
+      connection.closeSync();
+      instance.closeSync();
+    }
+  });
+
+  it('backfills only uniquely accepted definitions and repairs unsafe legacy pointers', async () => {
+    const instance = await DuckDBInstance.create(':memory:');
+    const connection = await instance.connect();
+    try {
+      await connection.run(
+        'CREATE TABLE documents (id VARCHAR PRIMARY KEY, source_id VARCHAR NOT NULL, path VARCHAR NOT NULL, filename VARCHAR NOT NULL)',
+      );
+      await connection.run(
+        'CREATE TABLE document_versions (id VARCHAR PRIMARY KEY, document_id VARCHAR NOT NULL, source_id VARCHAR NOT NULL, path VARCHAR NOT NULL, content_fingerprint VARCHAR NOT NULL, processor_id VARCHAR NOT NULL, processor_version INTEGER NOT NULL, extraction_rule_id VARCHAR NOT NULL, extraction_rule_version INTEGER NOT NULL)',
+      );
+      await connection.run(
+        'CREATE TABLE inventory_records (source_id VARCHAR NOT NULL, path VARCHAR NOT NULL, asset_type VARCHAR NOT NULL, fingerprint VARCHAR NOT NULL, is_present BOOLEAN NOT NULL)',
+      );
+      await connection.run(
+        'CREATE TABLE document_processing_runs (document_version_id VARCHAR NOT NULL, status VARCHAR NOT NULL)',
+      );
+      await connection.run(
+        "INSERT INTO documents VALUES ('accepted', 'source-1', 'root/accepted/package.json', 'package.json'), ('non-preferred', 'source-1', 'root/non-preferred/package.json', 'package.json'), ('incomparable', 'source-1', 'root/incomparable/package.json', 'package.json'), ('ambiguous', 'source-1', 'root/ambiguous/package.json', 'package.json'), ('old-fingerprint', 'source-1', 'root/old/package.json', 'package.json'), ('removed', 'source-1', 'root/removed/package.json', 'package.json'), ('failed', 'source-1', 'root/failed/package.json', 'package.json')",
+      );
+      await connection.run(
+        "INSERT INTO document_versions VALUES ('accepted-v1', 'accepted', 'source-1', 'root/accepted/package.json', 'a', 'json', 1, 'json-scalar-values', 1), ('non-preferred-v1', 'non-preferred', 'source-1', 'root/non-preferred/package.json', 'b', 'markdown', 1, 'markdown-blocks', 1), ('incomparable-v1', 'incomparable', 'source-1', 'root/incomparable/package.json', 'c', 'yaml', 1, 'yaml-scalar-values', 1), ('ambiguous-v1', 'ambiguous', 'source-1', 'root/ambiguous/package.json', 'd', 'json', 1, 'json-scalar-values', 1), ('ambiguous-v2', 'ambiguous', 'source-1', 'root/ambiguous/package.json', 'd', 'json', 2, 'json-scalar-values', 1), ('old-v1', 'old-fingerprint', 'source-1', 'root/old/package.json', 'old', 'json', 1, 'json-scalar-values', 1), ('removed-v1', 'removed', 'source-1', 'root/removed/package.json', 'f', 'json', 1, 'json-scalar-values', 1), ('failed-v1', 'failed', 'source-1', 'root/failed/package.json', 'g', 'json', 1, 'json-scalar-values', 1)",
+      );
+      await connection.run(
+        "INSERT INTO inventory_records VALUES ('source-1', 'root/accepted/package.json', 'document', 'a', TRUE), ('source-1', 'root/non-preferred/package.json', 'document', 'b', TRUE), ('source-1', 'root/incomparable/package.json', 'document', 'c', TRUE), ('source-1', 'root/ambiguous/package.json', 'document', 'd', TRUE), ('source-1', 'root/old/package.json', 'document', 'current', TRUE), ('source-1', 'root/removed/package.json', 'document', 'f', FALSE), ('source-1', 'root/failed/package.json', 'document', 'g', TRUE)",
+      );
+      await connection.run(
+        "INSERT INTO document_processing_runs VALUES ('accepted-v1', 'completed'), ('non-preferred-v1', 'completed'), ('incomparable-v1', 'completed'), ('ambiguous-v1', 'completed'), ('ambiguous-v2', 'completed'), ('old-v1', 'completed'), ('removed-v1', 'completed'), ('failed-v1', 'failed')",
+      );
+      await connection.run(
+        await readFile(
+          resolve(
+            process.cwd(),
+            'infrastructure/duckdb/migrations/011-current-document-version.sql',
+          ),
+          'utf8',
+        ),
+      );
+
+      const registeredDefinitions = await connection.runAndReadAll(
+        'SELECT filename_match_kind, filename_match, processor_id, extraction_rule_id FROM accepted_processing_definitions ORDER BY filename_match_kind, filename_match',
+      );
+      const expectedDefinitions = [...processingDefinitionRegistry]
+        .map((definition) => ({
+          filename_match_kind: definition.filenameMatchKind,
+          filename_match: definition.filenameMatch,
+          processor_id: definition.processorId,
+          extraction_rule_id: definition.extractionRuleId,
+        }))
+        .sort(
+          (left, right) =>
+            left.filename_match_kind.localeCompare(right.filename_match_kind) ||
+            left.filename_match.localeCompare(right.filename_match),
+        );
+      expect(registeredDefinitions.getRowObjectsJson()).toEqual(
+        expectedDefinitions,
+      );
+      const currentVersions = await connection.runAndReadAll(
+        'SELECT document_id, document_version_id, revision FROM document_current_versions ORDER BY document_id',
+      );
+      expect(currentVersions.getRowObjectsJson()).toEqual([
+        {
+          document_id: 'accepted',
+          document_version_id: 'accepted-v1',
+          revision: '1',
+        },
+      ]);
+
+      await connection.run(
+        "INSERT INTO document_current_versions VALUES ('non-preferred', 'non-preferred-v1', 1, '2026-10-05T09:00:00Z')",
+      );
+      const migration012 = await readFile(
+        resolve(
+          process.cwd(),
+          'infrastructure/duckdb/migrations/012-processing-authority-reconciliation.sql',
+        ),
+        'utf8',
+      );
+      await connection.run(migration012);
+      const afterRepair = await connection.runAndReadAll(
+        'SELECT document_id, document_version_id, revision FROM document_current_versions ORDER BY document_id',
+      );
+      expect(afterRepair.getRowObjectsJson()).toEqual([
+        {
+          document_id: 'accepted',
+          document_version_id: 'accepted-v1',
+          revision: '1',
+        },
+        {
+          document_id: 'non-preferred',
+          document_version_id: null,
+          revision: '2',
+        },
+      ]);
+      await connection.run(migration012);
+      const afterRepeat = await connection.runAndReadAll(
+        'SELECT document_id, document_version_id, revision FROM document_current_versions ORDER BY document_id',
+      );
+      expect(afterRepeat.getRowObjectsJson()).toEqual(
+        afterRepair.getRowObjectsJson(),
+      );
+
+      await connection.run('DELETE FROM accepted_processing_definitions');
+      await connection.run('DELETE FROM document_current_versions');
+      await connection.run(migration012);
+      const upgradeDefinitions = await connection.runAndReadAll(
+        'SELECT filename_match_kind, filename_match, processor_id, extraction_rule_id FROM accepted_processing_definitions ORDER BY filename_match_kind, filename_match',
+      );
+      expect(upgradeDefinitions.getRowObjectsJson()).toEqual(
+        expectedDefinitions,
+      );
+      const upgradeBackfill = await connection.runAndReadAll(
+        'SELECT document_id, document_version_id FROM document_current_versions ORDER BY document_id',
+      );
+      expect(upgradeBackfill.getRowObjectsJson()).toEqual([
+        { document_id: 'accepted', document_version_id: 'accepted-v1' },
+      ]);
+    } finally {
+      connection.closeSync();
+      instance.closeSync();
+    }
+  });
+
+  it('selects current processing authority deterministically across completion order', async () => {
+    const directory = await mkdtemp(
+      join(tmpdir(), 'workspace-brain-processing-authority-'),
+    );
+    temporaryDirectories.push(directory);
+    const cataloguePath = join(directory, 'catalogue.duckdb');
+    const catalogue = await createDuckDbCatalogue(
+      cataloguePath,
+      migrationsDirectory,
+    );
+    await catalogue.registerConfiguration(
+      [
+        {
+          configId: 'authority-source',
+          name: 'Authority Source',
+          rootPaths: [join(directory, 'source')],
+          excludeDirs: [],
+          includeExtensions: ['.json'],
+          maxFileSizeBytes: 4096,
+        },
+      ],
+      [
+        {
+          configId: 'authority-workspace',
+          name: 'Authority Workspace',
+          sourceConfigIds: ['authority-source'],
+          include: ['**'],
+          exclude: [],
+        },
+      ],
+    );
+    const source = (await catalogue.listSources({ limit: 10 })).items[0];
+    const root = source?.roots?.[0];
+    if (source === undefined || root === undefined) {
+      throw new Error('Authority source registration failed');
+    }
+    const sourceText = '{"name":"@workspace/order","dependencies":{"v1":"^1"}}';
+    const fingerprint = createHash('sha256').update(sourceText).digest('hex');
+    const discoveredAt = '2026-10-05T09:00:00.000Z';
+    const scan = await catalogue.persistScan(
+      source.id,
+      [],
+      ['root-first', 'root-second'].map((suffix) => ({
+        path: `${root.id}/${suffix}/package.json`,
+        filename: 'package.json',
+        extension: '.json',
+        sizeBytes: Buffer.byteLength(sourceText),
+        modifiedAt: discoveredAt,
+        fingerprint,
+        discoveryMethod: 'filesystem' as const,
+      })),
+      discoveredAt,
+      'authority-scan',
+      10,
+    );
+    const firstDocument = scan.documents.find(({ path }) =>
+      path.includes('root-first'),
+    );
+    const secondDocument = scan.documents.find(({ path }) =>
+      path.includes('root-second'),
+    );
+    if (firstDocument === undefined || secondDocument === undefined) {
+      throw new Error('Authority documents were not persisted');
+    }
+
+    async function processVersion(
+      document: typeof firstDocument,
+      processorVersion: number,
+      dependencyName: string,
+      eventId: string,
+      processorId = 'json',
+      contentFingerprint = fingerprint,
+    ) {
+      const isJson = processorId === 'json';
+      const candidate = {
+        documentId: document.id,
+        sourceId: source.id,
+        path: document.path,
+        contentFingerprint,
+        processedAt: `2026-10-05T09:00:${String(processorVersion).padStart(2, '0')}.000Z`,
+        durationMilliseconds: 1,
+        processorId,
+        processorVersion,
+        extractionRuleId: isJson ? 'json-scalar-values' : 'yaml-scalar-values',
+        extractionRuleVersion: processorVersion,
+        evidence: [
+          {
+            key: isJson ? 'json:/name' : 'yaml:/name',
+            kind: 'structured-value' as const,
+            excerpt: '@workspace/order',
+            truncated: false,
+            locator: isJson
+              ? ({ kind: 'json-pointer', pointer: '/name' } as const)
+              : ({ kind: 'yaml-lines', lineStart: 1, lineEnd: 1 } as const),
+          },
+          {
+            key: isJson
+              ? `json:/dependencies/${dependencyName}`
+              : `yaml:/dependencies/${dependencyName}`,
+            kind: 'structured-value' as const,
+            excerpt: dependencyName === 'new' ? '^2' : '^1',
+            truncated: false,
+            locator: isJson
+              ? ({
+                  kind: 'json-pointer',
+                  pointer: `/dependencies/${dependencyName}`,
+                } as const)
+              : ({ kind: 'yaml-lines', lineStart: 2, lineEnd: 2 } as const),
+          },
+        ],
+      };
+      return catalogue.applyDocumentProcessing(
+        createProcessingEvent(candidate, eventId),
+      );
+    }
+
+    function makeKnowledgeEvent(
+      document: typeof firstDocument,
+      versionId: string,
+      inputs: readonly KnowledgeInputEvidence[],
+      suffix: string,
+      dependencyName: string,
+    ): KnowledgeCandidateEvent {
+      const ownerInput = inputs.find(({ evidence }) =>
+        evidence.key.endsWith('/name'),
+      );
+      const dependencyInput = inputs.find(({ evidence }) =>
+        evidence.key.endsWith(`/${dependencyName}`),
+      );
+      if (ownerInput === undefined || dependencyInput === undefined) {
+        throw new Error(`Evidence for ${suffix} was not persisted`);
+      }
+      const provenanceFor = (input: KnowledgeInputEvidence) => ({
+        evidenceId: input.evidence.id,
+        documentVersionId: input.documentVersion.id,
+        documentId: input.document.id,
+        sourceId: input.document.sourceId,
+        documentPath: input.document.path,
+        contentFingerprint: input.provenance.contentFingerprint,
+        locator: input.evidence.locator,
+        processorId: input.provenance.processorId,
+        processorVersion: input.provenance.processorVersion,
+        extractionRuleId: input.provenance.extractionRuleId,
+        extractionRuleVersion: input.provenance.extractionRuleVersion,
+        knowledgeExtractorId: 'deterministic-knowledge-extractors',
+        knowledgeExtractorVersion: 1 as const,
+      });
+      const ownerKey = createKnowledgeEntityKey(
+        'package',
+        source.id,
+        document.path,
+        '@workspace/order',
+      );
+      const dependencyKey = createKnowledgeEntityKey(
+        'package',
+        source.id,
+        document.path,
+        dependencyName,
+      );
+      return {
+        eventId: `authority-knowledge-${suffix}`,
+        eventType: 'KnowledgeCandidatesSubmitted',
+        eventVersion: 1,
+        occurredAt: '2026-10-05T09:01:00.000Z',
+        producer: 'workspace-brain-knowledge-worker',
+        correlationId: `authority-correlation-${suffix}`,
+        idempotencyKey: `authority-idempotency-${suffix}`,
+        partitionKey: source.id,
+        payload: {
+          sourceId: source.id,
+          documentId: document.id,
+          documentVersionId: versionId,
+          entities: [
+            {
+              key: ownerKey,
+              type: 'package',
+              identityScope: document.path,
+              name: '@workspace/order',
+              sourceEvidenceIds: [ownerInput.evidence.id],
+              provenance: [provenanceFor(ownerInput)],
+              lifecycleStatus: 'observed',
+            },
+            {
+              key: dependencyKey,
+              type: 'package',
+              identityScope: document.path,
+              name: dependencyName,
+              sourceEvidenceIds: [dependencyInput.evidence.id],
+              provenance: [provenanceFor(dependencyInput)],
+              lifecycleStatus: 'observed',
+            },
+          ],
+          relationships: [
+            {
+              key: `DEPENDS_ON:${ownerKey}->${dependencyKey}`,
+              type: 'DEPENDS_ON',
+              sourceEntityKey: ownerKey,
+              targetEntityKey: dependencyKey,
+              sourceEvidenceIds: [dependencyInput.evidence.id],
+              provenance: [provenanceFor(dependencyInput)],
+              confidence: 1,
+              lifecycleStatus: 'related',
+            },
+          ],
+        },
+      } as KnowledgeCandidateEvent;
+    }
+
+    const firstV2 = await processVersion(
+      firstDocument,
+      2,
+      'fresh',
+      'authority-first-v2',
+    );
+    const firstV1 = await processVersion(
+      firstDocument,
+      1,
+      'legacy',
+      'authority-first-delayed-v1',
+    );
+    expect(firstV1.documentVersion.id).not.toBe(firstV2.documentVersion.id);
+    const firstV2Inputs = await catalogue.listKnowledgeInputEvidence(
+      firstV2.documentVersion.id,
+    );
+    const firstV1Inputs = await catalogue.listKnowledgeInputEvidence(
+      firstV1.documentVersion.id,
+    );
+    await catalogue.applyKnowledgeCandidates(
+      makeKnowledgeEvent(
+        firstDocument,
+        firstV2.documentVersion.id,
+        firstV2Inputs,
+        'first-v2',
+        'fresh',
+      ),
+    );
+    const firstPublicationCount = (
+      await catalogue.listKnowledgePublications({ limit: 20 })
+    ).items.length;
+    await catalogue.applyKnowledgeCandidates(
+      makeKnowledgeEvent(
+        firstDocument,
+        firstV1.documentVersion.id,
+        firstV1Inputs,
+        'first-delayed-v1',
+        'legacy',
+      ),
+    );
+    expect(
+      (await catalogue.listKnowledgePublications({ limit: 20 })).items,
+    ).toHaveLength(firstPublicationCount);
+
+    const secondV1 = await processVersion(
+      secondDocument,
+      1,
+      'legacy',
+      'authority-second-v1',
+    );
+    const secondV1Inputs = await catalogue.listKnowledgeInputEvidence(
+      secondV1.documentVersion.id,
+    );
+    await catalogue.applyKnowledgeCandidates(
+      makeKnowledgeEvent(
+        secondDocument,
+        secondV1.documentVersion.id,
+        secondV1Inputs,
+        'second-v1',
+        'legacy',
+      ),
+    );
+    const secondV2 = await processVersion(
+      secondDocument,
+      2,
+      'fresh',
+      'authority-second-v2',
+    );
+    const secondV2Inputs = await catalogue.listKnowledgeInputEvidence(
+      secondV2.documentVersion.id,
+    );
+    await catalogue.applyKnowledgeCandidates(
+      makeKnowledgeEvent(
+        secondDocument,
+        secondV2.documentVersion.id,
+        secondV2Inputs,
+        'second-v2',
+        'fresh',
+      ),
+    );
+    const beforeReplayPublications = (
+      await catalogue.listKnowledgePublications({ limit: 20 })
+    ).items;
+    const secondV2Replay = await processVersion(
+      secondDocument,
+      2,
+      'fresh',
+      'authority-second-v2-different-event',
+    );
+    expect(secondV2Replay.documentVersion.id).toBe(secondV2.documentVersion.id);
+    expect(secondV2Replay.duplicate).toBe(true);
+    await catalogue.applyKnowledgeCandidates(
+      makeKnowledgeEvent(
+        secondDocument,
+        secondV2.documentVersion.id,
+        secondV2Inputs,
+        'second-v2-replay',
+        'fresh',
+      ),
+    );
+    const delayedSecondV1 = await processVersion(
+      secondDocument,
+      1,
+      'legacy',
+      'authority-second-v1-delayed-duplicate',
+    );
+    expect(delayedSecondV1.documentVersion.id).toBe(
+      secondV1.documentVersion.id,
+    );
+    await catalogue.applyKnowledgeCandidates(
+      makeKnowledgeEvent(
+        secondDocument,
+        secondV1.documentVersion.id,
+        secondV1Inputs,
+        'second-v1-delayed-duplicate',
+        'legacy',
+      ),
+    );
+    expect(
+      (await catalogue.listKnowledgePublications({ limit: 20 })).items,
+    ).toEqual(beforeReplayPublications);
+
+    const incomparableRun = await processVersion(
+      firstDocument,
+      3,
+      'incomparable',
+      'authority-incomparable-yaml',
+      'yaml',
+    );
+    const incomparableInputs = await catalogue.listKnowledgeInputEvidence(
+      incomparableRun.documentVersion.id,
+    );
+    const beforeIncomparable = (
+      await catalogue.listKnowledgePublications({ limit: 20 })
+    ).items;
+    await catalogue.applyKnowledgeCandidates(
+      makeKnowledgeEvent(
+        firstDocument,
+        incomparableRun.documentVersion.id,
+        incomparableInputs,
+        'incomparable',
+        'incomparable',
+      ),
+    );
+    expect(
+      (await catalogue.listKnowledgePublications({ limit: 20 })).items,
+    ).toEqual(beforeIncomparable);
+
+    const model = (await catalogue.listKnowledgeModels({ limit: 10 })).items[0];
+    if (model === undefined) {
+      throw new Error('Authority Knowledge Model was not initialized');
+    }
+    for (const document of [firstDocument, secondDocument]) {
+      const entities = (
+        await catalogue.listKnowledgeEntities({
+          knowledgeModelId: model.id,
+          type: 'package',
+          limit: 100,
+        })
+      ).items.filter(({ provenance }) =>
+        provenance.some(({ documentId }) => documentId === document.id),
+      );
+      expect(
+        entities.map(({ name, lifecycleStatus }) => [name, lifecycleStatus]),
+      ).toContainEqual(['fresh', 'observed']);
+      expect(
+        entities
+          .filter(
+            ({ lifecycleStatus }) =>
+              lifecycleStatus !== 'superseded' &&
+              lifecycleStatus !== 'rejected',
+          )
+          .map(({ name }) => name),
+      ).not.toContain('legacy');
+      const relationships = (
+        await catalogue.listKnowledgeRelationships({
+          knowledgeModelId: model.id,
+          type: 'DEPENDS_ON',
+          limit: 100,
+        })
+      ).items
+        .filter(({ provenance }) =>
+          provenance.some(({ documentId }) => documentId === document.id),
+        )
+        .filter(
+          ({ lifecycleStatus }) =>
+            lifecycleStatus !== 'superseded' && lifecycleStatus !== 'rejected',
+        );
+      expect(relationships).toHaveLength(1);
+      expect(relationships[0]?.sourceEvidenceIds).toContain(
+        (document.id === firstDocument.id
+          ? firstV2Inputs
+          : secondV2Inputs
+        ).find(({ evidence }) => evidence.key.endsWith('/fresh'))?.evidence.id,
+      );
+    }
+    expect(
+      await catalogue.listKnowledgeInputEvidence(firstV1.documentVersion.id),
+    ).toHaveLength(2);
+
+    const changedText =
+      '{"name":"@workspace/order","dependencies":{"new":"^2"}}';
+    const changedFingerprint = createHash('sha256')
+      .update(changedText)
+      .digest('hex');
+    await catalogue.persistScan(
+      source.id,
+      [],
+      [
+        {
+          path: firstDocument.path,
+          filename: firstDocument.filename,
+          extension: firstDocument.extension,
+          sizeBytes: Buffer.byteLength(changedText),
+          modifiedAt: '2026-10-05T09:02:00.000Z',
+          fingerprint: changedFingerprint,
+          discoveryMethod: 'filesystem',
+        },
+        {
+          path: secondDocument.path,
+          filename: secondDocument.filename,
+          extension: secondDocument.extension,
+          sizeBytes: Buffer.byteLength(sourceText),
+          modifiedAt: discoveredAt,
+          fingerprint,
+          discoveryMethod: 'filesystem',
+        },
+      ],
+      '2026-10-05T09:02:00.000Z',
+      'authority-content-changed',
+      10,
+    );
+    const publicationsBeforeStaleResult = (
+      await catalogue.listKnowledgePublications({ limit: 20 })
+    ).items;
+    const entitiesBeforeStaleResult = (
+      await catalogue.listKnowledgeEntities({
+        knowledgeModelId: model.id,
+        type: 'package',
+        limit: 100,
+      })
+    ).items;
+    const staleA = await processVersion(
+      firstDocument,
+      3,
+      'stale',
+      'authority-old-content-in-flight',
+    );
+    expect(staleA.duplicate).toBe(false);
+    const staleInputs = await catalogue.listKnowledgeInputEvidence(
+      staleA.documentVersion.id,
+    );
+    expect(staleInputs).toHaveLength(2);
+    expect(
+      (
+        await catalogue.listDocumentEvidence(firstDocument.id, { limit: 100 })
+      ).items.map(({ documentVersionId }) => documentVersionId),
+    ).toContain(staleA.documentVersion.id);
+    expect(await catalogue.listKnowledgePublications({ limit: 20 })).toEqual({
+      items: publicationsBeforeStaleResult,
+    });
+    expect(
+      (
+        await catalogue.listKnowledgeEntities({
+          knowledgeModelId: model.id,
+          type: 'package',
+          limit: 100,
+        })
+      ).items,
+    ).toEqual(entitiesBeforeStaleResult);
+    await expect(
+      processVersion(
+        firstDocument,
+        3,
+        'stale',
+        'authority-old-content-in-flight',
+      ),
+    ).resolves.toMatchObject({
+      documentVersion: { id: staleA.documentVersion.id },
+      duplicate: true,
+    });
+    await expect(
+      processVersion(
+        firstDocument,
+        3,
+        'conflicting-replay',
+        'authority-old-content-in-flight',
+      ),
+    ).rejects.toThrow('reused with a different payload');
+    await catalogue.applyKnowledgeCandidates(
+      makeKnowledgeEvent(
+        firstDocument,
+        staleA.documentVersion.id,
+        staleInputs,
+        'stale-content',
+        'stale',
+      ),
+    );
+    expect(
+      (await catalogue.listKnowledgePublications({ limit: 20 })).items,
+    ).toEqual(publicationsBeforeStaleResult);
+    const outboxAfterStale = await catalogue.listPendingDiscoveryEvents(1000);
+    expect(
+      outboxAfterStale.some(
+        (item) =>
+          item.eventType === 'DocumentExtracted' &&
+          item.payload.documentVersionId === staleA.documentVersion.id,
+      ),
+    ).toBe(false);
+
+    const currentB = await processVersion(
+      firstDocument,
+      4,
+      'new',
+      'authority-current-content-v4',
+      'json',
+      changedFingerprint,
+    );
+    const currentBInputs = await catalogue.listKnowledgeInputEvidence(
+      currentB.documentVersion.id,
+    );
+    await catalogue.applyKnowledgeCandidates(
+      makeKnowledgeEvent(
+        firstDocument,
+        currentB.documentVersion.id,
+        currentBInputs,
+        'first-current-content-v4',
+        'new',
+      ),
+    );
+    expect(
+      (await catalogue.listKnowledgePublications({ limit: 20 })).items.length,
+    ).toBeGreaterThan(publicationsBeforeStaleResult.length);
+    const currentEntitiesAfterB = (
+      await catalogue.listKnowledgeEntities({
+        knowledgeModelId: model.id,
+        type: 'package',
+        limit: 100,
+      })
+    ).items.filter(({ provenance }) =>
+      provenance.some(({ documentId }) => documentId === firstDocument.id),
+    );
+    expect(currentEntitiesAfterB.map(({ name }) => name)).toContain('new');
+    expect(currentEntitiesAfterB.map(({ name }) => name)).not.toContain(
+      'stale',
+    );
+
+    const invalidIdentityCandidate = {
+      documentId: firstDocument.id,
+      sourceId: source.id,
+      path: secondDocument.path,
+      contentFingerprint: changedFingerprint,
+      processedAt: '2026-10-05T09:04:00.000Z',
+      durationMilliseconds: 1,
+      processorId: 'json' as const,
+      processorVersion: 5,
+      extractionRuleId: 'json-scalar-values' as const,
+      extractionRuleVersion: 1,
+      evidence: [],
+    };
+    await expect(
+      catalogue.applyDocumentProcessing(
+        createProcessingEvent(
+          invalidIdentityCandidate,
+          'authority-invalid-document-identity',
+        ),
+      ),
+    ).rejects.toThrow('does not match a known catalogue document');
+    await expect(
+      catalogue.applyDocumentProcessing(
+        createProcessingEvent(
+          {
+            ...invalidIdentityCandidate,
+            path: firstDocument.path,
+            extractionRuleId: 'typescript-imports' as const,
+          },
+          'authority-invalid-provenance',
+        ),
+      ),
+    ).rejects.toThrow('Invalid document processing submission');
+
+    const restoredScan = await catalogue.persistScan(
+      source.id,
+      [],
+      [
+        {
+          path: firstDocument.path,
+          filename: firstDocument.filename,
+          extension: firstDocument.extension,
+          sizeBytes: Buffer.byteLength(sourceText),
+          modifiedAt: '2026-10-05T09:03:00.000Z',
+          fingerprint,
+          discoveryMethod: 'filesystem',
+        },
+        {
+          path: secondDocument.path,
+          filename: secondDocument.filename,
+          extension: secondDocument.extension,
+          sizeBytes: Buffer.byteLength(sourceText),
+          modifiedAt: discoveredAt,
+          fingerprint,
+          discoveryMethod: 'filesystem',
+        },
+      ],
+      '2026-10-05T09:03:00.000Z',
+      'authority-content-restored',
+      10,
+    );
+    expect(restoredScan.documents).toHaveLength(2);
+    const publicationsBeforeRestoreResult = (
+      await catalogue.listKnowledgePublications({ limit: 20 })
+    ).items;
+    const firstV2Restored = await processVersion(
+      firstDocument,
+      2,
+      'fresh',
+      'authority-first-v2-restored',
+    );
+    expect(firstV2Restored.documentVersion.id).toBe(firstV2.documentVersion.id);
+    expect(
+      (await catalogue.listKnowledgePublications({ limit: 20 })).items,
+    ).toEqual(publicationsBeforeRestoreResult);
+    await catalogue.close();
+
+    const verificationInstance = await DuckDBInstance.create(cataloguePath);
+    const verificationConnection = await verificationInstance.connect();
+    const staleRun = await verificationConnection.runAndReadAll(
+      "SELECT event_id, status, document_version_id FROM document_processing_runs WHERE event_id = 'authority-old-content-in-flight'",
+    );
+    expect(staleRun.getRowObjectsJson()).toEqual([
+      {
+        event_id: 'authority-old-content-in-flight',
+        status: 'completed',
+        document_version_id: staleA.documentVersion.id,
+      },
+    ]);
+    const staleEvidenceCount = await verificationConnection.runAndReadAll(
+      'SELECT count(*) AS evidence_count FROM extracted_evidence WHERE document_version_id = $1',
+      [staleA.documentVersion.id],
+    );
+    expect(staleEvidenceCount.getRowObjectsJson()).toEqual([
+      { evidence_count: '2' },
+    ]);
+    const invalidRunCount = await verificationConnection.runAndReadAll(
+      "SELECT count(*) AS run_count FROM document_processing_runs WHERE event_id IN ('authority-invalid-document-identity', 'authority-invalid-provenance')",
+    );
+    expect(invalidRunCount.getRowObjectsJson()).toEqual([{ run_count: '0' }]);
+    const currentAuthority = await verificationConnection.runAndReadAll(
+      'SELECT document_version_id FROM document_current_versions WHERE document_id = $1',
+      [firstDocument.id],
+    );
+    expect(currentAuthority.getRowObjectsJson()).toEqual([
+      { document_version_id: firstV2.documentVersion.id },
+    ]);
+    const separateExecutionCount = await verificationConnection.runAndReadAll(
+      'SELECT count(*) AS run_count FROM document_processing_runs WHERE document_version_id = $1 AND event_id IN ($2, $3)',
+      [
+        secondV2.documentVersion.id,
+        'authority-second-v2',
+        'authority-second-v2-different-event',
+      ],
+    );
+    expect(separateExecutionCount.getRowObjectsJson()).toEqual([
+      { run_count: '2' },
+    ]);
+    verificationConnection.closeSync();
+    verificationInstance.closeSync();
+  });
+
   it('runs and safely reapplies initial migrations for schema, sources, and workspaces', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'workspace-brain-'));
     temporaryDirectories.push(directory);
@@ -117,13 +974,24 @@ describe('DuckDB catalogue migrations', () => {
       "SELECT table_name FROM information_schema.tables WHERE table_schema = 'main' ORDER BY table_name",
     );
     expect(tables.getRowObjectsJson().map((row) => row.table_name)).toEqual([
+      'accepted_processing_definitions',
       'discovery_history',
       'discovery_outbox',
+      'document_current_versions',
       'document_processing_runs',
       'document_versions',
       'documents',
+      'entity_versions',
       'extracted_evidence',
       'inventory_records',
+      'knowledge_active_document_contributions',
+      'knowledge_candidate_runs',
+      'knowledge_document_contributions',
+      'knowledge_entities',
+      'knowledge_models',
+      'knowledge_publications',
+      'knowledge_relationships',
+      'relationship_versions',
       'repositories',
       'schema_migrations',
       'source_scan_runs',
@@ -242,7 +1110,15 @@ describe('DuckDB catalogue migrations', () => {
           maxFileSizeBytes: 1024,
         },
       ],
-      [],
+      [
+        {
+          configId: 'evidence-workspace',
+          name: 'Evidence Workspace',
+          sourceConfigIds: ['evidence-source'],
+          include: ['**'],
+          exclude: [],
+        },
+      ],
     );
     const source = (await catalogue.listSources({ limit: 10 })).items[0];
     const root = source?.roots?.[0];
@@ -393,6 +1269,148 @@ describe('DuckDB catalogue migrations', () => {
     expect(
       pending.filter(({ eventType }) => eventType === 'DocumentExtracted'),
     ).toHaveLength(1);
+    const knowledgeEvidence = first.evidence[0];
+    if (knowledgeEvidence === undefined) {
+      throw new Error('Knowledge transaction evidence was not persisted');
+    }
+    const entityName = 'Evidence';
+    const entityCandidate = {
+      key: createKnowledgeEntityKey(
+        'package',
+        source.id,
+        document.path,
+        entityName,
+      ),
+      type: 'package' as const,
+      identityScope: document.path,
+      name: entityName,
+      sourceEvidenceIds: [knowledgeEvidence.id],
+      provenance: [
+        {
+          evidenceId: knowledgeEvidence.id,
+          documentVersionId: first.documentVersion.id,
+          documentId: document.id,
+          sourceId: source.id,
+          documentPath: document.path,
+          contentFingerprint: fingerprint,
+          locator: knowledgeEvidence.locator,
+          processorId: 'markdown',
+          processorVersion: 1,
+          extractionRuleId: 'markdown-blocks',
+          extractionRuleVersion: 1,
+          knowledgeExtractorId: 'deterministic-knowledge-extractors',
+          knowledgeExtractorVersion: 1 as const,
+        },
+      ],
+      lifecycleStatus: 'observed' as const,
+    };
+    const knowledgeEvent: KnowledgeCandidateEvent = {
+      eventId: 'coordinator-knowledge-event',
+      eventType: 'KnowledgeCandidatesSubmitted',
+      eventVersion: 1,
+      occurredAt: '2026-10-02T10:00:03.000Z',
+      producer: 'workspace-brain-knowledge-worker',
+      correlationId: 'coordinator-knowledge',
+      idempotencyKey: 'coordinator-knowledge',
+      partitionKey: source.id,
+      payload: {
+        sourceId: source.id,
+        documentId: document.id,
+        documentVersionId: first.documentVersion.id,
+        entities: [entityCandidate],
+        relationships: [],
+      },
+    };
+    const conflictingReplay: KnowledgeCandidateEvent = {
+      ...knowledgeEvent,
+      payload: {
+        ...knowledgeEvent.payload,
+        entities: [
+          {
+            ...entityCandidate,
+            name: 'Conflicting',
+            key: createKnowledgeEntityKey(
+              'package',
+              source.id,
+              document.path,
+              'Conflicting',
+            ),
+          },
+        ],
+      },
+    };
+    const concurrentWrites = await Promise.allSettled([
+      catalogue.applyKnowledgeCandidates(knowledgeEvent),
+      catalogue.persistScan(
+        source.id,
+        [],
+        [
+          {
+            path: document.path,
+            filename: document.filename,
+            extension: document.extension,
+            sizeBytes: document.sizeBytes,
+            modifiedAt: document.modifiedAt,
+            fingerprint,
+            discoveryMethod: 'filesystem',
+          },
+        ],
+        discoveredAt,
+        'coordinator-concurrent-scan',
+        10,
+      ),
+      catalogue.applyKnowledgeCandidates(conflictingReplay),
+      catalogue.recordScanStarted(
+        source.id,
+        'coordinator-later-scan',
+        '2026-10-02T10:00:04.000Z',
+      ),
+      catalogue.applyKnowledgeCandidates({
+        ...knowledgeEvent,
+        eventId: 'coordinator-knowledge-replay',
+        idempotencyKey: 'coordinator-knowledge-replay',
+      }),
+    ]);
+    expect(concurrentWrites.map(({ status }) => status)).toEqual([
+      'fulfilled',
+      'fulfilled',
+      'rejected',
+      'fulfilled',
+      'fulfilled',
+    ]);
+    expect(concurrentWrites[2]).toMatchObject({
+      status: 'rejected',
+      reason: expect.objectContaining({
+        message: expect.stringContaining('was reused with a different payload'),
+      }),
+    });
+    expect(
+      (
+        await catalogue.listKnowledgeEntities({
+          limit: 10,
+        })
+      ).items.map(({ name }) => name),
+    ).toEqual(['Evidence']);
+    expect(
+      (
+        await catalogue.listKnowledgePublications({
+          limit: 10,
+        })
+      ).items,
+    ).toHaveLength(1);
+    expect(
+      (await catalogue.listPendingDiscoveryEvents(100))
+        .filter(({ eventType }) => eventType.startsWith('Knowledge'))
+        .map(({ eventType }) => eventType)
+        .sort(),
+    ).toEqual(['KnowledgeEntityDiscovered', 'KnowledgeModelPublished']);
+    expect(
+      (await catalogue.listPendingDiscoveryEvents(100)).filter(
+        ({ eventType, correlationId }) =>
+          eventType === 'SourceScanCompleted' &&
+          correlationId === 'coordinator-concurrent-scan',
+      ),
+    ).toHaveLength(1);
 
     await expect(
       catalogue.applyDocumentProcessing(
@@ -429,11 +1447,15 @@ describe('DuckDB catalogue migrations', () => {
       'evidence-scan-modified',
       10,
     );
-    await expect(
-      catalogue.applyDocumentProcessing(
-        createProcessingEvent(candidate, 'processing-event-3'),
-      ),
-    ).rejects.toThrow('does not match the current catalogue document');
+    const staleResult = await catalogue.applyDocumentProcessing(
+      createProcessingEvent(candidate, 'processing-event-3'),
+    );
+    expect(staleResult.documentVersion.contentHash).toBe(fingerprint);
+    expect(
+      (
+        await catalogue.listDocumentEvidence(document.id, { limit: 20 })
+      ).items.map(({ documentVersionId }) => documentVersionId),
+    ).toContain(staleResult.documentVersion.id);
 
     const changedContent = '# Updated evidence';
     const changedFingerprint = createHash('sha256')
@@ -488,7 +1510,32 @@ describe('DuckDB catalogue migrations', () => {
     expect(
       (await catalogue.listDocumentEvidence(document.id, { limit: 101 })).items,
     ).toHaveLength(2);
-    await catalogue.close();
+    const acceptedBeforeClose = catalogue.recordScanStarted(
+      source.id,
+      'coordinator-close-drain',
+      '2026-10-02T10:00:05.000Z',
+    );
+    const closing = catalogue.close();
+    const rejectedAfterClose = catalogue.recordScanStarted(
+      source.id,
+      'coordinator-after-close',
+      '2026-10-02T10:00:06.000Z',
+    );
+    await expect(rejectedAfterClose).rejects.toThrow(
+      'DuckDB catalogue is closing or closed',
+    );
+    await acceptedBeforeClose;
+    await closing;
+    const verificationInstance = await DuckDBInstance.create(
+      join(directory, 'catalogue.duckdb'),
+    );
+    const verificationConnection = await verificationInstance.connect();
+    const closeDrainRun = await verificationConnection.runAndReadAll(
+      "SELECT correlation_id FROM source_scan_runs WHERE correlation_id = 'coordinator-close-drain'",
+    );
+    expect(closeDrainRun.getRowObjectsJson()).toHaveLength(1);
+    verificationConnection.closeSync();
+    verificationInstance.closeSync();
   });
 
   it('registers source roots and workspaces, then persists filterable discovery metadata', async () => {
@@ -837,5 +1884,1204 @@ describe('DuckDB catalogue migrations', () => {
     ]);
     historyConnection.closeSync();
     historyInstance.closeSync();
+  });
+
+  it('validates, versions, publishes and retains immutable Knowledge Model snapshots', async () => {
+    const directory = await mkdtemp(
+      join(tmpdir(), 'workspace-brain-knowledge-'),
+    );
+    temporaryDirectories.push(directory);
+    const catalogue = await createDuckDbCatalogue(
+      join(directory, 'catalogue.duckdb'),
+      migrationsDirectory,
+    );
+    await catalogue.registerConfiguration(
+      [
+        {
+          configId: 'knowledge-source',
+          name: 'Knowledge Source',
+          rootPaths: [join(directory, 'source')],
+          excludeDirs: [],
+          includeExtensions: ['.json'],
+          maxFileSizeBytes: 4096,
+        },
+      ],
+      [
+        {
+          configId: 'knowledge-workspace',
+          name: 'Knowledge Workspace',
+          sourceConfigIds: ['knowledge-source'],
+          include: ['**'],
+          exclude: [],
+        },
+      ],
+    );
+    const source = (await catalogue.listSources({ limit: 10 })).items[0];
+    const root = source?.roots?.[0];
+    if (source === undefined || root === undefined) {
+      throw new Error('Knowledge source registration failed');
+    }
+    const registeredWorkspace = (await catalogue.listWorkspaces({ limit: 10 }))
+      .items[0];
+    const registeredModel = (await catalogue.listKnowledgeModels({ limit: 10 }))
+      .items[0];
+    expect(registeredWorkspace?.sourceIds).toContain(source.id);
+    expect(registeredModel?.workspaceId).toBe(registeredWorkspace?.id);
+
+    const firstContent =
+      '{"name":"@workspace/service","dependencies":{"lodash":"^4"}}';
+    const secondContent = '{"name":"@workspace/service"}';
+    const secondDocumentContent =
+      '{"name":"@workspace/service","dependencies":{"lodash":"^4"}}';
+    const firstFingerprint = createHash('sha256')
+      .update(firstContent)
+      .digest('hex');
+    const secondFingerprint = createHash('sha256')
+      .update(secondContent)
+      .digest('hex');
+    const secondDocumentFingerprint = createHash('sha256')
+      .update(secondDocumentContent)
+      .digest('hex');
+    const scanAt = '2026-10-05T08:00:00.000Z';
+    const scan = await catalogue.persistScan(
+      source.id,
+      [],
+      [
+        {
+          path: `${root.id}/service/package.json`,
+          filename: 'package.json',
+          extension: '.json',
+          sizeBytes: Buffer.byteLength(firstContent),
+          modifiedAt: scanAt,
+          fingerprint: firstFingerprint,
+          discoveryMethod: 'filesystem',
+        },
+        {
+          path: `${root.id}/other/package.json`,
+          filename: 'package.json',
+          extension: '.json',
+          sizeBytes: Buffer.byteLength(secondContent),
+          modifiedAt: scanAt,
+          fingerprint: secondDocumentFingerprint,
+          discoveryMethod: 'filesystem',
+        },
+      ],
+      scanAt,
+      'knowledge-scan',
+      10,
+    );
+    const firstDocument = scan.documents.find(({ path }) =>
+      path.endsWith('/service/package.json'),
+    );
+    const secondDocument = scan.documents.find(({ path }) =>
+      path.endsWith('/other/package.json'),
+    );
+    if (firstDocument === undefined || secondDocument === undefined) {
+      throw new Error('Knowledge document fixture was not persisted');
+    }
+
+    async function processPackage(
+      document: typeof firstDocument,
+      content: string,
+      processedAt: string,
+      eventId: string,
+      overrides: {
+        readonly processorVersion?: number;
+        readonly extractionRuleVersion?: number;
+        readonly dependencyName?: string;
+      } = {},
+    ) {
+      const fingerprint = createHash('sha256').update(content).digest('hex');
+      const candidate = {
+        documentId: document.id,
+        sourceId: source.id,
+        path: document.path,
+        contentFingerprint: fingerprint,
+        processedAt,
+        durationMilliseconds: 1,
+        processorId: 'json',
+        processorVersion: overrides.processorVersion ?? 1,
+        extractionRuleId: 'json-scalar-values',
+        extractionRuleVersion: overrides.extractionRuleVersion ?? 1,
+        evidence: [
+          {
+            key: 'json:/name',
+            kind: 'structured-value' as const,
+            excerpt: '@workspace/service',
+            truncated: false,
+            locator: { kind: 'json-pointer' as const, pointer: '/name' },
+          },
+          ...(content.includes('dependencies')
+            ? [
+                {
+                  key: `json:/dependencies/${overrides.dependencyName ?? 'lodash'}`,
+                  kind: 'structured-value' as const,
+                  excerpt: '^4',
+                  truncated: false,
+                  locator: {
+                    kind: 'json-pointer' as const,
+                    pointer: `/dependencies/${overrides.dependencyName ?? 'lodash'}`,
+                  },
+                },
+              ]
+            : []),
+        ],
+      };
+      return catalogue.applyDocumentProcessing(
+        createProcessingEvent(candidate, eventId),
+      );
+    }
+
+    const firstProcessed = await processPackage(
+      firstDocument,
+      firstContent,
+      '2026-10-05T08:00:01.000Z',
+      'knowledge-processing-one',
+    );
+    const firstInputs = await catalogue.listKnowledgeInputEvidence(
+      firstProcessed.documentVersion.id,
+    );
+    const ownerEvidence = firstInputs.find(
+      ({ evidence }) => evidence.key === 'json:/name',
+    );
+    const dependencyEvidence = firstInputs.find(
+      ({ evidence }) => evidence.key === 'json:/dependencies/lodash',
+    );
+    if (ownerEvidence === undefined || dependencyEvidence === undefined) {
+      throw new Error('Package evidence fixture was not persisted');
+    }
+    const knowledgeProvenance = (input: (typeof firstInputs)[number]) => ({
+      evidenceId: input.evidence.id,
+      documentVersionId: input.documentVersion.id,
+      documentId: input.document.id,
+      sourceId: input.document.sourceId,
+      documentPath: input.document.path,
+      contentFingerprint: input.provenance.contentFingerprint,
+      locator: input.evidence.locator,
+      processorId: input.provenance.processorId,
+      processorVersion: input.provenance.processorVersion,
+      extractionRuleId: input.provenance.extractionRuleId,
+      extractionRuleVersion: input.provenance.extractionRuleVersion,
+      knowledgeExtractorId: 'deterministic-knowledge-extractors',
+      knowledgeExtractorVersion: 1 as const,
+    });
+    const ownerKey = createKnowledgeEntityKey(
+      'package',
+      source.id,
+      firstDocument.path,
+      '@workspace/service',
+    );
+    const dependencyKey = createKnowledgeEntityKey(
+      'package',
+      source.id,
+      firstDocument.path,
+      'lodash',
+    );
+    const ownerCandidate = {
+      key: ownerKey,
+      type: 'package' as const,
+      identityScope: firstDocument.path,
+      name: '@workspace/service',
+      sourceEvidenceIds: [ownerEvidence.evidence.id],
+      provenance: [knowledgeProvenance(ownerEvidence)],
+      lifecycleStatus: 'observed' as const,
+    };
+    const dependencyCandidate = {
+      key: dependencyKey,
+      type: 'package' as const,
+      identityScope: firstDocument.path,
+      name: 'lodash',
+      sourceEvidenceIds: [dependencyEvidence.evidence.id],
+      provenance: [knowledgeProvenance(dependencyEvidence)],
+      lifecycleStatus: 'observed' as const,
+    };
+    const relationCandidate = {
+      key: `DEPENDS_ON:${ownerKey}->${dependencyKey}`,
+      type: 'DEPENDS_ON' as const,
+      sourceEntityKey: ownerKey,
+      targetEntityKey: dependencyKey,
+      sourceEvidenceIds: [dependencyEvidence.evidence.id],
+      provenance: [knowledgeProvenance(dependencyEvidence)],
+      confidence: 1,
+      lifecycleStatus: 'related' as const,
+    };
+    const firstEvent: KnowledgeCandidateEvent = {
+      eventId: 'knowledge-candidates-one',
+      eventType: 'KnowledgeCandidatesSubmitted',
+      eventVersion: 1,
+      occurredAt: '2026-10-05T08:00:02.000Z',
+      producer: 'workspace-brain-knowledge-worker',
+      correlationId: 'knowledge-correlation-one',
+      idempotencyKey: 'knowledge-candidates-one',
+      partitionKey: source.id,
+      payload: {
+        sourceId: source.id,
+        documentId: firstDocument.id,
+        documentVersionId: firstProcessed.documentVersion.id,
+        entities: [ownerCandidate, dependencyCandidate],
+        relationships: [relationCandidate],
+      },
+    };
+    const missingEntityKey = createKnowledgeEntityKey(
+      'package',
+      source.id,
+      firstDocument.path,
+      'missing',
+    );
+    await expect(
+      catalogue.applyKnowledgeCandidates({
+        ...firstEvent,
+        eventId: 'knowledge-orphan-before-acceptance',
+        idempotencyKey: 'knowledge-orphan-before-acceptance',
+        payload: {
+          ...firstEvent.payload,
+          entities: [],
+          relationships: [
+            {
+              ...relationCandidate,
+              key: `REFERENCES:${ownerKey}->${missingEntityKey}`,
+              type: 'REFERENCES',
+              targetEntityKey: missingEntityKey,
+            },
+          ],
+        },
+      }),
+    ).rejects.toThrow('references an unknown entity');
+    await catalogue.applyKnowledgeCandidates(firstEvent);
+    await catalogue.applyKnowledgeCandidates(firstEvent);
+
+    const model = (await catalogue.listKnowledgeModels({ limit: 10 })).items[0];
+    if (model === undefined) {
+      throw new Error('Knowledge Model was not created for the workspace');
+    }
+    const firstPublication = (
+      await catalogue.listKnowledgePublications({
+        knowledgeModelId: model.id,
+        limit: 10,
+      })
+    ).items[0];
+    if (firstPublication === undefined) {
+      throw new Error('Knowledge Model publication was not created');
+    }
+    expect(firstPublication).toMatchObject({
+      version: 1,
+      status: 'published',
+      schemaVersion: 1,
+      entityVersionIds: expect.arrayContaining([
+        expect.any(String),
+        expect.any(String),
+      ]),
+      relationshipVersionIds: [expect.any(String)],
+    });
+    expect(
+      (await catalogue.listKnowledgeRelationships({ limit: 10 })).items,
+    ).toMatchObject([
+      {
+        type: 'DEPENDS_ON',
+        confidence: 1,
+        sourceEvidenceIds: [dependencyEvidence.evidence.id],
+        provenance: [
+          {
+            evidenceId: dependencyEvidence.evidence.id,
+            documentVersionId: firstProcessed.documentVersion.id,
+          },
+        ],
+      },
+    ]);
+    expect(
+      (
+        await catalogue.listKnowledgeEntities({
+          publicationId: firstPublication.id,
+          limit: 10,
+        })
+      ).items,
+    ).toHaveLength(2);
+    const unrelatedModelId = createKnowledgeModelId();
+    expect(
+      (
+        await catalogue.listKnowledgeEntities({
+          publicationId: firstPublication.id,
+          knowledgeModelId: unrelatedModelId,
+          limit: 10,
+        })
+      ).items,
+    ).toEqual([]);
+    expect(
+      (
+        await catalogue.listKnowledgeRelationships({
+          publicationId: firstPublication.id,
+          knowledgeModelId: unrelatedModelId,
+          limit: 10,
+        })
+      ).items,
+    ).toEqual([]);
+
+    const secondProcessed = await processPackage(
+      secondDocument,
+      secondDocumentContent,
+      '2026-10-05T08:00:03.000Z',
+      'knowledge-processing-two',
+    );
+    const secondInputs = await catalogue.listKnowledgeInputEvidence(
+      secondProcessed.documentVersion.id,
+    );
+    const secondOwnerEvidence = secondInputs.find(
+      ({ evidence }) => evidence.key === 'json:/name',
+    );
+    const secondDependencyEvidence = secondInputs.find(
+      ({ evidence }) => evidence.key === 'json:/dependencies/lodash',
+    );
+    if (
+      secondOwnerEvidence === undefined ||
+      secondDependencyEvidence === undefined
+    ) {
+      throw new Error('Second package evidence fixture was not persisted');
+    }
+    const secondEvent: KnowledgeCandidateEvent = {
+      ...firstEvent,
+      eventId: 'knowledge-candidates-two',
+      occurredAt: '2026-10-05T08:00:04.000Z',
+      correlationId: 'knowledge-correlation-two',
+      idempotencyKey: 'knowledge-candidates-two',
+      payload: {
+        sourceId: source.id,
+        documentId: secondDocument.id,
+        documentVersionId: secondProcessed.documentVersion.id,
+        entities: [
+          {
+            ...ownerCandidate,
+            sourceEvidenceIds: [secondOwnerEvidence.evidence.id],
+            provenance: [knowledgeProvenance(secondOwnerEvidence)],
+          },
+          {
+            ...dependencyCandidate,
+            sourceEvidenceIds: [secondDependencyEvidence.evidence.id],
+            provenance: [knowledgeProvenance(secondDependencyEvidence)],
+          },
+        ],
+        relationships: [
+          {
+            ...relationCandidate,
+            sourceEvidenceIds: [secondDependencyEvidence.evidence.id],
+            provenance: [knowledgeProvenance(secondDependencyEvidence)],
+          },
+        ],
+      },
+    };
+    await catalogue.applyKnowledgeCandidates(secondEvent);
+    const publications = (
+      await catalogue.listKnowledgePublications({
+        knowledgeModelId: model.id,
+        limit: 10,
+      })
+    ).items.sort((left, right) => left.version - right.version);
+    expect(publications.map(({ version }) => version)).toEqual([1, 2]);
+    expect(
+      (await catalogue.listKnowledgeModels({ limit: 10 })).items[0]
+        ?.latestPublicationVersion,
+    ).toBe(2);
+    const currentOwner = (
+      await catalogue.listKnowledgeEntities({
+        knowledgeModelId: model.id,
+        type: 'package',
+        limit: 10,
+      })
+    ).items.find(({ name }) => name === '@workspace/service');
+    expect(currentOwner?.sourceEvidenceIds).toHaveLength(2);
+    const currentRelationship = (
+      await catalogue.listKnowledgeRelationships({
+        knowledgeModelId: model.id,
+        type: 'DEPENDS_ON',
+        limit: 10,
+      })
+    ).items[0];
+    expect(currentRelationship?.sourceEvidenceIds).toEqual(
+      expect.arrayContaining([
+        dependencyEvidence.evidence.id,
+        secondDependencyEvidence.evidence.id,
+      ]),
+    );
+    const secondPublication = publications[1];
+    if (secondPublication === undefined) {
+      throw new Error('Second Knowledge Model publication was not created');
+    }
+    expect(secondPublication.contentHash).not.toBe(
+      firstPublication.contentHash,
+    );
+    const hashEntities = (
+      await catalogue.listKnowledgeEntities({
+        knowledgeModelId: model.id,
+        limit: 10,
+      })
+    ).items.filter(
+      ({ lifecycleStatus }) =>
+        lifecycleStatus !== 'superseded' && lifecycleStatus !== 'rejected',
+    );
+    const hashRelationships = (
+      await catalogue.listKnowledgeRelationships({
+        knowledgeModelId: model.id,
+        limit: 10,
+      })
+    ).items.filter(
+      ({ lifecycleStatus }) =>
+        lifecycleStatus !== 'superseded' && lifecycleStatus !== 'rejected',
+    );
+    const canonicalHash = createKnowledgePublicationContentHash(
+      hashEntities,
+      hashRelationships,
+    );
+    expect(canonicalHash).toBe(secondPublication.contentHash);
+    expect(
+      createKnowledgePublicationContentHash(
+        [...hashEntities].reverse(),
+        [...hashRelationships].reverse(),
+      ),
+    ).toBe(canonicalHash);
+    const entitySnapshotChange = hashEntities.map((entity, index) =>
+      index === 0 ? { ...entity, name: `${entity.name} changed` } : entity,
+    );
+    expect(
+      createKnowledgePublicationContentHash(
+        entitySnapshotChange,
+        hashRelationships,
+      ),
+    ).not.toBe(canonicalHash);
+    const relationshipSnapshotChange = hashRelationships.map(
+      (relationship) => ({
+        ...relationship,
+        confidence: relationship.confidence === 1 ? 0.9 : 1,
+      }),
+    );
+    expect(
+      createKnowledgePublicationContentHash(
+        hashEntities,
+        relationshipSnapshotChange,
+      ),
+    ).not.toBe(canonicalHash);
+    const reorderedSecondEvent: KnowledgeCandidateEvent = {
+      ...secondEvent,
+      eventId: 'knowledge-candidates-two-reordered',
+      idempotencyKey: 'knowledge-candidates-two-reordered',
+      payload: {
+        ...secondEvent.payload,
+        entities: [...secondEvent.payload.entities].reverse(),
+        relationships: [...secondEvent.payload.relationships].reverse(),
+      },
+    };
+    await catalogue.applyKnowledgeCandidates(reorderedSecondEvent);
+    expect(
+      (
+        await catalogue.listKnowledgePublications({
+          knowledgeModelId: model.id,
+          limit: 10,
+        })
+      ).items,
+    ).toHaveLength(2);
+    expect(
+      (
+        await catalogue.listKnowledgePublications({
+          knowledgeModelId: model.id,
+          limit: 10,
+        })
+      ).items.find(({ version }) => version === 2)?.contentHash,
+    ).toBe(secondPublication.contentHash);
+
+    const modifiedFirstScan = await catalogue.persistScan(
+      source.id,
+      [],
+      [
+        {
+          path: firstDocument.path,
+          filename: firstDocument.filename,
+          extension: firstDocument.extension,
+          sizeBytes: Buffer.byteLength(secondContent),
+          modifiedAt: '2026-10-05T08:00:05.000Z',
+          fingerprint: secondFingerprint,
+          discoveryMethod: 'filesystem',
+        },
+        {
+          path: secondDocument.path,
+          filename: secondDocument.filename,
+          extension: secondDocument.extension,
+          sizeBytes: Buffer.byteLength(secondDocumentContent),
+          modifiedAt: '2026-10-05T08:00:00.000Z',
+          fingerprint: secondDocumentFingerprint,
+          discoveryMethod: 'filesystem',
+        },
+      ],
+      '2026-10-05T08:00:05.000Z',
+      'knowledge-scan-modified',
+      10,
+    );
+    const currentFirstDocument = modifiedFirstScan.documents.find(
+      ({ id }) => id === firstDocument.id,
+    );
+    if (currentFirstDocument === undefined) {
+      throw new Error('Modified knowledge document was not retained');
+    }
+    const modifiedFirstProcessed = await processPackage(
+      currentFirstDocument,
+      secondContent,
+      '2026-10-05T08:00:06.000Z',
+      'knowledge-processing-modified',
+    );
+    const modifiedFirstInputs = await catalogue.listKnowledgeInputEvidence(
+      modifiedFirstProcessed.documentVersion.id,
+    );
+    const modifiedOwnerEvidence = modifiedFirstInputs.find(
+      ({ evidence }) => evidence.key === 'json:/name',
+    );
+    if (modifiedOwnerEvidence === undefined) {
+      throw new Error('Modified package owner evidence was not persisted');
+    }
+    const modifiedEvent: KnowledgeCandidateEvent = {
+      ...firstEvent,
+      eventId: 'knowledge-candidates-modified',
+      occurredAt: '2026-10-05T08:00:07.000Z',
+      correlationId: 'knowledge-correlation-modified',
+      idempotencyKey: 'knowledge-candidates-modified',
+      payload: {
+        sourceId: source.id,
+        documentId: firstDocument.id,
+        documentVersionId: modifiedFirstProcessed.documentVersion.id,
+        entities: [
+          {
+            ...ownerCandidate,
+            sourceEvidenceIds: [modifiedOwnerEvidence.evidence.id],
+            provenance: [knowledgeProvenance(modifiedOwnerEvidence)],
+          },
+        ],
+        relationships: [],
+      },
+    };
+    await catalogue.applyKnowledgeCandidates(modifiedEvent);
+    const beforeStaleContentCandidate = (
+      await catalogue.listKnowledgePublications({
+        knowledgeModelId: model.id,
+        limit: 10,
+      })
+    ).items;
+    await catalogue.applyKnowledgeCandidates({
+      ...firstEvent,
+      eventId: 'knowledge-candidates-stale-old-content',
+      occurredAt: '2026-10-05T08:00:07.500Z',
+      correlationId: 'knowledge-correlation-stale-old-content',
+      idempotencyKey: 'knowledge-candidates-stale-old-content',
+    });
+    expect(
+      (
+        await catalogue.listKnowledgePublications({
+          knowledgeModelId: model.id,
+          limit: 10,
+        })
+      ).items,
+    ).toEqual(beforeStaleContentCandidate);
+    const thirdPublication = (
+      await catalogue.listKnowledgePublications({
+        knowledgeModelId: model.id,
+        limit: 10,
+      })
+    ).items.find(({ version }) => version === 3);
+    if (thirdPublication === undefined) {
+      throw new Error('Reconciled Knowledge Model publication was not created');
+    }
+    expect(thirdPublication.contentHash).not.toBe(
+      secondPublication.contentHash,
+    );
+    expect(
+      (
+        await catalogue.listKnowledgeRelationships({
+          publicationId: thirdPublication.id,
+          limit: 10,
+        })
+      ).items,
+    ).toHaveLength(1);
+    expect(
+      (
+        await catalogue.listKnowledgeRelationships({
+          publicationId: thirdPublication.id,
+          type: 'DEPENDS_ON',
+          limit: 10,
+        })
+      ).items[0]?.sourceEvidenceIds,
+    ).toEqual([secondDependencyEvidence.evidence.id]);
+    await catalogue.applyKnowledgeCandidates(modifiedEvent);
+    expect(
+      (
+        await catalogue.listKnowledgePublications({
+          knowledgeModelId: model.id,
+          limit: 10,
+        })
+      ).items,
+    ).toHaveLength(3);
+
+    const removalScan = await catalogue.persistScan(
+      source.id,
+      [],
+      [
+        {
+          path: firstDocument.path,
+          filename: firstDocument.filename,
+          extension: firstDocument.extension,
+          sizeBytes: Buffer.byteLength(secondContent),
+          modifiedAt: '2026-10-05T08:00:05.000Z',
+          fingerprint: secondFingerprint,
+          discoveryMethod: 'filesystem',
+        },
+      ],
+      '2026-10-05T08:00:08.000Z',
+      'knowledge-scan-removed',
+      10,
+    );
+    expect(removalScan.documentChanges.map(({ change }) => change)).toContain(
+      'removed',
+    );
+    const fourthPublication = (
+      await catalogue.listKnowledgePublications({
+        knowledgeModelId: model.id,
+        limit: 10,
+      })
+    ).items.find(({ version }) => version === 4);
+    if (fourthPublication === undefined) {
+      throw new Error('Document removal did not publish reconciled knowledge');
+    }
+    expect(fourthPublication.contentHash).not.toBe(
+      thirdPublication.contentHash,
+    );
+    expect(
+      (
+        await catalogue.listKnowledgeEntities({
+          publicationId: fourthPublication.id,
+          limit: 10,
+        })
+      ).items.map(({ name }) => name),
+    ).toEqual(['@workspace/service']);
+    expect(
+      (
+        await catalogue.listKnowledgeRelationships({
+          publicationId: fourthPublication.id,
+          limit: 10,
+        })
+      ).items,
+    ).toEqual([]);
+    expect(
+      (
+        await catalogue.listKnowledgeRelationships({
+          publicationId: firstPublication.id,
+          limit: 10,
+        })
+      ).items,
+    ).toHaveLength(1);
+    expect(
+      (
+        await catalogue.listKnowledgePublications({
+          knowledgeModelId: model.id,
+          limit: 10,
+        })
+      ).items.find(({ version }) => version === 1)?.contentHash,
+    ).toBe(firstPublication.contentHash);
+    const latestModel = (await catalogue.listKnowledgeModels({ limit: 10 }))
+      .items[0];
+    expect(latestModel?.latestPublicationVersion).toBe(4);
+    const retainedOwner = (
+      await catalogue.listKnowledgeEntities({
+        publicationId: firstPublication.id,
+        type: 'package',
+        limit: 10,
+      })
+    ).items.find(({ name }) => name === '@workspace/service');
+    expect(retainedOwner?.sourceEvidenceIds).toEqual([
+      ownerEvidence.evidence.id,
+    ]);
+
+    const historicalRelationship = (
+      await catalogue.listKnowledgeRelationships({
+        publicationId: thirdPublication.id,
+        limit: 10,
+      })
+    ).items[0];
+    const historicalDependency = (
+      await catalogue.listKnowledgeEntities({
+        publicationId: thirdPublication.id,
+        limit: 10,
+      })
+    ).items.find(({ name }) => name === 'lodash');
+    const supersededRelationship = (
+      await catalogue.listKnowledgeRelationships({
+        knowledgeModelId: model.id,
+        type: 'DEPENDS_ON',
+        limit: 10,
+      })
+    ).items[0];
+    const supersededDependency = (
+      await catalogue.listKnowledgeEntities({
+        knowledgeModelId: model.id,
+        type: 'package',
+        limit: 10,
+      })
+    ).items.find(({ id }) => id === historicalDependency?.id);
+    expect(supersededRelationship?.lifecycleStatus).toBe('superseded');
+    expect(supersededDependency?.lifecycleStatus).toBe('superseded');
+    if (
+      historicalRelationship === undefined ||
+      historicalDependency === undefined ||
+      supersededRelationship === undefined ||
+      supersededDependency === undefined
+    ) {
+      throw new Error('Historical knowledge required for reactivation missing');
+    }
+
+    const restoredScan = await catalogue.persistScan(
+      source.id,
+      [],
+      [
+        {
+          path: firstDocument.path,
+          filename: firstDocument.filename,
+          extension: firstDocument.extension,
+          sizeBytes: Buffer.byteLength(secondContent),
+          modifiedAt: '2026-10-05T08:00:09.000Z',
+          fingerprint: secondFingerprint,
+          discoveryMethod: 'filesystem',
+        },
+        {
+          path: secondDocument.path,
+          filename: secondDocument.filename,
+          extension: secondDocument.extension,
+          sizeBytes: Buffer.byteLength(secondDocumentContent),
+          modifiedAt: '2026-10-05T08:00:09.000Z',
+          fingerprint: secondDocumentFingerprint,
+          discoveryMethod: 'filesystem',
+        },
+      ],
+      '2026-10-05T08:00:09.000Z',
+      'knowledge-scan-restored',
+      10,
+    );
+    const restoredDocument = restoredScan.documents.find(
+      ({ id }) => id === secondDocument.id,
+    );
+    if (restoredDocument === undefined) {
+      throw new Error('Restored knowledge document was not persisted');
+    }
+    const publicationCountBeforeRestoredProcessing = (
+      await catalogue.listKnowledgePublications({
+        knowledgeModelId: model.id,
+        limit: 10,
+      })
+    ).items;
+    await catalogue.applyKnowledgeCandidates({
+      ...secondEvent,
+      eventId: 'knowledge-candidates-after-removal-before-processing',
+      occurredAt: '2026-10-05T08:00:09.500Z',
+      correlationId: 'knowledge-correlation-after-removal-before-processing',
+      idempotencyKey: 'knowledge-candidates-after-removal-before-processing',
+    });
+    expect(
+      (
+        await catalogue.listKnowledgePublications({
+          knowledgeModelId: model.id,
+          limit: 10,
+        })
+      ).items,
+    ).toEqual(publicationCountBeforeRestoredProcessing);
+    expect(
+      (
+        await catalogue.listKnowledgeRelationships({
+          knowledgeModelId: model.id,
+          type: 'DEPENDS_ON',
+          limit: 10,
+        })
+      ).items[0]?.lifecycleStatus,
+    ).toBe('superseded');
+    const restoredProcessing = await processPackage(
+      restoredDocument,
+      secondDocumentContent,
+      '2026-10-05T08:00:10.000Z',
+      'knowledge-processing-restored-v2',
+      {
+        processorVersion: 2,
+        extractionRuleVersion: 2,
+        dependencyName: 'Lodash',
+      },
+    );
+    const restoredInputs = await catalogue.listKnowledgeInputEvidence(
+      restoredProcessing.documentVersion.id,
+    );
+    const restoredOwnerEvidence = restoredInputs.find(
+      ({ evidence }) => evidence.key === 'json:/name',
+    );
+    const restoredDependencyEvidence = restoredInputs.find(
+      ({ evidence }) => evidence.key === 'json:/dependencies/Lodash',
+    );
+    if (
+      restoredOwnerEvidence === undefined ||
+      restoredDependencyEvidence === undefined
+    ) {
+      throw new Error('Restored knowledge evidence was not persisted');
+    }
+    const restoredEvent: KnowledgeCandidateEvent = {
+      ...secondEvent,
+      eventId: 'knowledge-candidates-restored-v2',
+      occurredAt: '2026-10-05T08:00:11.000Z',
+      correlationId: 'knowledge-correlation-restored-v2',
+      idempotencyKey: 'knowledge-candidates-restored-v2',
+      payload: {
+        sourceId: source.id,
+        documentId: restoredDocument.id,
+        documentVersionId: restoredProcessing.documentVersion.id,
+        entities: [
+          {
+            ...ownerCandidate,
+            sourceEvidenceIds: [restoredOwnerEvidence.evidence.id],
+            provenance: [knowledgeProvenance(restoredOwnerEvidence)],
+          },
+          {
+            ...dependencyCandidate,
+            name: 'Lodash',
+            sourceEvidenceIds: [restoredDependencyEvidence.evidence.id],
+            provenance: [knowledgeProvenance(restoredDependencyEvidence)],
+          },
+        ],
+        relationships: [
+          {
+            ...relationCandidate,
+            sourceEvidenceIds: [restoredDependencyEvidence.evidence.id],
+            provenance: [knowledgeProvenance(restoredDependencyEvidence)],
+          },
+        ],
+      },
+    };
+    const publicationsBeforeFailedReactivation = (
+      await catalogue.listKnowledgePublications({
+        knowledgeModelId: model.id,
+        limit: 10,
+      })
+    ).items;
+    const outboxBeforeFailedReactivation =
+      await catalogue.listPendingDiscoveryEvents(100);
+    const missingReactivationEntityKey = createKnowledgeEntityKey(
+      'package',
+      source.id,
+      firstDocument.path,
+      'missing-reactivation-target',
+    );
+    await expect(
+      catalogue.applyKnowledgeCandidates({
+        ...restoredEvent,
+        eventId: 'knowledge-candidates-restoration-rollback',
+        idempotencyKey: 'knowledge-candidates-restoration-rollback',
+        payload: {
+          ...restoredEvent.payload,
+          relationships: [
+            {
+              ...relationCandidate,
+              key: `REFERENCES:${ownerKey}->${missingReactivationEntityKey}`,
+              type: 'REFERENCES',
+              targetEntityKey: missingReactivationEntityKey,
+              sourceEvidenceIds: [restoredDependencyEvidence.evidence.id],
+              provenance: [knowledgeProvenance(restoredDependencyEvidence)],
+            },
+          ],
+        },
+      }),
+    ).rejects.toThrow('references an unknown entity');
+    expect(
+      (
+        await catalogue.listKnowledgeEntities({
+          knowledgeModelId: model.id,
+          type: 'package',
+          limit: 10,
+        })
+      ).items.find(({ id }) => id === supersededDependency.id),
+    ).toEqual(supersededDependency);
+    expect(
+      (
+        await catalogue.listKnowledgeRelationships({
+          knowledgeModelId: model.id,
+          type: 'DEPENDS_ON',
+          limit: 10,
+        })
+      ).items[0],
+    ).toEqual(supersededRelationship);
+    expect(
+      (
+        await catalogue.listKnowledgePublications({
+          knowledgeModelId: model.id,
+          limit: 10,
+        })
+      ).items,
+    ).toEqual(publicationsBeforeFailedReactivation);
+    expect(await catalogue.listPendingDiscoveryEvents(100)).toEqual(
+      outboxBeforeFailedReactivation,
+    );
+    await catalogue.applyKnowledgeCandidates(restoredEvent);
+    const reactivatedEntity = (
+      await catalogue.listKnowledgeEntities({
+        knowledgeModelId: model.id,
+        type: 'package',
+        limit: 10,
+      })
+    ).items.find(({ id }) => id === supersededDependency.id);
+    const reactivatedRelationship = (
+      await catalogue.listKnowledgeRelationships({
+        knowledgeModelId: model.id,
+        type: 'DEPENDS_ON',
+        limit: 10,
+      })
+    ).items[0];
+    expect(reactivatedEntity).toMatchObject({
+      id: supersededDependency.id,
+      name: 'Lodash',
+      lifecycleStatus: 'observed',
+    });
+    expect(reactivatedEntity?.currentVersionId).not.toBe(
+      supersededDependency.currentVersionId,
+    );
+    expect(reactivatedRelationship).toMatchObject({
+      id: supersededRelationship.id,
+      lifecycleStatus: 'related',
+    });
+    expect(reactivatedRelationship?.currentVersionId).not.toBe(
+      supersededRelationship.currentVersionId,
+    );
+    expect(await catalogue.getKnowledgeEntity(supersededDependency.id)).toEqual(
+      reactivatedEntity,
+    );
+    expect(
+      await catalogue.getKnowledgeRelationship(supersededRelationship.id),
+    ).toEqual(reactivatedRelationship);
+    const fifthPublication = (
+      await catalogue.listKnowledgePublications({
+        knowledgeModelId: model.id,
+        limit: 10,
+      })
+    ).items.find(({ version }) => version === 5);
+    if (fifthPublication === undefined) {
+      throw new Error('Reactivation did not publish reconciled knowledge');
+    }
+    expect(fifthPublication.contentHash).not.toBe(
+      fourthPublication.contentHash,
+    );
+    const publicationsAfterReactivation = (
+      await catalogue.listKnowledgePublications({
+        knowledgeModelId: model.id,
+        limit: 10,
+      })
+    ).items;
+    for (const historicalPublication of [
+      firstPublication,
+      secondPublication,
+      thirdPublication,
+      fourthPublication,
+    ]) {
+      expect(
+        publicationsAfterReactivation.find(
+          ({ id }) => id === historicalPublication.id,
+        ),
+      ).toEqual(historicalPublication);
+    }
+    expect(
+      (
+        await catalogue.listKnowledgeEntities({
+          publicationId: fifthPublication.id,
+          limit: 10,
+        })
+      ).items.find(({ id }) => id === supersededDependency.id),
+    ).toEqual(reactivatedEntity);
+    expect(
+      (
+        await catalogue.listKnowledgeRelationships({
+          publicationId: fifthPublication.id,
+          limit: 10,
+        })
+      ).items.find(({ id }) => id === supersededRelationship.id),
+    ).toEqual(reactivatedRelationship);
+    expect(
+      (
+        await catalogue.listKnowledgeEntities({
+          publicationId: thirdPublication.id,
+          limit: 10,
+        })
+      ).items.find(({ id }) => id === historicalDependency.id),
+    ).toMatchObject({ name: 'lodash', lifecycleStatus: 'observed' });
+    expect(
+      (
+        await catalogue.listKnowledgeRelationships({
+          publicationId: thirdPublication.id,
+          limit: 10,
+        })
+      ).items,
+    ).toEqual([historicalRelationship]);
+    expect(
+      (
+        await catalogue.listKnowledgeRelationships({
+          publicationId: fourthPublication.id,
+          limit: 10,
+        })
+      ).items,
+    ).toEqual([]);
+
+    const publicationsBeforeReplay = (
+      await catalogue.listKnowledgePublications({
+        knowledgeModelId: model.id,
+        limit: 10,
+      })
+    ).items;
+    const outboxBeforeReplay = await catalogue.listPendingDiscoveryEvents(100);
+    await catalogue.applyKnowledgeCandidates(restoredEvent);
+    const staleCandidateEvent: KnowledgeCandidateEvent = {
+      ...secondEvent,
+      eventId: 'knowledge-candidates-stale-same-fingerprint',
+      occurredAt: '2026-10-05T08:00:12.000Z',
+      correlationId: 'knowledge-correlation-stale-same-fingerprint',
+      idempotencyKey: 'knowledge-candidates-stale-same-fingerprint',
+    };
+    await catalogue.applyKnowledgeCandidates(staleCandidateEvent);
+    expect(
+      (
+        await catalogue.listKnowledgePublications({
+          knowledgeModelId: model.id,
+          limit: 10,
+        })
+      ).items,
+    ).toEqual(publicationsBeforeReplay);
+    expect(await catalogue.listPendingDiscoveryEvents(100)).toEqual(
+      outboxBeforeReplay,
+    );
+    expect(
+      (
+        await catalogue.listKnowledgeEntities({
+          knowledgeModelId: model.id,
+          type: 'package',
+          limit: 10,
+        })
+      ).items.find(({ id }) => id === supersededDependency.id),
+    ).toMatchObject({
+      name: 'Lodash',
+      lifecycleStatus: 'observed',
+      sourceEvidenceIds: [restoredDependencyEvidence.evidence.id],
+      provenance: [
+        expect.objectContaining({
+          documentVersionId: restoredProcessing.documentVersion.id,
+        }),
+      ],
+    });
+    expect(
+      (
+        await catalogue.listKnowledgeRelationships({
+          knowledgeModelId: model.id,
+          type: 'DEPENDS_ON',
+          limit: 10,
+        })
+      ).items[0],
+    ).toMatchObject({
+      id: supersededRelationship.id,
+      lifecycleStatus: 'related',
+      sourceEvidenceIds: [restoredDependencyEvidence.evidence.id],
+      provenance: [
+        expect.objectContaining({
+          documentVersionId: restoredProcessing.documentVersion.id,
+        }),
+      ],
+    });
+    expect(
+      (
+        await catalogue.listKnowledgePublications({
+          knowledgeModelId: model.id,
+          limit: 10,
+        })
+      ).items.find(({ version }) => version === 3)?.contentHash,
+    ).toBe(thirdPublication.contentHash);
+
+    const invalidEvent = (
+      eventId: string,
+      entities: readonly unknown[],
+      relationships: readonly unknown[],
+    ): KnowledgeCandidateEvent =>
+      ({
+        ...firstEvent,
+        eventId,
+        idempotencyKey: eventId,
+        payload: {
+          sourceId: source.id,
+          documentId: firstDocument.id,
+          documentVersionId: firstProcessed.documentVersion.id,
+          entities,
+          relationships,
+        },
+      }) as unknown as KnowledgeCandidateEvent;
+    await expect(
+      catalogue.applyKnowledgeCandidates(
+        invalidEvent(
+          'knowledge-invalid-type',
+          [],
+          [{ ...relationCandidate, type: 'OWNS' }],
+        ),
+      ),
+    ).rejects.toThrow('Invalid knowledge candidate submission');
+    await expect(
+      catalogue.applyKnowledgeCandidates(
+        invalidEvent(
+          'knowledge-missing-provenance',
+          [{ ...ownerCandidate, provenance: [] }],
+          [],
+        ),
+      ),
+    ).rejects.toThrow('Invalid knowledge candidate submission');
+    await expect(
+      catalogue.applyKnowledgeCandidates(
+        invalidEvent(
+          'knowledge-missing-evidence',
+          [{ ...ownerCandidate, sourceEvidenceIds: [], provenance: [] }],
+          [],
+        ),
+      ),
+    ).rejects.toThrow('Invalid knowledge candidate submission');
+    await expect(
+      catalogue.applyKnowledgeCandidates(
+        invalidEvent(
+          'knowledge-invalid-lifecycle',
+          [{ ...ownerCandidate, lifecycleStatus: 'published' }],
+          [],
+        ),
+      ),
+    ).rejects.toThrow('Invalid knowledge candidate submission');
+    expect(
+      (
+        await catalogue.listKnowledgePublications({
+          knowledgeModelId: model.id,
+          limit: 10,
+        })
+      ).items,
+    ).toHaveLength(5);
+    await catalogue.close();
+
+    const verificationInstance = await DuckDBInstance.create(
+      join(directory, 'catalogue.duckdb'),
+    );
+    const verificationConnection = await verificationInstance.connect();
+    try {
+      const entityVersions = await verificationConnection.runAndReadAll(
+        'SELECT CAST(snapshot_json AS VARCHAR) AS snapshot_json FROM entity_versions WHERE entity_id = $1 ORDER BY version_number',
+        [supersededDependency.id],
+      );
+      const reactivatedSnapshots = entityVersions
+        .getRowObjectsJson()
+        .map((row) => JSON.parse(String(row.snapshot_json)) as unknown)
+        .filter(
+          (snapshot): snapshot is { name: string; lifecycleStatus: string } =>
+            typeof snapshot === 'object' &&
+            snapshot !== null &&
+            'name' in snapshot &&
+            snapshot.name === 'Lodash' &&
+            'lifecycleStatus' in snapshot &&
+            snapshot.lifecycleStatus === 'observed',
+        );
+      expect(reactivatedSnapshots).toHaveLength(1);
+    } finally {
+      verificationConnection.closeSync();
+      verificationInstance.closeSync();
+    }
   });
 });

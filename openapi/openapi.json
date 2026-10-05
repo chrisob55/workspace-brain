@@ -364,6 +364,427 @@
           }
         }
       }
+    },
+    "/api/v1/knowledge/models": {
+      "get": {
+        "operationId": "listKnowledgeModels",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated read-only Knowledge Model collection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KnowledgeModelPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid pagination parameters",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/knowledge/models/{modelId}": {
+      "get": {
+        "operationId": "getKnowledgeModel",
+        "parameters": [
+          {
+            "name": "modelId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "ulid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Knowledge Model metadata",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KnowledgeModel"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid Knowledge Model ID",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Knowledge Model was not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/knowledge/entities": {
+      "get": {
+        "operationId": "listKnowledgeEntities",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            }
+          },
+          {
+            "name": "knowledgeModelId",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "ulid"
+            }
+          },
+          {
+            "name": "publicationId",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "ulid"
+            }
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "schema": {
+              "enum": ["package", "container", "api", "module"]
+            }
+          },
+          {
+            "name": "lifecycleStatus",
+            "in": "query",
+            "schema": {
+              "enum": [
+                "observed",
+                "verified",
+                "established",
+                "rejected",
+                "superseded"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated read-only knowledge entity collection; publicationId selects an immutable snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KnowledgeEntityPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid filters or pagination parameters",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/knowledge/entities/{entityId}": {
+      "get": {
+        "operationId": "getKnowledgeEntity",
+        "parameters": [
+          {
+            "name": "entityId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "ulid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current knowledge entity with evidence and provenance",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KnowledgeEntity"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid knowledge entity ID",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Knowledge entity was not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/knowledge/relationships": {
+      "get": {
+        "operationId": "listKnowledgeRelationships",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            }
+          },
+          {
+            "name": "knowledgeModelId",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "ulid"
+            }
+          },
+          {
+            "name": "publicationId",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "ulid"
+            }
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "schema": {
+              "enum": [
+                "CONTAINS",
+                "BELONGS_TO",
+                "REFERENCES",
+                "DOCUMENTS",
+                "DEPENDS_ON",
+                "USES",
+                "IMPLEMENTS",
+                "EXPOSES",
+                "CONSUMES",
+                "CLASSIFIED_AS",
+                "DERIVED_FROM"
+              ]
+            }
+          },
+          {
+            "name": "lifecycleStatus",
+            "in": "query",
+            "schema": {
+              "enum": [
+                "observed",
+                "related",
+                "verified",
+                "established",
+                "rejected",
+                "superseded"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated read-only knowledge relationship collection; publicationId selects an immutable snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KnowledgeRelationshipPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid filters or pagination parameters",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/knowledge/relationships/{relationshipId}": {
+      "get": {
+        "operationId": "getKnowledgeRelationship",
+        "parameters": [
+          {
+            "name": "relationshipId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "ulid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current evidence-backed knowledge relationship",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KnowledgeRelationship"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid knowledge relationship ID",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Knowledge relationship was not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/knowledge/publications": {
+      "get": {
+        "operationId": "listKnowledgePublications",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            }
+          },
+          {
+            "name": "knowledgeModelId",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "ulid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated immutable Knowledge Model publication metadata",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KnowledgePublicationPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid filter or pagination parameters",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -851,6 +1272,380 @@
                 "type": "integer"
               }
             }
+          }
+        }
+      },
+      "KnowledgeModel": {
+        "type": "object",
+        "required": [
+          "id",
+          "workspaceId",
+          "name",
+          "schemaVersion",
+          "latestPublicationVersion",
+          "createdAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "ulid"
+          },
+          "workspaceId": {
+            "type": "string",
+            "format": "ulid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "schemaVersion": {
+            "const": 1
+          },
+          "latestPublicationVersion": {
+            "type": ["integer", "null"],
+            "minimum": 1
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "KnowledgeProvenance": {
+        "type": "object",
+        "required": [
+          "evidenceId",
+          "documentVersionId",
+          "documentId",
+          "sourceId",
+          "documentPath",
+          "contentFingerprint",
+          "locator",
+          "processorId",
+          "processorVersion",
+          "extractionRuleId",
+          "extractionRuleVersion",
+          "knowledgeExtractorId",
+          "knowledgeExtractorVersion"
+        ],
+        "properties": {
+          "evidenceId": {
+            "type": "string",
+            "format": "ulid"
+          },
+          "documentVersionId": {
+            "type": "string",
+            "format": "ulid"
+          },
+          "documentId": {
+            "type": "string",
+            "format": "ulid"
+          },
+          "sourceId": {
+            "type": "string",
+            "format": "ulid"
+          },
+          "documentPath": {
+            "type": "string"
+          },
+          "contentFingerprint": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "locator": {
+            "$ref": "#/components/schemas/EvidenceLocator"
+          },
+          "processorId": {
+            "type": "string"
+          },
+          "processorVersion": {
+            "type": "integer"
+          },
+          "extractionRuleId": {
+            "type": "string"
+          },
+          "extractionRuleVersion": {
+            "type": "integer"
+          },
+          "knowledgeExtractorId": {
+            "type": "string"
+          },
+          "knowledgeExtractorVersion": {
+            "type": "integer"
+          }
+        }
+      },
+      "KnowledgeEntity": {
+        "type": "object",
+        "required": [
+          "id",
+          "knowledgeModelId",
+          "type",
+          "name",
+          "sourceEvidenceIds",
+          "provenance",
+          "lifecycleStatus",
+          "currentVersionId",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "ulid"
+          },
+          "knowledgeModelId": {
+            "type": "string",
+            "format": "ulid"
+          },
+          "type": {
+            "enum": ["package", "container", "api", "module"]
+          },
+          "name": {
+            "type": "string"
+          },
+          "sourceEvidenceIds": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "format": "ulid"
+            }
+          },
+          "provenance": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "$ref": "#/components/schemas/KnowledgeProvenance"
+            }
+          },
+          "lifecycleStatus": {
+            "enum": [
+              "observed",
+              "verified",
+              "established",
+              "rejected",
+              "superseded"
+            ]
+          },
+          "currentVersionId": {
+            "type": "string",
+            "format": "ulid"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "KnowledgeRelationship": {
+        "type": "object",
+        "required": [
+          "id",
+          "knowledgeModelId",
+          "type",
+          "sourceEntityId",
+          "targetEntityId",
+          "sourceEvidenceIds",
+          "provenance",
+          "confidence",
+          "lifecycleStatus",
+          "currentVersionId",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "ulid"
+          },
+          "knowledgeModelId": {
+            "type": "string",
+            "format": "ulid"
+          },
+          "type": {
+            "enum": [
+              "CONTAINS",
+              "BELONGS_TO",
+              "REFERENCES",
+              "DOCUMENTS",
+              "DEPENDS_ON",
+              "USES",
+              "IMPLEMENTS",
+              "EXPOSES",
+              "CONSUMES",
+              "CLASSIFIED_AS",
+              "DERIVED_FROM"
+            ]
+          },
+          "sourceEntityId": {
+            "type": "string",
+            "format": "ulid"
+          },
+          "targetEntityId": {
+            "type": "string",
+            "format": "ulid"
+          },
+          "sourceEvidenceIds": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "format": "ulid"
+            }
+          },
+          "provenance": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "$ref": "#/components/schemas/KnowledgeProvenance"
+            }
+          },
+          "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "lifecycleStatus": {
+            "enum": [
+              "observed",
+              "related",
+              "verified",
+              "established",
+              "rejected",
+              "superseded"
+            ]
+          },
+          "currentVersionId": {
+            "type": "string",
+            "format": "ulid"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "KnowledgePublication": {
+        "type": "object",
+        "required": [
+          "id",
+          "knowledgeModelId",
+          "version",
+          "schemaVersion",
+          "status",
+          "contentHash",
+          "entityVersionIds",
+          "relationshipVersionIds",
+          "publishedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "ulid"
+          },
+          "knowledgeModelId": {
+            "type": "string",
+            "format": "ulid"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "schemaVersion": {
+            "const": 1
+          },
+          "status": {
+            "const": "published"
+          },
+          "contentHash": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "entityVersionIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "ulid"
+            }
+          },
+          "relationshipVersionIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "ulid"
+            }
+          },
+          "publishedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "KnowledgeModelPage": {
+        "type": "object",
+        "required": ["items", "nextCursor"],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/KnowledgeModel"
+            }
+          },
+          "nextCursor": {
+            "type": ["string", "null"]
+          }
+        }
+      },
+      "KnowledgeEntityPage": {
+        "type": "object",
+        "required": ["items", "nextCursor"],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/KnowledgeEntity"
+            }
+          },
+          "nextCursor": {
+            "type": ["string", "null"]
+          }
+        }
+      },
+      "KnowledgeRelationshipPage": {
+        "type": "object",
+        "required": ["items", "nextCursor"],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/KnowledgeRelationship"
+            }
+          },
+          "nextCursor": {
+            "type": ["string", "null"]
+          }
+        }
+      },
+      "KnowledgePublicationPage": {
+        "type": "object",
+        "required": ["items", "nextCursor"],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/KnowledgePublication"
+            }
+          },
+          "nextCursor": {
+            "type": ["string", "null"]
           }
         }
       },

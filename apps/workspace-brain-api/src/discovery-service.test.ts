@@ -286,6 +286,32 @@ describe('DiscoveryService', () => {
     ).rejects.toThrow('source does not match event ownership');
     expect(calls).toEqual([]);
   });
+
+  it('accepts knowledge candidates only from the source that owns the event', async () => {
+    const calls: string[] = [];
+    const service = createDiscoveryService(
+      createCatalogue(source, calls),
+      createPublisher([], calls),
+    );
+    const event: DiscoveryEvent = {
+      eventId: 'knowledge-candidate-event',
+      eventType: 'KnowledgeCandidatesSubmitted',
+      eventVersion: 1,
+      occurredAt: '2026-10-05T08:00:00.000Z',
+      producer: 'workspace-brain-knowledge-worker',
+      correlationId: 'knowledge-correlation',
+      idempotencyKey: 'knowledge-candidate-idempotency',
+      partitionKey: sourceId,
+      payload: { sourceId, entities: [], relationships: [] },
+    };
+
+    await service.handle(event);
+    expect(calls).toEqual(['knowledge-candidates']);
+
+    await expect(
+      service.handle({ ...event, partitionKey: createSourceId() }),
+    ).rejects.toThrow('source does not match event ownership');
+  });
 });
 
 function createCatalogue(source: Source, calls: string[]) {
@@ -355,6 +381,9 @@ function createCatalogue(source: Source, calls: string[]) {
         evidence: [],
         duplicate: false,
       };
+    },
+    async applyKnowledgeCandidates() {
+      calls.push('knowledge-candidates');
     },
     async recordScanStarted() {
       calls.push('started');

@@ -10,10 +10,17 @@ import {
 } from 'nats';
 import type { Logger } from 'pino';
 
-import type { DiscoveryEvent } from '@workspace-brain/domain';
+import {
+  discoveryEventSubject,
+  type DiscoveryEvent,
+} from '@workspace-brain/domain';
 
 const streamName = 'WORKSPACE_DISCOVERY';
-const streamSubjects = ['workspace.discovery.>'];
+const streamSubjects = [
+  'workspace.discovery.>',
+  'workspace.processing.>',
+  'workspace.knowledge.>',
+];
 const deadLetterSubject = 'workspace.discovery.dead-letter';
 const maxProcessingAttempts = 5;
 const codec = StringCodec();
@@ -52,9 +59,7 @@ export async function connectNatsDiscoveryBus(
   return {
     async publish(event) {
       await js.publish(
-        `workspace.discovery.${event.eventType
-          .replace(/[A-Z]/g, (letter) => `.${letter.toLowerCase()}`)
-          .replace(/^\./, '')}`,
+        discoveryEventSubject(event.eventType),
         codec.encode(JSON.stringify(event)),
         { msgID: event.idempotencyKey },
       );
@@ -174,6 +179,7 @@ async function ensureConsumer(
     try {
       await manager.consumers.info(streamName, durableName);
       await manager.consumers.update(streamName, durableName, {
+        filter_subject: subject,
         max_deliver: -1,
       });
     } catch (verifyError) {
@@ -188,10 +194,11 @@ async function ensureConsumer(
 
 async function ensureStream(connection: NatsConnection): Promise<void> {
   const manager = await connection.jetstreamManager();
+  let existingSubjects: readonly string[] = [];
   try {
-    await manager.streams.info(streamName);
-    return;
-  } catch {
+    const info = await manager.streams.info(streamName);
+    existingSubjects = info.config.subjects ?? [];
+  } catch (infoError) {
     try {
       await manager.streams.add({
         name: streamName,
@@ -199,16 +206,25 @@ async function ensureStream(connection: NatsConnection): Promise<void> {
         retention: RetentionPolicy.Limits,
         storage: StorageType.File,
       });
+      existingSubjects = streamSubjects;
     } catch (createError) {
       try {
-        await manager.streams.info(streamName);
+        const info = await manager.streams.info(streamName);
+        existingSubjects = info.config.subjects ?? [];
       } catch (verifyError) {
         throw new AggregateError(
-          [createError, verifyError],
+          [infoError, createError, verifyError],
           'Could not create or verify the discovery JetStream stream',
           { cause: verifyError },
         );
       }
     }
+  }
+  const subjects = [...new Set([...existingSubjects, ...streamSubjects])];
+  if (
+    subjects.length !== existingSubjects.length ||
+    subjects.some((subject, index) => subject !== existingSubjects[index])
+  ) {
+    await manager.streams.update(streamName, { subjects });
   }
 }

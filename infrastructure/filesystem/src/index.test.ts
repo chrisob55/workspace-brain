@@ -65,6 +65,24 @@ describe('FilesystemSourceScanner', () => {
     );
   });
 
+  it('includes extensionless Dockerfiles when configured as .dockerfile', async () => {
+    const root = await createFixture();
+    await writeFile(join(root, 'Dockerfile'), 'FROM node:22');
+    const source = createSource(root);
+    const configuredSource = {
+      ...source,
+      includeExtensions: [...source.includeExtensions, '.dockerfile'],
+    };
+
+    const result = await new FilesystemSourceScanner().scan(configuredSource);
+
+    expect(result.documents).toHaveLength(1);
+    expect(result.documents[0]).toMatchObject({
+      filename: 'Dockerfile',
+      extension: '.dockerfile',
+    });
+  });
+
   it('does not follow symbolic links and recognizes only a .git directory', async () => {
     const root = await createFixture();
     const outside = await createFixture();

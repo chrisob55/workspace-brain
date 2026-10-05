@@ -154,6 +154,9 @@ importers:
 
   packages/processing-core:
     dependencies:
+      '@workspace-brain/domain':
+        specifier: workspace:*
+        version: link:../domain
       yaml:
         specifier: ^2.8.1
         version: 2.9.1

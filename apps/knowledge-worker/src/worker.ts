@@ -2,15 +2,21 @@ import { createHash, randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 
 import {
+  discoveryEventSubject,
+  parseDocumentVersionId,
   parseDocumentId,
+  parseEvidenceId,
   parseSourceId,
   type DiscoveryEvent,
   type Document,
+  type KnowledgeInputEvidence,
 } from '@workspace-brain/domain';
 import type { NatsDiscoveryBus } from '@workspace-brain/nats';
 import { processDocument } from '@workspace-brain/processing-core';
 import type { Logger } from 'pino';
 import { z } from 'zod';
+
+import { extractKnowledgeCandidates } from './knowledge-extractors.js';
 
 const chunkBytes = 256 * 1024;
 const maximumSubmissionBytes = 900_000;
@@ -21,6 +27,8 @@ const supportedExtensions = new Set([
   '.yaml',
   '.yml',
   '.json',
+  '.ts',
+  '.dockerfile',
 ]);
 const documentSchema = z
   .object({
@@ -48,6 +56,72 @@ const documentChunkSchema = z
     done: z.boolean(),
   })
   .strict();
+const locatorSchema = z.discriminatedUnion('kind', [
+  z
+    .object({
+      kind: z.enum(['markdown-lines', 'text-lines', 'yaml-lines']),
+      lineStart: z.number().int().positive(),
+      lineEnd: z.number().int().positive(),
+      headingPath: z.array(z.string()).optional(),
+    })
+    .strict(),
+  z.object({ kind: z.literal('json-pointer'), pointer: z.string() }).strict(),
+]);
+const knowledgeInputEvidenceSchema = z
+  .object({
+    evidence: z
+      .object({
+        id: z.string(),
+        documentVersionId: z.string(),
+        key: z.string(),
+        kind: z.enum([
+          'heading',
+          'paragraph',
+          'list-item',
+          'table-row',
+          'code-block',
+          'structured-value',
+        ]),
+        excerpt: z.string(),
+        truncated: z.boolean(),
+        locator: locatorSchema,
+      })
+      .strict(),
+    documentVersion: z
+      .object({
+        id: z.string(),
+        documentId: z.string(),
+        contentHash: z.string(),
+        hashAlgorithm: z.literal('sha256'),
+        discoveredAt: z.string().datetime(),
+        processorId: z.string(),
+        processorVersion: z.number().int().positive(),
+        extractionRuleId: z.string(),
+        extractionRuleVersion: z.number().int().positive(),
+        evidenceCount: z.number().int().nonnegative(),
+      })
+      .strict(),
+    document: z
+      .object({
+        id: z.string(),
+        sourceId: z.string(),
+        path: z.string(),
+        filename: z.string(),
+        fingerprint: z.string(),
+      })
+      .strict(),
+    provenance: z
+      .object({
+        documentPath: z.string(),
+        contentFingerprint: z.string(),
+        processorId: z.string(),
+        processorVersion: z.number().int().positive(),
+        extractionRuleId: z.string(),
+        extractionRuleVersion: z.number().int().positive(),
+      })
+      .strict(),
+  })
+  .strict();
 
 type WorkerLogger = Pick<Logger, 'error' | 'info'>;
 
@@ -63,18 +137,114 @@ export function createKnowledgeWorker(
   return {
     async start() {
       await bus.subscribe(
-        'workspace.discovery.document.discovered',
+        discoveryEventSubject('DocumentDiscovered'),
         'workspace-knowledge-document-discovered',
         (event) => processDiscoveryEvent(event, bus, logger),
       );
       await bus.subscribe(
-        'workspace.discovery.document.modified',
+        discoveryEventSubject('DocumentModified'),
         'workspace-knowledge-document-modified',
         (event) => processDiscoveryEvent(event, bus, logger),
+      );
+      await bus.subscribe(
+        discoveryEventSubject('DocumentExtracted'),
+        'workspace-knowledge-document-extracted',
+        (event) => processKnowledgeEvent(event, bus, logger),
       );
     },
     stop: () => bus.close(),
   };
+}
+
+async function processKnowledgeEvent(
+  event: DiscoveryEvent,
+  bus: NatsDiscoveryBus,
+  logger: WorkerLogger,
+): Promise<void> {
+  if (event.eventType !== 'DocumentExtracted') {
+    return;
+  }
+  const documentVersionId = parseDocumentVersionId(
+    event.payload.documentVersionId,
+  );
+  const rawInputs = await bus.request<unknown>(
+    'workspace.catalogue.knowledge.document-evidence',
+    { documentVersionId },
+  );
+  const parsedInputs = z.array(knowledgeInputEvidenceSchema).parse(rawInputs);
+  const inputs: KnowledgeInputEvidence[] = parsedInputs.map((input) => ({
+    evidence: {
+      ...input.evidence,
+      id: parseEvidenceId(input.evidence.id),
+      documentVersionId: parseDocumentVersionId(
+        input.evidence.documentVersionId,
+      ),
+      locator:
+        input.evidence.locator.kind === 'json-pointer'
+          ? input.evidence.locator
+          : input.evidence.locator.headingPath === undefined
+            ? {
+                kind: input.evidence.locator.kind,
+                lineStart: input.evidence.locator.lineStart,
+                lineEnd: input.evidence.locator.lineEnd,
+              }
+            : {
+                kind: input.evidence.locator.kind,
+                lineStart: input.evidence.locator.lineStart,
+                lineEnd: input.evidence.locator.lineEnd,
+                headingPath: input.evidence.locator.headingPath,
+              },
+    },
+    documentVersion: {
+      ...input.documentVersion,
+      id: parseDocumentVersionId(input.documentVersion.id),
+      documentId: parseDocumentId(input.documentVersion.documentId),
+    },
+    document: {
+      ...input.document,
+      id: parseDocumentId(input.document.id),
+      sourceId: parseSourceId(input.document.sourceId),
+    },
+    provenance: input.provenance,
+  }));
+  if (inputs.some((input) => input.documentVersion.id !== documentVersionId)) {
+    throw new Error(
+      'Knowledge evidence response does not match the requested version',
+    );
+  }
+  const candidates = extractKnowledgeCandidates(inputs);
+  const occurredAt = new Date().toISOString();
+  const sourceId = parseSourceId(event.partitionKey);
+  const candidatePayload = {
+    sourceId,
+    documentId: parseDocumentId(event.payload.documentId),
+    documentVersionId,
+    ...candidates,
+  };
+  const candidateHash = createHash('sha256')
+    .update(JSON.stringify(candidatePayload))
+    .digest('hex');
+  const submission: DiscoveryEvent = {
+    eventId: randomUUID(),
+    eventType: 'KnowledgeCandidatesSubmitted',
+    eventVersion: 1,
+    occurredAt,
+    producer: 'workspace-brain-knowledge-worker',
+    correlationId: event.correlationId,
+    idempotencyKey: `knowledge-candidates:${documentVersionId}:${candidateHash}`,
+    partitionKey: sourceId,
+    payload: candidatePayload,
+  };
+  await bus.publish(submission);
+  logger.info(
+    {
+      correlationId: event.correlationId,
+      documentVersionId,
+      entityCount: candidates.entities.length,
+      relationshipCount: candidates.relationships.length,
+    },
+    'knowledge candidates submitted',
+  );
 }
 
 async function processDiscoveryEvent(
@@ -94,7 +264,10 @@ async function processDiscoveryEvent(
     id: parseDocumentId(parsedDocument.id),
     sourceId: parseSourceId(parsedDocument.sourceId),
   };
-  if (!supportedExtensions.has(document.extension.toLocaleLowerCase('en-US'))) {
+  if (
+    !supportedExtensions.has(document.extension.toLocaleLowerCase('en-US')) &&
+    document.filename.toLocaleLowerCase('en-US') !== 'dockerfile'
+  ) {
     return;
   }
 

@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import { processingDefinitionRegistry } from '@workspace-brain/domain';
+
 import { documentProcessors, processDocument } from './index.js';
 
 describe('deterministic document processing', () => {
@@ -14,6 +16,8 @@ describe('deterministic document processing', () => {
       ['yaml', ['.yaml', '.yml']],
       ['json', ['.json']],
       ['plain-text', ['.txt']],
+      ['typescript', ['.ts']],
+      ['dockerfile', ['.dockerfile']],
     ]);
     expect(
       documentProcessors.every(
@@ -31,6 +35,26 @@ describe('deterministic document processing', () => {
         locator: { kind: 'markdown-lines', lineStart: 1, lineEnd: 1 },
       }),
     ]);
+    expect(
+      documentProcessors
+        .find(({ id }) => id === 'dockerfile')
+        ?.supports('Dockerfile'),
+    ).toBe(true);
+  });
+
+  it('keeps registered processor identity and filename matching aligned with catalogue authority', () => {
+    for (const definition of processingDefinitionRegistry) {
+      const processor = documentProcessors.find(
+        ({ id }) => id === definition.processorId,
+      );
+      expect(processor).toBeDefined();
+      expect(processor?.extractionRuleId).toBe(definition.extractionRuleId);
+      const filename =
+        definition.filenameMatchKind === 'exact'
+          ? definition.filenameMatch
+          : `fixture${definition.filenameMatch}`;
+      expect(processor?.supports(filename)).toBe(true);
+    }
   });
 
   it('extracts Markdown blocks with line and heading provenance', () => {
@@ -101,13 +125,41 @@ describe('deterministic document processing', () => {
     });
   });
 
+  it('extracts TypeScript declarations and Dockerfile base-image evidence', () => {
+    const typescript = processDocument(
+      'entry.ts',
+      "import { app } from './app.js';\nexport const name = 'entry';",
+    );
+    expect(
+      typescript.evidence.map(({ excerpt, locator }) => [excerpt, locator]),
+    ).toEqual([
+      [
+        "import { app } from './app.js';",
+        { kind: 'text-lines', lineStart: 1, lineEnd: 1 },
+      ],
+      [
+        "export const name = 'entry';",
+        { kind: 'text-lines', lineStart: 2, lineEnd: 2 },
+      ],
+    ]);
+
+    const dockerfile = processDocument(
+      'Dockerfile',
+      'FROM node:22-alpine AS base\nRUN npm install\nFROM base AS app',
+    );
+    expect(dockerfile.evidence.map(({ excerpt }) => excerpt)).toEqual([
+      'FROM node:22-alpine AS base',
+      'FROM base AS app',
+    ]);
+  });
+
   it('rejects malformed structured documents and unsupported formats', () => {
     expect(() => processDocument('invalid.json', '{')).toThrow();
     expect(() => processDocument('invalid.yaml', 'key: [')).toThrow(
       'YAML document is invalid',
     );
-    expect(() => processDocument('script.ts', 'run()')).toThrow(
-      'Unsupported document extension: .ts',
+    expect(() => processDocument('script.py', 'run()')).toThrow(
+      'Unsupported document extension: .py',
     );
   });
 });

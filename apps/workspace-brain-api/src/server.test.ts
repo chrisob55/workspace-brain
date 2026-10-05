@@ -2,6 +2,7 @@ import {
   createDocumentId,
   createDocumentVersionId,
   createEvidenceId,
+  createKnowledgeModelId,
   createRepositoryId,
   createSourceId,
   createWorkspaceId,
@@ -22,6 +23,14 @@ const workspace = {
   id: createWorkspaceId(),
   name: 'Product',
   sourceIds: [source.id],
+  createdAt: '2026-10-01T12:00:00.000Z',
+};
+const knowledgeModel = {
+  id: createKnowledgeModelId(),
+  workspaceId: workspace.id,
+  name: 'Product Knowledge Model',
+  schemaVersion: 1 as const,
+  latestPublicationVersion: null,
   createdAt: '2026-10-01T12:00:00.000Z',
 };
 
@@ -167,6 +176,41 @@ function createCatalogue(
     },
     async explainEvidence(evidenceId: string) {
       return evidenceId === evidence.id ? evidenceExplanation : undefined;
+    },
+    async listKnowledgeInputEvidence() {
+      return [];
+    },
+    async listKnowledgeModels({
+      afterId,
+      limit,
+    }: {
+      afterId?: string;
+      limit: number;
+    }) {
+      return {
+        items:
+          afterId === undefined || knowledgeModel.id > afterId
+            ? [knowledgeModel].slice(0, limit)
+            : [],
+      };
+    },
+    async getKnowledgeModel(modelId: string) {
+      return modelId === knowledgeModel.id ? knowledgeModel : undefined;
+    },
+    async listKnowledgeEntities() {
+      return { items: [] };
+    },
+    async getKnowledgeEntity() {
+      return undefined;
+    },
+    async listKnowledgeRelationships() {
+      return { items: [] };
+    },
+    async getKnowledgeRelationship() {
+      return undefined;
+    },
+    async listKnowledgePublications() {
+      return { items: [] };
     },
     async check() {
       if (!ready) {
@@ -331,6 +375,43 @@ describe('Workspace Brain API routes', () => {
       'application/problem+json',
     );
     expect(invalidDocument.statusCode).toBe(400);
+    await server.close();
+  });
+
+  it('serves read-only Knowledge Model, entity, relationship, and publication queries', async () => {
+    const server = createApiServer(createCatalogue(), { logger: false });
+    const models = await server.inject('/api/v1/knowledge/models');
+    const model = await server.inject(
+      `/api/v1/knowledge/models/${knowledgeModel.id}`,
+    );
+    const entities = await server.inject('/api/v1/knowledge/entities');
+    const relationships = await server.inject(
+      '/api/v1/knowledge/relationships',
+    );
+    const publications = await server.inject('/api/v1/knowledge/publications');
+    const invalidEntityType = await server.inject(
+      '/api/v1/knowledge/entities?type=arbitrary',
+    );
+    const invalidRelationshipType = await server.inject(
+      '/api/v1/knowledge/relationships?type=OWNS',
+    );
+    const missingRelationship = await server.inject(
+      `/api/v1/knowledge/relationships/${createEvidenceId()}`,
+    );
+
+    expect(models.statusCode).toBe(200);
+    expect(models.json()).toEqual({
+      items: [knowledgeModel],
+      nextCursor: null,
+    });
+    expect(model.statusCode).toBe(200);
+    expect(model.json()).toEqual(knowledgeModel);
+    expect(entities.json()).toEqual({ items: [], nextCursor: null });
+    expect(relationships.json()).toEqual({ items: [], nextCursor: null });
+    expect(publications.json()).toEqual({ items: [], nextCursor: null });
+    expect(invalidEntityType.statusCode).toBe(400);
+    expect(invalidRelationshipType.statusCode).toBe(400);
+    expect(missingRelationship.statusCode).toBe(404);
     await server.close();
   });
 

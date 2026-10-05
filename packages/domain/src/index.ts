@@ -1,5 +1,62 @@
 import { ulid } from 'ulid';
 
+export const processingDefinitionRegistry = [
+  {
+    filenameMatchKind: 'suffix',
+    filenameMatch: '.md',
+    processorId: 'markdown',
+    extractionRuleId: 'markdown-blocks',
+  },
+  {
+    filenameMatchKind: 'suffix',
+    filenameMatch: '.markdown',
+    processorId: 'markdown',
+    extractionRuleId: 'markdown-blocks',
+  },
+  {
+    filenameMatchKind: 'suffix',
+    filenameMatch: '.yaml',
+    processorId: 'yaml',
+    extractionRuleId: 'yaml-scalar-values',
+  },
+  {
+    filenameMatchKind: 'suffix',
+    filenameMatch: '.yml',
+    processorId: 'yaml',
+    extractionRuleId: 'yaml-scalar-values',
+  },
+  {
+    filenameMatchKind: 'suffix',
+    filenameMatch: '.json',
+    processorId: 'json',
+    extractionRuleId: 'json-scalar-values',
+  },
+  {
+    filenameMatchKind: 'suffix',
+    filenameMatch: '.txt',
+    processorId: 'plain-text',
+    extractionRuleId: 'text-paragraphs',
+  },
+  {
+    filenameMatchKind: 'suffix',
+    filenameMatch: '.ts',
+    processorId: 'typescript',
+    extractionRuleId: 'typescript-imports',
+  },
+  {
+    filenameMatchKind: 'exact',
+    filenameMatch: 'dockerfile',
+    processorId: 'dockerfile',
+    extractionRuleId: 'dockerfile-base-images',
+  },
+  {
+    filenameMatchKind: 'suffix',
+    filenameMatch: '.dockerfile',
+    processorId: 'dockerfile',
+    extractionRuleId: 'dockerfile-base-images',
+  },
+] as const;
+
 export type Brand<T, Name extends string> = T & { readonly __brand: Name };
 
 export type SourceId = Brand<string, 'SourceId'>;
@@ -9,6 +66,12 @@ export type RepositoryId = Brand<string, 'RepositoryId'>;
 export type DocumentId = Brand<string, 'DocumentId'>;
 export type DocumentVersionId = Brand<string, 'DocumentVersionId'>;
 export type EvidenceId = Brand<string, 'EvidenceId'>;
+export type KnowledgeModelId = Brand<string, 'KnowledgeModelId'>;
+export type KnowledgeEntityId = Brand<string, 'KnowledgeEntityId'>;
+export type KnowledgeRelationshipId = Brand<string, 'KnowledgeRelationshipId'>;
+export type EntityVersionId = Brand<string, 'EntityVersionId'>;
+export type RelationshipVersionId = Brand<string, 'RelationshipVersionId'>;
+export type KnowledgePublicationId = Brand<string, 'KnowledgePublicationId'>;
 
 const ulidPattern = /^[0-7][0-9A-HJKMNP-TV-Z]{25}$/;
 
@@ -29,6 +92,18 @@ export const createDocumentId = (): DocumentId => ulid() as DocumentId;
 export const createDocumentVersionId = (): DocumentVersionId =>
   ulid() as DocumentVersionId;
 export const createEvidenceId = (): EvidenceId => ulid() as EvidenceId;
+export const createKnowledgeModelId = (): KnowledgeModelId =>
+  ulid() as KnowledgeModelId;
+export const createKnowledgeEntityId = (): KnowledgeEntityId =>
+  ulid() as KnowledgeEntityId;
+export const createKnowledgeRelationshipId = (): KnowledgeRelationshipId =>
+  ulid() as KnowledgeRelationshipId;
+export const createEntityVersionId = (): EntityVersionId =>
+  ulid() as EntityVersionId;
+export const createRelationshipVersionId = (): RelationshipVersionId =>
+  ulid() as RelationshipVersionId;
+export const createKnowledgePublicationId = (): KnowledgePublicationId =>
+  ulid() as KnowledgePublicationId;
 
 export const parseSourceId = (value: string): SourceId =>
   parseBrandedId<'SourceId'>(value);
@@ -44,6 +119,21 @@ export const parseDocumentVersionId = (value: string): DocumentVersionId =>
   parseBrandedId<'DocumentVersionId'>(value);
 export const parseEvidenceId = (value: string): EvidenceId =>
   parseBrandedId<'EvidenceId'>(value);
+export const parseKnowledgeModelId = (value: string): KnowledgeModelId =>
+  parseBrandedId<'KnowledgeModelId'>(value);
+export const parseKnowledgeEntityId = (value: string): KnowledgeEntityId =>
+  parseBrandedId<'KnowledgeEntityId'>(value);
+export const parseKnowledgeRelationshipId = (
+  value: string,
+): KnowledgeRelationshipId => parseBrandedId<'KnowledgeRelationshipId'>(value);
+export const parseEntityVersionId = (value: string): EntityVersionId =>
+  parseBrandedId<'EntityVersionId'>(value);
+export const parseRelationshipVersionId = (
+  value: string,
+): RelationshipVersionId => parseBrandedId<'RelationshipVersionId'>(value);
+export const parseKnowledgePublicationId = (
+  value: string,
+): KnowledgePublicationId => parseBrandedId<'KnowledgePublicationId'>(value);
 
 export type Source = {
   readonly id: SourceId;
@@ -57,6 +147,169 @@ export type Source = {
   readonly workspaceRules?: readonly WorkspaceDiscoveryRules[];
   readonly createdAt: string;
 };
+
+export const knowledgeRelationshipTypes = [
+  'CONTAINS',
+  'BELONGS_TO',
+  'REFERENCES',
+  'DOCUMENTS',
+  'DEPENDS_ON',
+  'USES',
+  'IMPLEMENTS',
+  'EXPOSES',
+  'CONSUMES',
+  'CLASSIFIED_AS',
+  'DERIVED_FROM',
+] as const;
+
+export type KnowledgeRelationshipType =
+  (typeof knowledgeRelationshipTypes)[number];
+export type KnowledgeEntityType = 'package' | 'container' | 'api' | 'module';
+
+export function createKnowledgeEntityKey(
+  type: KnowledgeEntityType,
+  sourceId: SourceId | string,
+  identityScope: string,
+  name: string,
+): string {
+  const identityName =
+    type === 'module' ? name.trim() : name.trim().toLocaleLowerCase('en-US');
+  return `${type}:${sourceId}:${encodeURIComponent(identityScope)}:${encodeURIComponent(identityName)}`;
+}
+
+export type EntityLifecycleStatus =
+  'observed' | 'verified' | 'established' | 'rejected' | 'superseded';
+export type RelationshipLifecycleStatus =
+  | 'observed'
+  | 'related'
+  | 'verified'
+  | 'established'
+  | 'rejected'
+  | 'superseded';
+
+export type KnowledgeProvenance = {
+  readonly evidenceId: EvidenceId;
+  readonly documentVersionId: DocumentVersionId;
+  readonly documentId: DocumentId;
+  readonly sourceId: SourceId;
+  readonly documentPath: string;
+  readonly contentFingerprint: string;
+  readonly locator: EvidenceLocator;
+  readonly processorId: string;
+  readonly processorVersion: number;
+  readonly extractionRuleId: string;
+  readonly extractionRuleVersion: number;
+  readonly knowledgeExtractorId: string;
+  readonly knowledgeExtractorVersion: number;
+};
+
+export type KnowledgeInputEvidence = {
+  readonly evidence: Evidence;
+  readonly documentVersion: DocumentVersion;
+  readonly document: Pick<
+    Document,
+    'id' | 'sourceId' | 'path' | 'filename' | 'fingerprint'
+  >;
+  readonly provenance: Omit<
+    EvidenceExplanation['provenance'],
+    'sourceId' | 'provider'
+  >;
+};
+
+export type KnowledgeEntityCandidate = {
+  readonly key: string;
+  readonly type: KnowledgeEntityType;
+  readonly identityScope: string;
+  readonly name: string;
+  readonly sourceEvidenceIds: readonly EvidenceId[];
+  readonly provenance: readonly KnowledgeProvenance[];
+  readonly lifecycleStatus: 'observed';
+};
+
+export type KnowledgeRelationshipCandidate = {
+  readonly key: string;
+  readonly type: KnowledgeRelationshipType;
+  readonly sourceEntityKey: string;
+  readonly targetEntityKey: string;
+  readonly sourceEvidenceIds: readonly EvidenceId[];
+  readonly provenance: readonly KnowledgeProvenance[];
+  readonly confidence: number;
+  readonly lifecycleStatus: 'related';
+};
+
+export type KnowledgeEntity = {
+  readonly id: KnowledgeEntityId;
+  readonly knowledgeModelId: KnowledgeModelId;
+  readonly type: KnowledgeEntityType;
+  readonly name: string;
+  readonly sourceEvidenceIds: readonly EvidenceId[];
+  readonly provenance: readonly KnowledgeProvenance[];
+  readonly lifecycleStatus: EntityLifecycleStatus;
+  readonly currentVersionId: EntityVersionId;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+};
+
+export type KnowledgeRelationship = {
+  readonly id: KnowledgeRelationshipId;
+  readonly knowledgeModelId: KnowledgeModelId;
+  readonly type: KnowledgeRelationshipType;
+  readonly sourceEntityId: KnowledgeEntityId;
+  readonly targetEntityId: KnowledgeEntityId;
+  readonly sourceEvidenceIds: readonly EvidenceId[];
+  readonly provenance: readonly KnowledgeProvenance[];
+  readonly confidence: number;
+  readonly lifecycleStatus: RelationshipLifecycleStatus;
+  readonly currentVersionId: RelationshipVersionId;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+};
+
+export type EntityVersion = {
+  readonly id: EntityVersionId;
+  readonly entityId: KnowledgeEntityId;
+  readonly version: number;
+  readonly snapshot: KnowledgeEntity;
+  readonly createdAt: string;
+};
+
+export type RelationshipVersion = {
+  readonly id: RelationshipVersionId;
+  readonly relationshipId: KnowledgeRelationshipId;
+  readonly version: number;
+  readonly snapshot: KnowledgeRelationship;
+  readonly createdAt: string;
+};
+
+export type KnowledgeModel = {
+  readonly id: KnowledgeModelId;
+  readonly workspaceId: WorkspaceId;
+  readonly name: string;
+  readonly schemaVersion: 1;
+  readonly latestPublicationVersion: number | null;
+  readonly createdAt: string;
+};
+
+export type KnowledgePublication = {
+  readonly id: KnowledgePublicationId;
+  readonly knowledgeModelId: KnowledgeModelId;
+  readonly version: number;
+  readonly schemaVersion: 1;
+  readonly status: 'published';
+  readonly contentHash: string;
+  readonly entityVersionIds: readonly EntityVersionId[];
+  readonly relationshipVersionIds: readonly RelationshipVersionId[];
+  readonly publishedAt: string;
+};
+
+export type KnowledgeCandidateEvent = Extract<
+  DiscoveryEvent,
+  { readonly eventType: 'KnowledgeCandidatesSubmitted' }
+>;
+export type KnowledgeDocumentRemovalEvent = Extract<
+  DiscoveryEvent,
+  { readonly eventType: 'DocumentRemoved' }
+>;
 
 export type SourceRoot = {
   readonly id: SourceRootId;
@@ -110,7 +363,36 @@ export type DiscoveryEventName =
   | 'DocumentModified'
   | 'DocumentRemoved'
   | 'DocumentProcessingSubmitted'
-  | 'DocumentExtracted';
+  | 'DocumentExtracted'
+  | 'KnowledgeCandidatesSubmitted'
+  | 'KnowledgeEntityDiscovered'
+  | 'KnowledgeEntitySuperseded'
+  | 'KnowledgeRelationshipDiscovered'
+  | 'KnowledgeRelationshipSuperseded'
+  | 'KnowledgeModelPublished';
+
+export function discoveryEventSubject(eventType: DiscoveryEventName): string {
+  switch (eventType) {
+    case 'DocumentProcessingSubmitted':
+      return 'workspace.processing.document.submitted';
+    case 'DocumentExtracted':
+      return 'workspace.processing.document.extracted';
+    case 'KnowledgeCandidatesSubmitted':
+    case 'KnowledgeEntityDiscovered':
+    case 'KnowledgeEntitySuperseded':
+    case 'KnowledgeRelationshipDiscovered':
+    case 'KnowledgeRelationshipSuperseded':
+    case 'KnowledgeModelPublished':
+      return `workspace.knowledge.${eventType
+        .replace(/^Knowledge/, '')
+        .replace(/[A-Z]/g, (letter) => `.${letter.toLowerCase()}`)
+        .replace(/^\./, '')}`;
+    default:
+      return `workspace.discovery.${eventType
+        .replace(/[A-Z]/g, (letter) => `.${letter.toLowerCase()}`)
+        .replace(/^\./, '')}`;
+  }
+}
 
 export type EvidenceLocator =
   | {
@@ -236,6 +518,22 @@ export type DiscoveryEventPayloads = {
     readonly contentFingerprint: string;
     readonly evidenceCount: number;
   };
+  KnowledgeCandidatesSubmitted: {
+    readonly sourceId: SourceId;
+    readonly documentId: DocumentId;
+    readonly documentVersionId: DocumentVersionId;
+    readonly entities: readonly KnowledgeEntityCandidate[];
+    readonly relationships: readonly KnowledgeRelationshipCandidate[];
+  };
+  KnowledgeEntityDiscovered: { readonly entity: KnowledgeEntity };
+  KnowledgeEntitySuperseded: { readonly entity: KnowledgeEntity };
+  KnowledgeRelationshipDiscovered: {
+    readonly relationship: KnowledgeRelationship;
+  };
+  KnowledgeRelationshipSuperseded: {
+    readonly relationship: KnowledgeRelationship;
+  };
+  KnowledgeModelPublished: { readonly publication: KnowledgePublication };
 };
 
 export type DiscoveryEvent = {

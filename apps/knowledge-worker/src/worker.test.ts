@@ -1,7 +1,10 @@
 import { createHash } from 'node:crypto';
 
 import {
+  createKnowledgeEntityKey,
   createDocumentId,
+  createDocumentVersionId,
+  createEvidenceId,
   createSourceId,
   type DiscoveryEvent,
 } from '@workspace-brain/domain';
@@ -174,6 +177,136 @@ describe('knowledge worker', () => {
     await expect(handler(event)).rejects.toThrow(
       'Document changed after discovery',
     );
+    await worker.stop();
+  });
+
+  it('turns extracted package evidence into source-linked knowledge candidates', async () => {
+    const documentId = createDocumentId();
+    const documentVersionId = createDocumentVersionId();
+    const evidenceId = createEvidenceId();
+    const sourceId = createSourceId();
+    const fingerprint = 'a'.repeat(64);
+    const handlers = new Map<string, DiscoveryEventHandler>();
+    const published: DiscoveryEvent[] = [];
+    let requestedVersionId = '';
+    const bus: NatsDiscoveryBus = {
+      async publish(event) {
+        published.push(event);
+      },
+      async subscribe(subject, _durableName, handler) {
+        handlers.set(subject, handler);
+      },
+      subscribeRequests() {},
+      async request<T>(subject: string, request: unknown): Promise<T> {
+        if (subject !== 'workspace.catalogue.knowledge.document-evidence') {
+          throw new Error(`Unexpected catalogue request: ${subject}`);
+        }
+        requestedVersionId = (request as { documentVersionId: string })
+          .documentVersionId;
+        return [
+          {
+            evidence: {
+              id: evidenceId,
+              documentVersionId,
+              key: 'json:/name',
+              kind: 'structured-value',
+              excerpt: '@workspace/service',
+              truncated: false,
+              locator: { kind: 'json-pointer', pointer: '/name' },
+            },
+            documentVersion: {
+              id: documentVersionId,
+              documentId,
+              contentHash: fingerprint,
+              hashAlgorithm: 'sha256',
+              discoveredAt: '2026-10-05T08:00:00.000Z',
+              processorId: 'json',
+              processorVersion: 1,
+              extractionRuleId: 'json-scalar-values',
+              extractionRuleVersion: 1,
+              evidenceCount: 1,
+            },
+            document: {
+              id: documentId,
+              sourceId,
+              path: 'root/service/package.json',
+              filename: 'package.json',
+              fingerprint,
+            },
+            provenance: {
+              documentPath: 'root/service/package.json',
+              contentFingerprint: fingerprint,
+              processorId: 'json',
+              processorVersion: 1,
+              extractionRuleId: 'json-scalar-values',
+              extractionRuleVersion: 1,
+            },
+          },
+        ] as T;
+      },
+      async close() {},
+    };
+    const worker = createKnowledgeWorker(bus, {
+      error() {},
+      info() {},
+    });
+    await worker.start();
+    const event: DiscoveryEvent = {
+      eventId: 'document-extracted-event',
+      eventType: 'DocumentExtracted',
+      eventVersion: 1,
+      occurredAt: '2026-10-05T08:00:00.000Z',
+      producer: 'workspace-brain-api',
+      correlationId: 'knowledge-correlation',
+      idempotencyKey: 'document-extracted-idempotency',
+      partitionKey: sourceId,
+      payload: {
+        documentId,
+        documentVersionId,
+        contentFingerprint: fingerprint,
+        evidenceCount: 1,
+      },
+    };
+    const handler = handlers.get('workspace.processing.document.extracted');
+    if (handler === undefined) {
+      throw new Error('Document-extracted handler was not registered');
+    }
+    await handler(event);
+
+    expect(requestedVersionId).toBe(documentVersionId);
+    expect(published).toHaveLength(1);
+    expect(published[0]).toMatchObject({
+      eventType: 'KnowledgeCandidatesSubmitted',
+      producer: 'workspace-brain-knowledge-worker',
+      partitionKey: sourceId,
+      payload: {
+        sourceId,
+        documentId,
+        documentVersionId,
+        entities: [
+          {
+            key: createKnowledgeEntityKey(
+              'package',
+              sourceId,
+              'root/service/package.json',
+              '@workspace/service',
+            ),
+            type: 'package',
+            identityScope: 'root/service/package.json',
+            name: '@workspace/service',
+            sourceEvidenceIds: [evidenceId],
+            provenance: [
+              {
+                evidenceId,
+                documentVersionId,
+                knowledgeExtractorId: 'deterministic-knowledge-extractors',
+              },
+            ],
+          },
+        ],
+        relationships: [],
+      },
+    });
     await worker.stop();
   });
 });

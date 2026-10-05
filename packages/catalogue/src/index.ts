@@ -6,6 +6,12 @@ import type {
   DocumentVersion,
   Evidence,
   EvidenceExplanation,
+  KnowledgeCandidateEvent,
+  KnowledgeEntity,
+  KnowledgeInputEvidence,
+  KnowledgeModel,
+  KnowledgePublication,
+  KnowledgeRelationship,
   InventoryChange,
   InventoryRecord,
   RepositoryCandidate,
@@ -73,6 +79,15 @@ export type DocumentProcessingApplyResult = {
   readonly evidence: readonly Evidence[];
   readonly duplicate: boolean;
 };
+export type KnowledgePageRequest = Pick<
+  CataloguePageRequest,
+  'afterId' | 'limit'
+> & {
+  readonly knowledgeModelId?: string;
+  readonly publicationId?: string;
+  readonly lifecycleStatus?: string;
+  readonly type?: string;
+};
 
 export type { InventoryChange } from '@workspace-brain/domain';
 
@@ -92,6 +107,26 @@ export interface CatalogueReader {
     request: CataloguePageRequest,
   ): Promise<CataloguePage<Evidence>>;
   explainEvidence(evidenceId: string): Promise<EvidenceExplanation | undefined>;
+  listKnowledgeInputEvidence(
+    documentVersionId: string,
+  ): Promise<readonly KnowledgeInputEvidence[]>;
+  listKnowledgeModels(
+    request: KnowledgePageRequest,
+  ): Promise<CataloguePage<KnowledgeModel>>;
+  getKnowledgeModel(modelId: string): Promise<KnowledgeModel | undefined>;
+  listKnowledgeEntities(
+    request: KnowledgePageRequest,
+  ): Promise<CataloguePage<KnowledgeEntity>>;
+  getKnowledgeEntity(entityId: string): Promise<KnowledgeEntity | undefined>;
+  listKnowledgeRelationships(
+    request: KnowledgePageRequest,
+  ): Promise<CataloguePage<KnowledgeRelationship>>;
+  getKnowledgeRelationship(
+    relationshipId: string,
+  ): Promise<KnowledgeRelationship | undefined>;
+  listKnowledgePublications(
+    request: KnowledgePageRequest,
+  ): Promise<CataloguePage<KnowledgePublication>>;
 }
 
 export interface DiscoverySourceProvider {
@@ -142,4 +177,5 @@ export interface CatalogueDiscovery extends CatalogueReader {
   applyDocumentProcessing(
     event: DocumentProcessingEvent,
   ): Promise<DocumentProcessingApplyResult>;
+  applyKnowledgeCandidates(event: KnowledgeCandidateEvent): Promise<void>;
 }

@@ -10,6 +10,7 @@ import type {
   CataloguePageRequest,
   ConfiguredSource,
   ConfiguredWorkspace,
+  KnowledgePageRequest,
   DocumentProcessingEvent,
   DocumentProcessingApplyResult,
   ScanPersistenceResult,
@@ -35,6 +36,12 @@ import {
   parseDocumentId,
   parseDocumentVersionId,
   parseEvidenceId,
+  type KnowledgeCandidateEvent,
+  type KnowledgeEntity,
+  type KnowledgeInputEvidence,
+  type KnowledgeModel,
+  type KnowledgePublication,
+  type KnowledgeRelationship,
   parseRepositoryId,
   parseSourceId,
   parseSourceRootId,
@@ -48,6 +55,20 @@ import {
   type WorkspaceDiscoveryRules,
 } from '@workspace-brain/domain';
 import { z } from 'zod';
+
+import {
+  applyKnowledgeCandidates,
+  ensureKnowledgeModels,
+  getKnowledgeEntity,
+  getKnowledgeModel,
+  getKnowledgeRelationship,
+  listKnowledgeEntities,
+  listKnowledgeInputEvidence,
+  listKnowledgeModels,
+  listKnowledgePublications,
+  listKnowledgeRelationships,
+  withdrawKnowledgeDocument,
+} from './knowledge.js';
 
 const sourceRootSchema = z
   .object({
@@ -153,6 +174,12 @@ const discoveryEventEnvelopeSchema = z
       'DocumentRemoved',
       'DocumentProcessingSubmitted',
       'DocumentExtracted',
+      'KnowledgeCandidatesSubmitted',
+      'KnowledgeEntityDiscovered',
+      'KnowledgeEntitySuperseded',
+      'KnowledgeRelationshipDiscovered',
+      'KnowledgeRelationshipSuperseded',
+      'KnowledgeModelPublished',
     ]),
     eventVersion: z.literal(1),
     occurredAt: z.string(),
@@ -193,15 +220,24 @@ const processingCandidateSchema = z
     contentFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
     processedAt: z.string().datetime(),
     durationMilliseconds: z.number().nonnegative(),
-    processorId: z.enum(['markdown', 'yaml', 'json', 'plain-text']),
-    processorVersion: z.literal(1),
+    processorId: z.enum([
+      'markdown',
+      'yaml',
+      'json',
+      'plain-text',
+      'typescript',
+      'dockerfile',
+    ]),
+    processorVersion: z.number().int().positive(),
     extractionRuleId: z.enum([
       'markdown-blocks',
       'yaml-scalar-values',
       'json-scalar-values',
       'text-paragraphs',
+      'typescript-imports',
+      'dockerfile-base-images',
     ]),
-    extractionRuleVersion: z.literal(1),
+    extractionRuleVersion: z.number().int().positive(),
     evidence: z
       .array(
         z
@@ -230,6 +266,8 @@ const processingCandidateSchema = z
       yaml: 'yaml-scalar-values',
       json: 'json-scalar-values',
       'plain-text': 'text-paragraphs',
+      typescript: 'typescript-imports',
+      dockerfile: 'dockerfile-base-images',
     };
     if (expectedRule[candidate.processorId] !== candidate.extractionRuleId) {
       context.addIssue({
@@ -297,7 +335,7 @@ const evidenceExplanationRowSchema = z.object({
 });
 
 type DuckDbCatalogue = CatalogueDiscovery & CatalogueHealth;
-type DuckDbConnection = Awaited<ReturnType<DuckDBInstance['connect']>>;
+export type DuckDbConnection = Awaited<ReturnType<DuckDBInstance['connect']>>;
 
 export async function createDuckDbCatalogue(
   databasePath: string,
@@ -314,7 +352,7 @@ export async function createDuckDbCatalogue(
     throw error;
   }
 
-  return serializeCatalogue({
+  return createCatalogueWriteCoordinator({
     async listSources(request): Promise<CataloguePage<Source>> {
       const rows = await queryPage(
         connection,
@@ -459,7 +497,6 @@ export async function createDuckDbCatalogue(
           [id, source.name, 'filesystem', config, source.configId],
         );
       }
-
       for (const workspace of workspaces) {
         const sourceIdsForWorkspace = workspace.sourceConfigIds.map(
           (sourceConfigId) => {
@@ -492,6 +529,7 @@ export async function createDuckDbCatalogue(
           [id, workspace.name, config, workspace.configId],
         );
       }
+      await ensureKnowledgeModels(connection);
     },
 
     async getSource(sourceId: string): Promise<Source | undefined> {
@@ -655,6 +693,12 @@ export async function createDuckDbCatalogue(
             record.discoveredAt,
             record.lastSeenAt,
           );
+          if (change === 'modified') {
+            await connection.run(
+              'UPDATE document_current_versions SET document_version_id = NULL, revision = revision + 1, updated_at = $2 WHERE document_id = $1 AND document_version_id IS NOT NULL',
+              [record.id, discoveredAt],
+            );
+          }
           documentChanges.push({ change, record });
           if (change !== 'unchanged') {
             await insertDiscoveryHistory(
@@ -702,12 +746,19 @@ export async function createDuckDbCatalogue(
               'DELETE FROM documents WHERE source_id = $1 AND path = $2',
               [sourceId, previous.path],
             );
-            await insertDiscoveryHistory(
+            const removalEvent = await insertDiscoveryHistory(
               connection,
               'DocumentRemoved',
               record,
               correlationId,
               discoveredAt,
+            );
+            if (removalEvent.eventType === 'DocumentRemoved') {
+              await withdrawKnowledgeDocument(connection, removalEvent);
+            }
+            await connection.run(
+              'UPDATE document_current_versions SET document_version_id = NULL, revision = revision + 1, updated_at = $2 WHERE document_id = $1',
+              [record.id, discoveredAt],
             );
           }
           await connection.run(
@@ -752,6 +803,60 @@ export async function createDuckDbCatalogue(
       event: DocumentProcessingEvent,
     ): Promise<DocumentProcessingApplyResult> {
       return applyDocumentProcessing(connection, event);
+    },
+
+    async applyKnowledgeCandidates(
+      event: KnowledgeCandidateEvent,
+    ): Promise<void> {
+      await applyKnowledgeCandidates(connection, event);
+    },
+
+    async listKnowledgeInputEvidence(
+      documentVersionId: string,
+    ): Promise<readonly KnowledgeInputEvidence[]> {
+      return listKnowledgeInputEvidence(connection, documentVersionId);
+    },
+
+    async listKnowledgeModels(
+      request: KnowledgePageRequest,
+    ): Promise<CataloguePage<KnowledgeModel>> {
+      return listKnowledgeModels(connection, request);
+    },
+
+    async getKnowledgeModel(
+      modelId: string,
+    ): Promise<KnowledgeModel | undefined> {
+      return getKnowledgeModel(connection, modelId);
+    },
+
+    async listKnowledgeEntities(
+      request: KnowledgePageRequest,
+    ): Promise<CataloguePage<KnowledgeEntity>> {
+      return listKnowledgeEntities(connection, request);
+    },
+
+    async getKnowledgeEntity(
+      entityId: string,
+    ): Promise<KnowledgeEntity | undefined> {
+      return getKnowledgeEntity(connection, entityId);
+    },
+
+    async listKnowledgeRelationships(
+      request: KnowledgePageRequest,
+    ): Promise<CataloguePage<KnowledgeRelationship>> {
+      return listKnowledgeRelationships(connection, request);
+    },
+
+    async getKnowledgeRelationship(
+      relationshipId: string,
+    ): Promise<KnowledgeRelationship | undefined> {
+      return getKnowledgeRelationship(connection, relationshipId);
+    },
+
+    async listKnowledgePublications(
+      request: KnowledgePageRequest,
+    ): Promise<CataloguePage<KnowledgePublication>> {
+      return listKnowledgePublications(connection, request);
     },
 
     async listDocumentEvidence(
@@ -937,12 +1042,18 @@ export async function createDuckDbCatalogue(
   });
 }
 
-function serializeCatalogue<T extends object>(catalogue: T): T {
-  let pendingOperations = Promise.resolve();
-  const runExclusive = <Result>(
+function createCatalogueWriteCoordinator<T extends object>(catalogue: T): T {
+  let pendingOperations: Promise<void> = Promise.resolve();
+  let state: 'open' | 'closing' | 'closed' = 'open';
+  let closePromise: Promise<void> | undefined;
+
+  const enqueue = <Result>(
     operation: () => Promise<Result>,
   ): Promise<Result> => {
-    const result = pendingOperations.then(operation, operation);
+    if (state !== 'open') {
+      return Promise.reject(new Error('DuckDB catalogue is closing or closed'));
+    }
+    const result = pendingOperations.then(operation);
     pendingOperations = result.then(
       () => undefined,
       () => undefined,
@@ -956,8 +1067,27 @@ function serializeCatalogue<T extends object>(catalogue: T): T {
       if (typeof value !== 'function') {
         return value;
       }
+      if (property === 'close') {
+        return () => {
+          if (closePromise !== undefined) {
+            return closePromise;
+          }
+          state = 'closing';
+          const closing = pendingOperations.then(async () => {
+            await Reflect.apply(value, target, []);
+          });
+          pendingOperations = closing.then(
+            () => undefined,
+            () => undefined,
+          );
+          closePromise = closing.finally(() => {
+            state = 'closed';
+          });
+          return closePromise;
+        };
+      }
       return (...args: unknown[]) =>
-        runExclusive(() => Reflect.apply(value, target, args));
+        enqueue(() => Reflect.apply(value, target, args));
     },
   });
 }
@@ -1068,21 +1198,32 @@ async function applyDocumentProcessing(
     }
 
     const documentRows = await connection.runAndReadAll(
-      "SELECT d.filename, d.source_id, d.path, i.fingerprint FROM documents d JOIN inventory_records i ON i.source_id = d.source_id AND i.path = d.path AND i.asset_type = 'document' WHERE d.id = $1 AND i.is_present = TRUE",
+      "SELECT d.filename, d.source_id, d.path, i.fingerprint, i.is_present FROM documents d LEFT JOIN inventory_records i ON i.source_id = d.source_id AND i.path = d.path AND i.asset_type = 'document' WHERE d.id = $1",
       [documentId],
     );
     const documentRow = documentRows.getRowObjectsJson()[0];
     if (
       documentRow === undefined ||
       documentRow.source_id !== sourceId ||
-      documentRow.path !== candidate.path ||
-      documentRow.fingerprint !== candidate.contentFingerprint
+      documentRow.path !== candidate.path
     ) {
       throw new Error(
-        'Document processing candidate does not match the current catalogue document',
+        'Document processing candidate does not match a known catalogue document',
       );
     }
     const filename = requiredString(documentRow.filename, 'document filename');
+    const preferredDefinition = await preferredProcessingDefinition(
+      connection,
+      filename,
+    );
+    if (preferredDefinition === undefined) {
+      throw new Error(
+        `No accepted processing definition for document filename ${filename}`,
+      );
+    }
+    const fingerprintIsCurrent =
+      documentRow.is_present === true &&
+      documentRow.fingerprint === candidate.contentFingerprint;
 
     const existingVersionRows = await connection.runAndReadAll(
       'SELECT id FROM document_versions WHERE document_id = $1 AND content_hash = $2 AND processor_id = $3 AND processor_version = $4 AND extraction_rule_id = $5 AND extraction_rule_version = $6',
@@ -1174,7 +1315,16 @@ async function applyDocumentProcessing(
         evidence.length,
       ],
     );
-    if (isNewVersion) {
+    const authority = fingerprintIsCurrent
+      ? await updateCurrentDocumentVersion(
+          connection,
+          documentId,
+          filename,
+          candidate,
+          versionId,
+        )
+      : { advanced: false, revision: 0 };
+    if (authority.advanced) {
       const outputEvent = createCatalogueEvent(
         'DocumentExtracted',
         {
@@ -1208,6 +1358,128 @@ async function applyDocumentProcessing(
     await connection.run('ROLLBACK');
     throw error;
   }
+}
+
+type ProcessingCandidate = z.infer<typeof processingCandidateSchema>;
+
+type DocumentProcessingAuthorityRow = {
+  readonly document_version_id: string | null;
+  readonly content_fingerprint: string | null;
+  readonly processor_id: string | null;
+  readonly processor_version: number | null;
+  readonly extraction_rule_id: string | null;
+  readonly extraction_rule_version: number | null;
+  readonly revision: number | null;
+};
+
+async function updateCurrentDocumentVersion(
+  connection: DuckDbConnection,
+  documentId: string,
+  filename: string,
+  candidate: ProcessingCandidate,
+  documentVersionId: string,
+): Promise<{ readonly advanced: boolean; readonly revision: number }> {
+  const rows = await connection.runAndReadAll(
+    'SELECT current.document_version_id, version.content_fingerprint, version.processor_id, version.processor_version, version.extraction_rule_id, version.extraction_rule_version, current.revision FROM document_current_versions current LEFT JOIN document_versions version ON version.id = current.document_version_id WHERE current.document_id = $1',
+    [documentId],
+  );
+  const row = rows.getRowObjectsJson()[0];
+  const current: DocumentProcessingAuthorityRow | undefined =
+    row === undefined
+      ? undefined
+      : z
+          .object({
+            document_version_id: z.string().nullable(),
+            content_fingerprint: z.string().nullable(),
+            processor_id: z.string().nullable(),
+            processor_version: z.coerce.number().int().nullable(),
+            extraction_rule_id: z.string().nullable(),
+            extraction_rule_version: z.coerce.number().int().nullable(),
+            revision: z.coerce.number().int(),
+          })
+          .parse(row);
+  const preferred = await preferredProcessingDefinition(connection, filename);
+  const candidateIsPreferred =
+    preferred?.processorId === candidate.processorId &&
+    preferred.extractionRuleId === candidate.extractionRuleId;
+  const currentMatchesContent =
+    current?.document_version_id !== null &&
+    current?.document_version_id !== undefined &&
+    current.content_fingerprint === candidate.contentFingerprint;
+
+  let mayAdvance = candidateIsPreferred;
+  if (mayAdvance && currentMatchesContent) {
+    const currentIsPreferred =
+      preferred?.processorId === current.processor_id &&
+      preferred.extractionRuleId === current.extraction_rule_id;
+    if (currentIsPreferred) {
+      const currentProcessorVersion = current.processor_version;
+      const currentRuleVersion = current.extraction_rule_version;
+      if (
+        currentProcessorVersion === null ||
+        currentProcessorVersion === undefined ||
+        currentRuleVersion === null ||
+        currentRuleVersion === undefined
+      ) {
+        throw new Error('Current document processing authority is incomplete');
+      }
+      mayAdvance =
+        candidate.processorVersion > currentProcessorVersion ||
+        (candidate.processorVersion === currentProcessorVersion &&
+          candidate.extractionRuleVersion > currentRuleVersion) ||
+        current.document_version_id === documentVersionId;
+    }
+  }
+
+  if (!mayAdvance) {
+    return {
+      advanced: false,
+      revision: current?.revision ?? 0,
+    };
+  }
+  if (current?.document_version_id === documentVersionId) {
+    return { advanced: false, revision: current.revision ?? 1 };
+  }
+
+  const revision = (current?.revision ?? 0) + 1;
+  await connection.run(
+    'INSERT INTO document_current_versions (document_id, document_version_id, revision, updated_at) VALUES ($1, $2, $3, $4) ON CONFLICT (document_id) DO UPDATE SET document_version_id = excluded.document_version_id, revision = excluded.revision, updated_at = excluded.updated_at',
+    [documentId, documentVersionId, revision, candidate.processedAt],
+  );
+  return { advanced: true, revision };
+}
+
+async function preferredProcessingDefinition(
+  connection: DuckDbConnection,
+  filename: string,
+): Promise<
+  | { readonly processorId: string; readonly extractionRuleId: string }
+  | undefined
+> {
+  const normalizedFilename = filename.toLocaleLowerCase('en-US');
+  const rows = await connection.runAndReadAll(
+    "SELECT processor_id, extraction_rule_id FROM accepted_processing_definitions WHERE (filename_match_kind = 'exact' AND filename_match = $1) OR (filename_match_kind = 'suffix' AND ends_with($1, filename_match)) LIMIT 2",
+    [normalizedFilename],
+  );
+  const definitions = rows.getRowObjectsJson().map((row) =>
+    z
+      .object({
+        processor_id: z.string(),
+        extraction_rule_id: z.string(),
+      })
+      .parse(row),
+  );
+  if (definitions.length !== 1) {
+    return undefined;
+  }
+  const [definition] = definitions;
+  if (definition === undefined) {
+    return undefined;
+  }
+  return {
+    processorId: definition.processor_id,
+    extractionRuleId: definition.extraction_rule_id,
+  };
 }
 
 async function getDocumentVersion(
@@ -1469,6 +1741,11 @@ type CatalogueEventType = Extract<
   | 'DocumentModified'
   | 'DocumentRemoved'
   | 'DocumentExtracted'
+  | 'KnowledgeEntityDiscovered'
+  | 'KnowledgeEntitySuperseded'
+  | 'KnowledgeRelationshipDiscovered'
+  | 'KnowledgeRelationshipSuperseded'
+  | 'KnowledgeModelPublished'
 >;
 
 function parseCatalogueEventType(value: string): CatalogueEventType {
@@ -1481,6 +1758,11 @@ function parseCatalogueEventType(value: string): CatalogueEventType {
     'DocumentModified',
     'DocumentRemoved',
     'DocumentExtracted',
+    'KnowledgeEntityDiscovered',
+    'KnowledgeEntitySuperseded',
+    'KnowledgeRelationshipDiscovered',
+    'KnowledgeRelationshipSuperseded',
+    'KnowledgeModelPublished',
   ];
   if (!eventTypes.includes(value as CatalogueEventType)) {
     throw new Error(`Unsupported catalogue discovery event: ${value}`);
