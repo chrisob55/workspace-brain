@@ -1310,3 +1310,474 @@ describe('Workspace Brain knowledge evolution routes', () => {
     await server.close();
   });
 });
+
+const currencyPublication = {
+  ...publication,
+  id: createKnowledgePublicationId(),
+  contentHash: 'f'.repeat(64),
+};
+const currencyDocuments = [
+  createDocumentId(),
+  createDocumentId(),
+  createDocumentId(),
+].sort();
+const [currentDocumentId, changedDocumentId, removedDocumentId] =
+  currencyDocuments as [
+    (typeof currencyDocuments)[number],
+    (typeof currencyDocuments)[number],
+    (typeof currencyDocuments)[number],
+  ];
+const currencyVersion = {
+  current: createDocumentVersionId(),
+  changedPublished: createDocumentVersionId(),
+  changedCurrent: createDocumentVersionId(),
+  removed: createDocumentVersionId(),
+};
+
+function currencyProvenance(
+  documentId: string,
+  documentVersionId: string,
+): typeof entityProvenance {
+  return {
+    ...entityProvenance,
+    evidenceId: createEvidenceId(),
+    documentId: documentId as typeof entityProvenance.documentId,
+    documentVersionId:
+      documentVersionId as typeof entityProvenance.documentVersionId,
+  };
+}
+
+const currencyEntityIds = [
+  createKnowledgeEntityId(),
+  createKnowledgeEntityId(),
+  createKnowledgeEntityId(),
+].sort();
+const currencyEntitySupport = [
+  [currencyProvenance(currentDocumentId, currencyVersion.current)],
+  [currencyProvenance(changedDocumentId, currencyVersion.changedPublished)],
+  [currencyProvenance(removedDocumentId, currencyVersion.removed)],
+];
+const currencyEntities = currencyEntityIds.map((id, index) => {
+  const versionId = createEntityVersionId();
+  const provenance = currencyEntitySupport[index]!;
+  return {
+    publicationId: currencyPublication.id,
+    entityVersionId: versionId,
+    versionNumber: index + 1,
+    entity: {
+      ...publishedEntityObject,
+      id,
+      name: `currency-${index}`,
+      sourceEvidenceIds: provenance.map(({ evidenceId }) => evidenceId),
+      provenance,
+      currentVersionId: versionId,
+    },
+  };
+});
+const currencyRelationshipIds = [
+  createKnowledgeRelationshipId(),
+  createKnowledgeRelationshipId(),
+].sort();
+const currencyRelationshipSupport = [
+  // Endpoints are CURRENT and STALE, but this relationship's own support is
+  // unchanged, so it must be CURRENT.
+  [currencyProvenance(currentDocumentId, currencyVersion.current)],
+  [
+    currencyProvenance(changedDocumentId, currencyVersion.changedPublished),
+    currencyProvenance(removedDocumentId, currencyVersion.removed),
+  ],
+];
+const currencyRelationships = currencyRelationshipIds.map((id, index) => {
+  const versionId = createRelationshipVersionId();
+  const provenance = currencyRelationshipSupport[index]!;
+  return {
+    publicationId: currencyPublication.id,
+    relationshipVersionId: versionId,
+    versionNumber: 1,
+    relationship: {
+      ...publishedRelationshipObject,
+      id,
+      sourceEntityId: currencyEntityIds[index]!,
+      targetEntityId: currencyEntityIds[index + 1]!,
+      sourceEvidenceIds: provenance.map(({ evidenceId }) => evidenceId),
+      provenance,
+      currentVersionId: versionId,
+    },
+  };
+});
+
+function createCurrencyCatalogue() {
+  const base = createCatalogue();
+  const state = {
+    changedRevision: 2,
+    failure: undefined as Error | undefined,
+    dropPublishedVersion: false,
+  };
+  const catalogue = {
+    ...base,
+    async getPublicationCurrencyInputs(publicationId: string) {
+      if (state.failure !== undefined) {
+        throw state.failure;
+      }
+      if (publicationId !== currencyPublication.id) {
+        return undefined;
+      }
+      const documentVersions = [
+        {
+          id: currencyVersion.current,
+          documentId: currentDocumentId,
+          contentHash: '1'.repeat(64),
+        },
+        {
+          id: currencyVersion.changedPublished,
+          documentId: changedDocumentId,
+          contentHash: '2'.repeat(64),
+        },
+        {
+          id: currencyVersion.changedCurrent,
+          documentId: changedDocumentId,
+          contentHash: '3'.repeat(64),
+        },
+        {
+          id: currencyVersion.removed,
+          documentId: removedDocumentId,
+          contentHash: '4'.repeat(64),
+        },
+      ];
+      return {
+        publication: {
+          ...currencyPublication,
+          entityVersionIds: currencyEntities.map(
+            ({ entityVersionId }) => entityVersionId,
+          ),
+          relationshipVersionIds: currencyRelationships.map(
+            ({ relationshipVersionId }) => relationshipVersionId,
+          ),
+        },
+        entities: [...currencyEntities].reverse(),
+        relationships: [...currencyRelationships].reverse(),
+        documentVersions: state.dropPublishedVersion
+          ? documentVersions.slice(1)
+          : documentVersions,
+        documents: [
+          {
+            documentId: currentDocumentId,
+            documentPresent: true,
+            currentDocumentVersionId: currencyVersion.current,
+            revision: 1,
+          },
+          {
+            documentId: changedDocumentId,
+            documentPresent: true,
+            currentDocumentVersionId: currencyVersion.changedCurrent,
+            revision: state.changedRevision,
+          },
+          {
+            documentId: removedDocumentId,
+            documentPresent: false,
+            currentDocumentVersionId: null,
+            revision: 3,
+          },
+        ],
+      };
+    },
+  };
+  return { catalogue, state };
+}
+
+describe('Workspace Brain publication currency routes', () => {
+  const currencyPath = `/api/v1/knowledge/publications/${currencyPublication.id}/currency`;
+
+  it('summarises publication currency by object type and state', async () => {
+    const { catalogue } = createCurrencyCatalogue();
+    const server = createApiServer(catalogue, { logger: false });
+
+    const response = await server.inject(currencyPath);
+    const repeated = await server.inject(currencyPath);
+
+    expect(response.statusCode).toBe(200);
+    const summary = response.json();
+    expect(Object.keys(summary).sort()).toEqual([
+      'currencyBasisHash',
+      'currentEntities',
+      'currentRelationships',
+      'knowledgeModelId',
+      'publicationId',
+      'staleEntities',
+      'staleRelationships',
+      'unknownEntities',
+      'unknownRelationships',
+    ]);
+    expect(summary).toMatchObject({
+      publicationId: currencyPublication.id,
+      knowledgeModelId: knowledgeModel.id,
+      currentEntities: 1,
+      staleEntities: 1,
+      unknownEntities: 1,
+      currentRelationships: 1,
+      staleRelationships: 1,
+      unknownRelationships: 0,
+    });
+    expect(summary.currencyBasisHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(repeated.json()).toEqual(summary);
+    await server.close();
+  });
+
+  it('lists ordered currency details with supporting-document results', async () => {
+    const { catalogue } = createCurrencyCatalogue();
+    const server = createApiServer(catalogue, { logger: false });
+
+    const response = await server.inject(`${currencyPath}/details`);
+
+    expect(response.statusCode).toBe(200);
+    const page = response.json();
+    expect(page.publicationId).toBe(currencyPublication.id);
+    expect(page.knowledgeModelId).toBe(knowledgeModel.id);
+    expect(page.nextCursor).toBeNull();
+    expect(
+      page.items.map(
+        (item: { objectType: string; id: string; state: string }) => [
+          item.objectType,
+          item.id,
+          item.state,
+        ],
+      ),
+    ).toEqual([
+      ['entity', currencyEntityIds[0], 'CURRENT'],
+      ['entity', currencyEntityIds[1], 'STALE'],
+      ['entity', currencyEntityIds[2], 'UNKNOWN'],
+      ['relationship', currencyRelationshipIds[0], 'CURRENT'],
+      ['relationship', currencyRelationshipIds[1], 'STALE'],
+    ]);
+    expect(page.items[1]).toEqual({
+      objectType: 'entity',
+      id: currencyEntityIds[1],
+      versionId: currencyEntities[1]!.entityVersionId,
+      versionNumber: 2,
+      state: 'STALE',
+      supportingDocuments: [
+        {
+          documentId: changedDocumentId,
+          publishedDocumentVersionId: currencyVersion.changedPublished,
+          publishedContentHash: '2'.repeat(64),
+          currentDocumentVersionId: currencyVersion.changedCurrent,
+          currentContentHash: '3'.repeat(64),
+          catalogueRevision: 2,
+          state: 'STALE',
+          reason: 'CONTENT_CHANGED',
+        },
+      ],
+    });
+    expect(
+      page.items[4].supportingDocuments.map(
+        (item: { reason: string }) => item.reason,
+      ),
+    ).toEqual(['CONTENT_CHANGED', 'DOCUMENT_REMOVED']);
+    // Only domain identifiers and hashes; no paths, excerpts or SQL rows.
+    expect(JSON.stringify(page)).not.toMatch(
+      /documentPath|excerpt|document_id|content_hash/,
+    );
+    await server.close();
+  });
+
+  it('filters by object type and state and pages with bound cursors', async () => {
+    const { catalogue } = createCurrencyCatalogue();
+    const server = createApiServer(catalogue, { logger: false });
+
+    const relationships = await server.inject(
+      `${currencyPath}/details?objectType=relationship`,
+    );
+    const stale = await server.inject(`${currencyPath}/details?state=STALE`);
+    const staleEntities = await server.inject(
+      `${currencyPath}/details?objectType=entity&state=STALE`,
+    );
+    expect(
+      relationships.json().items.map(({ id }: { id: string }) => id),
+    ).toEqual(currencyRelationshipIds);
+    expect(
+      stale
+        .json()
+        .items.map(({ objectType, id }: { objectType: string; id: string }) => [
+          objectType,
+          id,
+        ]),
+    ).toEqual([
+      ['entity', currencyEntityIds[1]],
+      ['relationship', currencyRelationshipIds[1]],
+    ]);
+    expect(staleEntities.json().items).toHaveLength(1);
+
+    const seen: string[] = [];
+    let cursor: string | null = null;
+    let pages = 0;
+    do {
+      const response = await server.inject(
+        `${currencyPath}/details?limit=2${cursor === null ? '' : `&cursor=${encodeURIComponent(cursor)}`}`,
+      );
+      expect(response.statusCode).toBe(200);
+      const page = response.json();
+      seen.push(...page.items.map(({ id }: { id: string }) => id));
+      cursor = page.nextCursor;
+      pages += 1;
+    } while (cursor !== null);
+    expect(pages).toBe(3);
+    expect(seen).toEqual([...currencyEntityIds, ...currencyRelationshipIds]);
+
+    const filteredPage1 = await server.inject(
+      `${currencyPath}/details?state=STALE&limit=1`,
+    );
+    const filteredPage2 = await server.inject(
+      `${currencyPath}/details?state=STALE&limit=1&cursor=${encodeURIComponent(filteredPage1.json().nextCursor)}`,
+    );
+    expect(filteredPage2.statusCode).toBe(200);
+    expect(filteredPage2.json().items[0].id).toBe(currencyRelationshipIds[1]);
+    expect(filteredPage2.json().nextCursor).toBeNull();
+    await server.close();
+  });
+
+  it('rejects malformed, unscoped and mismatched cursors with 400', async () => {
+    const { catalogue } = createCurrencyCatalogue();
+    const server = createApiServer(catalogue, { logger: false });
+    const first = (
+      await server.inject(`${currencyPath}/details?state=STALE&limit=1`)
+    ).json();
+    const cursor = encodeURIComponent(first.nextCursor);
+    const decoded = JSON.parse(
+      Buffer.from(first.nextCursor, 'base64url').toString('utf8'),
+    );
+    expect(decoded).toEqual({
+      version: 1,
+      kind: 'publication-currency',
+      publicationId: currencyPublication.id,
+      state: 'STALE',
+      currencyBasisHash: first.currencyBasisHash,
+      afterObjectType: 'entity',
+      afterId: currencyEntityIds[1],
+    });
+    const forged = Buffer.from(
+      JSON.stringify({ ...decoded, afterObjectType: 'module' }),
+    ).toString('base64url');
+    const otherPublication = Buffer.from(
+      JSON.stringify({ ...decoded, publicationId: publication.id }),
+    ).toString('base64url');
+
+    const cases = [
+      // Filters differ from those the cursor was issued for.
+      `${currencyPath}/details?limit=1&cursor=${cursor}`,
+      `${currencyPath}/details?state=CURRENT&limit=1&cursor=${cursor}`,
+      `${currencyPath}/details?state=STALE&objectType=entity&cursor=${cursor}`,
+      // Cursor issued for this publication reused on another one.
+      `/api/v1/knowledge/publications/${publication.id}/currency/details?state=STALE&cursor=${cursor}`,
+      `${currencyPath}/details?state=STALE&cursor=${otherPublication}`,
+      `${currencyPath}/details?state=STALE&cursor=${forged}`,
+      `${currencyPath}/details?cursor=***`,
+      `${currencyPath}/details?cursor=${Buffer.from(currencyEntityIds[0]!).toString('base64url')}`,
+      `${currencyPath}/details?cursor=${'a'.repeat(2049)}`,
+    ];
+    for (const url of cases) {
+      const response = await server.inject(url);
+      expect(response.statusCode, url).toBe(400);
+      expect(response.headers['content-type'], url).toContain(
+        'application/problem+json',
+      );
+      expect(response.json().status, url).toBe(400);
+    }
+    const mismatched = await server.inject(
+      `${currencyPath}/details?limit=1&cursor=${cursor}`,
+    );
+    expect(mismatched.json().title, 'mismatched publication cursor').toBe(
+      'Invalid Cursor',
+    );
+    expect(mismatched.json()).toMatchObject({
+      type: 'about:blank',
+      title: 'Invalid Cursor',
+      status: 400,
+    });
+    await server.close();
+  });
+
+  it('returns 409 when the catalogue basis changes during pagination', async () => {
+    const { catalogue, state } = createCurrencyCatalogue();
+    const server = createApiServer(catalogue, { logger: false });
+    const first = (
+      await server.inject(`${currencyPath}/details?limit=1`)
+    ).json();
+    state.changedRevision = 3;
+
+    const response = await server.inject(
+      `${currencyPath}/details?limit=1&cursor=${encodeURIComponent(first.nextCursor)}`,
+    );
+    const summary = (await server.inject(currencyPath)).json();
+
+    expect(response.statusCode).toBe(409);
+    expect(response.headers['content-type']).toContain(
+      'application/problem+json',
+    );
+    expect(response.json()).toEqual({
+      type: 'about:blank',
+      title: 'Currency Basis Changed',
+      status: 409,
+      detail:
+        'The catalogue current-version basis changed during pagination; restart from the first page.',
+    });
+    expect(summary.currencyBasisHash).not.toBe(first.currencyBasisHash);
+    await server.close();
+  });
+
+  it('rejects invalid requests and unknown publications with problem details', async () => {
+    const { catalogue } = createCurrencyCatalogue();
+    const server = createApiServer(catalogue, { logger: false });
+    const missing = createKnowledgePublicationId();
+    const cases: [string, number][] = [
+      ['/api/v1/knowledge/publications/bad/currency', 400],
+      ['/api/v1/knowledge/publications/bad/currency/details', 400],
+      [`${currencyPath}?limit=1`, 400],
+      [`${currencyPath}/details?state=stale`, 400],
+      [`${currencyPath}/details?state=OUTDATED`, 400],
+      [`${currencyPath}/details?objectType=module`, 400],
+      [`${currencyPath}/details?limit=0`, 400],
+      [`${currencyPath}/details?limit=101`, 400],
+      [`${currencyPath}/details?unexpected=1`, 400],
+      [`/api/v1/knowledge/publications/${missing}/currency`, 404],
+      [`/api/v1/knowledge/publications/${missing}/currency/details`, 404],
+    ];
+    for (const [url, status] of cases) {
+      const response = await server.inject(url);
+      expect(response.statusCode, url).toBe(status);
+      expect(response.headers['content-type'], url).toContain(
+        'application/problem+json',
+      );
+      expect(response.json().status, url).toBe(status);
+    }
+    await server.close();
+  });
+
+  it('returns integrity problems instead of UNKNOWN for broken lineage', async () => {
+    const { catalogue, state } = createCurrencyCatalogue();
+    const server = createApiServer(catalogue, { logger: false });
+
+    state.dropPublishedVersion = true;
+    const lineage = await server.inject(currencyPath);
+    const lineageDetails = await server.inject(`${currencyPath}/details`);
+    state.dropPublishedVersion = false;
+    state.failure = new CatalogueIntegrityError(
+      'Publication references missing mandatory evidence',
+    );
+    const integrity = await server.inject(`${currencyPath}/details`);
+
+    for (const response of [lineage, lineageDetails, integrity]) {
+      expect(response.statusCode).toBe(500);
+      expect(response.headers['content-type']).toContain(
+        'application/problem+json',
+      );
+      expect(response.json()).toEqual({
+        type: 'about:blank',
+        title: 'Knowledge Integrity Failure',
+        status: 500,
+        detail:
+          'The stored publication or provenance data is incomplete or inconsistent.',
+      });
+    }
+    await server.close();
+  });
+});

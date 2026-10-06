@@ -33,6 +33,7 @@ import type {
   PublicationComparison,
   PublicationDiff,
 } from '@workspace-brain/domain-evolution';
+import type { PublicationCurrencyInputs } from '@workspace-brain/domain-currency';
 
 export type CataloguePage<T> = {
   readonly items: readonly T[];
@@ -214,6 +215,21 @@ export interface PublicationSnapshotReader {
   ): Promise<PublicationSnapshot | undefined>;
 }
 
+/**
+ * Read-only access to the catalogue facts needed to classify publication
+ * currency (Slice 7). One call returns the integrity-validated publication
+ * snapshot, the stored hashes of its supporting and current document versions,
+ * and the current-version pointer state of every supporting document, read in
+ * a single serialized catalogue operation and read transaction so all values
+ * come from one catalogue state. Implementations never write, never read the
+ * filesystem and never infer recency from timestamps or identifier order.
+ */
+export interface PublicationCurrencyReader {
+  getPublicationCurrencyInputs(
+    publicationId: string,
+  ): Promise<PublicationCurrencyInputs | undefined>;
+}
+
 export type PublicationComparisonPageRequest = {
   readonly publicationId: string;
   readonly afterId?: string;
@@ -334,6 +350,7 @@ export interface CatalogueDiscovery
     SearchProjectionReader,
     SearchProjectionWriter,
     PublicationSnapshotReader,
+    PublicationCurrencyReader,
     PublicationDiffStore {
   registerConfiguration(
     sources: readonly ConfiguredSource[],

@@ -3,11 +3,20 @@ import { randomUUID } from 'node:crypto';
 import type {
   CatalogueHealth,
   CatalogueReader,
+  PublicationCurrencyReader,
   PublicationDiffStore,
   PublicationSnapshotReader,
   SearchProjectionReader,
 } from '@workspace-brain/catalogue';
 import { CatalogueIntegrityError } from '@workspace-brain/catalogue';
+import {
+  classifyPublicationCurrency,
+  compareCurrencySortKey,
+  currencyObjectTypes,
+  currencyStates,
+  PublicationCurrencyLineageError,
+  type PublicationCurrency,
+} from '@workspace-brain/domain-currency';
 import {
   createPublicationDiffService,
   PublicationDiffScopeError,
@@ -115,6 +124,26 @@ const provenanceCursorSchema = z
 
 const publicationChangesQuerySchema = pageQuerySchema.strict();
 
+const currencyBasisHashSchema = z.string().regex(/^[a-f0-9]{64}$/);
+const publicationCurrencyQuerySchema = scopedPageQuerySchema
+  .extend({
+    objectType: z.enum(currencyObjectTypes).optional(),
+    state: z.enum(currencyStates).optional(),
+  })
+  .strict();
+const publicationCurrencyCursorSchema = z
+  .object({
+    version: z.literal(1),
+    kind: z.literal('publication-currency'),
+    publicationId: sourceIdSchema,
+    objectType: z.enum(currencyObjectTypes).optional(),
+    state: z.enum(currencyStates).optional(),
+    currencyBasisHash: currencyBasisHashSchema,
+    afterObjectType: z.enum(currencyObjectTypes),
+    afterId: sourceIdSchema,
+  })
+  .strict();
+
 const searchTextQuerySchema = z.string().trim().min(1).max(256);
 const searchEntityQuerySchema = pageQuerySchema
   .extend({
@@ -145,6 +174,7 @@ const searchLookupQuerySchema = z
 type SearchCatalogue = CatalogueReader &
   SearchProjectionReader &
   PublicationSnapshotReader &
+  PublicationCurrencyReader &
   PublicationDiffStore &
   CatalogueHealth;
 
@@ -196,7 +226,10 @@ export function createApiServer(
     if (error instanceof PublicationDiffScopeError) {
       return sendProblem(reply, 400, 'Invalid Request', error.message);
     }
-    if (error instanceof CatalogueIntegrityError) {
+    if (
+      error instanceof CatalogueIntegrityError ||
+      error instanceof PublicationCurrencyLineageError
+    ) {
       request.log.error(
         { err: error },
         'published knowledge integrity failure',
@@ -757,6 +790,110 @@ export function createApiServer(
     },
   );
 
+  // Publication currency is computed on demand from the catalogue's
+  // current-version pointers; nothing is persisted and nothing is written.
+  const loadPublicationCurrency = async (
+    publicationId: string,
+  ): Promise<PublicationCurrency> => {
+    const inputs = await catalogue.getPublicationCurrencyInputs(publicationId);
+    if (inputs === undefined) {
+      throw new ApiError(
+        404,
+        'Not Found',
+        'Knowledge publication was not found.',
+      );
+    }
+    return classifyPublicationCurrency(inputs);
+  };
+
+  server.get(
+    '/api/v1/knowledge/publications/:publicationId/currency',
+    async (request, reply) => {
+      const publicationId = parseIdParam(
+        request.params,
+        'publicationId',
+        'Publication',
+      );
+      parseCatalogueQuery(request.query, z.object({}).strict());
+      const { summary } = await loadPublicationCurrency(publicationId);
+      request.log.info(
+        { publicationId, currencyBasisHash: summary.currencyBasisHash },
+        'publication currency resolved',
+      );
+      return reply.send(summary);
+    },
+  );
+
+  server.get(
+    '/api/v1/knowledge/publications/:publicationId/currency/details',
+    async (request, reply) => {
+      const publicationId = parseIdParam(
+        request.params,
+        'publicationId',
+        'Publication',
+      );
+      const query = parseCatalogueQuery(
+        request.query,
+        publicationCurrencyQuerySchema,
+      );
+      const filters = {
+        ...(query.objectType === undefined
+          ? {}
+          : { objectType: query.objectType }),
+        ...(query.state === undefined ? {} : { state: query.state }),
+      };
+      const cursor =
+        query.cursor === undefined
+          ? undefined
+          : decodePublicationCurrencyCursor(query.cursor, {
+              publicationId,
+              ...filters,
+            });
+      const { summary, records } = await loadPublicationCurrency(publicationId);
+      if (
+        cursor !== undefined &&
+        cursor.currencyBasisHash !== summary.currencyBasisHash
+      ) {
+        throw new ApiError(
+          409,
+          'Currency Basis Changed',
+          'The catalogue current-version basis changed during pagination; restart from the first page.',
+        );
+      }
+      const after =
+        cursor === undefined
+          ? undefined
+          : { objectType: cursor.afterObjectType, id: cursor.afterId };
+      const matching = records.filter(
+        (record) =>
+          (query.objectType === undefined ||
+            record.objectType === query.objectType) &&
+          (query.state === undefined || record.state === query.state) &&
+          (after === undefined || compareCurrencySortKey(record, after) > 0),
+      );
+      const items = matching.slice(0, query.limit);
+      const last = items.at(-1);
+      return reply.send({
+        publicationId: summary.publicationId,
+        knowledgeModelId: summary.knowledgeModelId,
+        currencyBasisHash: summary.currencyBasisHash,
+        items,
+        nextCursor:
+          matching.length > query.limit && last !== undefined
+            ? encodeScopedCursor({
+                version: 1,
+                kind: 'publication-currency',
+                publicationId,
+                ...filters,
+                currencyBasisHash: summary.currencyBasisHash,
+                afterObjectType: last.objectType,
+                afterId: last.id,
+              })
+            : null,
+      });
+    },
+  );
+
   server.get('/api/v1/knowledge/diffs/:diffId', async (request, reply) => {
     const diffId = parseIdParam(request.params, 'diffId', 'Diff');
     parseCatalogueQuery(request.query, z.object({}).strict());
@@ -1029,6 +1166,25 @@ function decodePublicationChangesCursor(
 ): z.infer<typeof publicationChangesCursorSchema> {
   const parsed = decodeScopedCursor(cursor, publicationChangesCursorSchema);
   if (parsed.publicationId !== publicationId) {
+    throw invalidCursor();
+  }
+  return parsed;
+}
+
+function decodePublicationCurrencyCursor(
+  cursor: string,
+  expected: {
+    readonly publicationId: string;
+    readonly objectType?: (typeof currencyObjectTypes)[number];
+    readonly state?: (typeof currencyStates)[number];
+  },
+): z.infer<typeof publicationCurrencyCursorSchema> {
+  const parsed = decodeScopedCursor(cursor, publicationCurrencyCursorSchema);
+  if (
+    parsed.publicationId !== expected.publicationId ||
+    parsed.objectType !== expected.objectType ||
+    parsed.state !== expected.state
+  ) {
     throw invalidCursor();
   }
   return parsed;

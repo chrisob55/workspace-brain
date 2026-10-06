@@ -9,6 +9,13 @@ import {
   entityContentFields,
   relationshipContentFields,
 } from '../../packages/domain-evolution/src/index.js';
+import {
+  classifyPublicationCurrency,
+  currencyObjectTypes,
+  currencyReasons,
+  currencyStates,
+  type PublicationCurrencyInputs,
+} from '../../packages/domain-currency/src/index.js';
 
 const openApiPath = resolve(process.cwd(), 'openapi/openapi.json');
 
@@ -572,5 +579,203 @@ describe('OpenAPI contract', () => {
         reference,
       ).toBeDefined();
     }
+  });
+
+  it('declares and registers the Slice 7 publication currency API', async () => {
+    const document = JSON.parse(
+      await readFile(openApiPath, 'utf8'),
+    ) as OpenApiDocument;
+    const operations = [
+      [
+        '/api/v1/knowledge/publications/{publicationId}/currency',
+        'getPublicationCurrency',
+        'PublicationCurrencySummary',
+        ['PublicationId'],
+        ['200', '400', '404', '500'],
+      ],
+      [
+        '/api/v1/knowledge/publications/{publicationId}/currency/details',
+        'listPublicationCurrencyDetails',
+        'PublicationCurrencyPage',
+        [
+          'PublicationId',
+          'CurrencyObjectTypeFilter',
+          'CurrencyStateFilter',
+          'PublicationCurrencyCursor',
+          'Limit',
+        ],
+        ['200', '400', '404', '409', '500'],
+      ],
+    ] as const;
+    const problemResponses: Record<string, string> = {
+      '400': 'CurrencyInvalidRequest',
+      '404': 'CurrencyNotFound',
+      '409': 'CurrencyBasisChanged',
+      '500': 'CurrencyIntegrityFailure',
+    };
+    const server = createApiServer(
+      {} as Parameters<typeof createApiServer>[0],
+      { logger: false },
+    );
+    await server.ready();
+    for (const [
+      path,
+      operationId,
+      schema,
+      parameters,
+      statuses,
+    ] of operations) {
+      const operation = document.paths[path]?.get;
+      expect(Object.keys(document.paths[path] ?? {})).toEqual(['get']);
+      expect(operation?.operationId).toBe(operationId);
+      expect(
+        operation?.parameters?.map(
+          (parameter) => (parameter as { $ref?: string }).$ref,
+        ),
+      ).toEqual(parameters.map((name) => `#/components/parameters/${name}`));
+      expect(Object.keys(operation?.responses ?? {})).toEqual([...statuses]);
+      expect(
+        operation?.responses?.['200']?.content?.['application/json']?.schema
+          ?.$ref,
+      ).toBe(`#/components/schemas/${schema}`);
+      for (const status of statuses.filter((value) => value !== '200')) {
+        expect(operation?.responses?.[status]?.$ref, status).toBe(
+          `#/components/responses/${problemResponses[status]}`,
+        );
+      }
+      expect(
+        server.hasRoute({
+          method: 'GET',
+          url: path.replace(/\{([^}]+)\}/g, ':$1'),
+        }),
+      ).toBe(true);
+    }
+    await server.close();
+
+    const components = document.components as OpenApiDocument['components'] & {
+      responses: Record<
+        string,
+        { content?: Record<string, { schema?: { $ref?: string } }> }
+      >;
+    };
+    for (const name of Object.values(problemResponses)) {
+      expect(
+        components.responses[name]?.content?.['application/problem+json']
+          ?.schema?.$ref,
+        name,
+      ).toBe('#/components/schemas/CurrencyProblemDetails');
+    }
+    const parameter = (name: string) =>
+      components.parameters?.[name] as
+        { name?: string; in?: string; schema?: { $ref?: string } } | undefined;
+    expect(parameter('CurrencyObjectTypeFilter')).toMatchObject({
+      name: 'objectType',
+      in: 'query',
+      schema: { $ref: '#/components/schemas/CurrencyObjectType' },
+    });
+    expect(parameter('CurrencyStateFilter')).toMatchObject({
+      name: 'state',
+      in: 'query',
+      schema: { $ref: '#/components/schemas/CurrencyState' },
+    });
+    expect(parameter('PublicationCurrencyCursor')).toMatchObject({
+      name: 'cursor',
+      in: 'query',
+      schema: { $ref: '#/components/schemas/PublicationCurrencyCursor' },
+    });
+
+    const schemas = document.components.schemas;
+    expect(schemas.CurrencyState?.enum).toEqual([...currencyStates]);
+    expect(schemas.CurrencyReason?.enum).toEqual([...currencyReasons]);
+    expect(schemas.CurrencyObjectType?.enum).toEqual([...currencyObjectTypes]);
+    expect(schemas.CurrencyProblemDetails?.properties?.status).toEqual({
+      type: 'integer',
+      enum: [400, 404, 409, 500],
+    });
+    expect(schemas.PublicationCurrencyCursor).toMatchObject({
+      type: 'string',
+      maxLength: 2048,
+    });
+    for (const name of [
+      'PublicationCurrencySummary',
+      'SupportingDocumentCurrency',
+      'KnowledgeObjectCurrency',
+      'PublicationCurrencyPage',
+      'CurrencyProblemDetails',
+    ]) {
+      expect(schemas[name]?.additionalProperties, name).toBe(false);
+      expect(Object.keys(schemas[name]?.properties ?? {}).sort(), name).toEqual(
+        [...(schemas[name]?.required ?? [])].sort(),
+      );
+    }
+    const cursorPayload = schemas.PublicationCurrencyCursorPayload;
+    expect(cursorPayload?.additionalProperties).toBe(false);
+    expect(Object.keys(cursorPayload?.properties ?? {})).toEqual([
+      'version',
+      'kind',
+      'publicationId',
+      'objectType',
+      'state',
+      'currencyBasisHash',
+      'afterObjectType',
+      'afterId',
+    ]);
+    expect(cursorPayload?.required).toEqual([
+      'version',
+      'kind',
+      'publicationId',
+      'currencyBasisHash',
+      'afterObjectType',
+      'afterId',
+    ]);
+
+    // The contract mirrors exactly the fields the domain classifier emits.
+    const provenance = {
+      evidenceId: '01K00000000000000000000001',
+      documentVersionId: '01K00000000000000000000002',
+      documentId: '01K00000000000000000000003',
+    };
+    const result = classifyPublicationCurrency({
+      publication: {
+        id: '01K00000000000000000000004',
+        knowledgeModelId: '01K00000000000000000000005',
+      },
+      entities: [
+        {
+          entityVersionId: '01K00000000000000000000006',
+          versionNumber: 1,
+          entity: {
+            id: '01K00000000000000000000007',
+            provenance: [provenance],
+          },
+        },
+      ],
+      relationships: [],
+      documentVersions: [
+        {
+          id: provenance.documentVersionId,
+          documentId: provenance.documentId,
+          contentHash: 'a'.repeat(64),
+        },
+      ],
+      documents: [
+        {
+          documentId: provenance.documentId,
+          documentPresent: true,
+          currentDocumentVersionId: provenance.documentVersionId,
+          revision: 1,
+        },
+      ],
+    } as unknown as PublicationCurrencyInputs);
+    const record = result.records[0]!;
+    expect(Object.keys(result.summary).sort()).toEqual(
+      [...(schemas.PublicationCurrencySummary?.required ?? [])].sort(),
+    );
+    expect(Object.keys(record).sort()).toEqual(
+      [...(schemas.KnowledgeObjectCurrency?.required ?? [])].sort(),
+    );
+    expect(Object.keys(record.supportingDocuments[0]!).sort()).toEqual(
+      [...(schemas.SupportingDocumentCurrency?.required ?? [])].sort(),
+    );
   });
 });

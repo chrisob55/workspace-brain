@@ -5,13 +5,16 @@ discover and organise knowledge in local workspaces, repositories, and
 documents, then produce traceable, versioned Knowledge Models for AI OS and
 other consumers. It is not itself an agent or reasoning platform.
 
-The project is being delivered in vertical slices. Slices 0-6 provide
+The project is being delivered in vertical slices. Slices 0-7 provide
 deterministic filesystem discovery, evidence extraction, immutable Knowledge
 Model publications, publication-scoped lexical search, one-hop knowledge
-exploration with evidence-backed provenance, and deterministic knowledge
-evolution (diffs between publications). Search, exploration, and diffs never
-modify knowledge; no AI, embeddings, semantic search, or graph store is used.
+exploration with evidence-backed provenance, deterministic knowledge
+evolution (diffs between publications), and publication currency (whether
+published knowledge still reflects the catalogue's current document versions).
+Search, exploration, diffs, and currency never modify knowledge; no AI,
+embeddings, semantic search, or graph store is used.
 See the [architecture document](docs/architecture/Workspace-Brain-ADD-v1.md),
+the [Slice 7 implementation report](docs/implementation/slice-7-report.md),
 the [Slice 6 implementation report](docs/implementation/slice-6-report.md), and
 [Slice 1 remediation report](docs/implementation/slice-1-remediation-report.md)
 for architecture, current exploration behavior, and runtime topology.

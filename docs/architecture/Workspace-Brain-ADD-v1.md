@@ -278,13 +278,36 @@ MVP exit: configure HMRC Agents -> scan -> process evidence -> extract candidate
 - **v0.3:** repository intelligence, service interactions, knowledge views and provenance search.
 - **v0.4:** assertion/review lifecycle, verification rules and provenance explorer.
 - **v0.5:** duplicates, staleness, missing knowledge and workspace recommendations.
+  Slice 7 delivers an early part of the staleness item: deterministic,
+  read-only publication currency; see the [Slice 7 implementation
+  report](../implementation/slice-7-report.md).
 - **v0.6:** SharePoint, Confluence, GitHub and Azure DevOps sources.
-- **v0.7:** model diffs, context packs and mature AI OS packaging.
+- **v0.7:** richer model-diff capabilities, context packs and mature AI OS
+  packaging. Deterministic publication-to-publication diffs were delivered
+  earlier in Slice 6; see the [Slice 6 implementation
+  report](../implementation/slice-6-report.md).
 - **v0.8:** entity resolution, rich traversal and contradiction detection; evaluate graph storage only then.
 - **v0.9:** quality scoring and reviewable suggested actions.
 - **v1.0:** governed write/action contracts and agent integration.
 
 ## 23. Implementation slices
+
+The sequence below records the initial implementation plan. Delivery order and
+scope evolved; the shipped slices are:
+
+0. Architecture runway and tooling.
+1. Deterministic filesystem discovery and inventory.
+2. Evidence extraction and document processing.
+3. Knowledge Models, relationships, and immutable publication.
+4. Publication-scoped lexical search projection.
+5. Publication-scoped knowledge exploration.
+6. Deterministic knowledge evolution through publication diffs.
+7. Publication currency: read-only classification of published knowledge as
+   current, stale or unknown against the catalogue's current-version pointers.
+
+The original proposal is retained below for historical context, not as a
+status report:
+
 0. Architecture runway: tooling, domain, config, ADRs, Compose and health.
 1. Deterministic discovery: catalogue, filesystem source, scan, versions and no-op rescan.
 2. Evidence: Markdown/YAML/JSON normalisation, deterministic extraction and explanations.

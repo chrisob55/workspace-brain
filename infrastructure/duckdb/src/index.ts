@@ -106,6 +106,7 @@ import {
   searchProjectedEntities,
   searchProjectedRelationships,
 } from './search-projection.js';
+import { getPublicationCurrencyInputs } from './publication-currency.js';
 import {
   findPublicationDiff,
   getPublicationDiff,
@@ -939,6 +940,10 @@ export async function createDuckDbCatalogue(
 
     async getPublicationSnapshot(publicationId: string) {
       return getPublicationSnapshot(connection, publicationId);
+    },
+
+    async getPublicationCurrencyInputs(publicationId: string) {
+      return getPublicationCurrencyInputs(connection, publicationId);
     },
 
     async findPublicationDiff(
