@@ -176,6 +176,14 @@ export class NatsEventConsumer implements EventConsumer {
 
     const startedAt = new Date().toISOString();
     const startedAtMonotonic = performance.now();
+    this.logger.info(
+      {
+        sourceId: source.sourceId,
+        roots: source.roots.map((root) => root.absolutePath),
+        correlationId: event.correlationId,
+      },
+      'source scan started',
+    );
     await this.bus.publish(
       createWorkerEvent(
         'SourceScanStarted',
@@ -236,7 +244,7 @@ export class NatsEventConsumer implements EventConsumer {
         repositoryCount: scan.repositories.length,
         documentCount: scan.documents.length,
       },
-      'source inventory submitted',
+      'source inventory submitted; awaiting catalogue change classification',
     );
   }
 }
