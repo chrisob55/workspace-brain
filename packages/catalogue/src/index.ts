@@ -29,6 +29,10 @@ import type {
   Source,
   Workspace,
 } from '@workspace-brain/domain';
+import type {
+  PublicationComparison,
+  PublicationDiff,
+} from '@workspace-brain/domain-evolution';
 
 export type CataloguePage<T> = {
   readonly items: readonly T[];
@@ -192,6 +196,58 @@ export interface SearchProjectionWriter {
   }): Promise<readonly SearchProjectionSummary[]>;
 }
 
+/** One immutable publication and exactly the entity/relationship versions it references. */
+export type PublicationSnapshot = {
+  readonly publication: KnowledgePublication;
+  readonly entities: readonly PublishedEntity[];
+  readonly relationships: readonly PublishedRelationship[];
+};
+
+/**
+ * Read-only access to integrity-validated publication snapshots. Implementations
+ * resolve membership through immutable version rows only and never consult
+ * current entity/relationship rows or the search projection.
+ */
+export interface PublicationSnapshotReader {
+  getPublicationSnapshot(
+    publicationId: string,
+  ): Promise<PublicationSnapshot | undefined>;
+}
+
+export type PublicationComparisonPageRequest = {
+  readonly publicationId: string;
+  readonly afterId?: string;
+  readonly limit: number;
+};
+
+/**
+ * Storage for derived Publication Diffs. Diffs are disposable: the store may be
+ * truncated at any time and every diff regenerated from publications. It never
+ * writes publication, entity-version or relationship-version records.
+ */
+export interface PublicationDiffStore {
+  findPublicationDiff(
+    fromPublicationId: string,
+    toPublicationId: string,
+  ): Promise<PublicationDiff | undefined>;
+  getPublicationDiff(diffId: string): Promise<PublicationDiff | undefined>;
+  /** Comparisons in which the publication is either side, ordered by diff ID. */
+  listPublicationComparisons(
+    request: PublicationComparisonPageRequest,
+  ): Promise<CataloguePage<PublicationComparison>>;
+  /**
+   * Persists a diff for its ordered publication pair. If a diff with the same
+   * content hash is already stored for the pair, the stored diff is returned
+   * unchanged; a stored diff with a different content hash is replaced.
+   * `invalidDiffId` names a stored diff the caller has found to be invalid; it
+   * is always replaced, even when its recorded content hash matches.
+   */
+  savePublicationDiff(
+    diff: PublicationDiff,
+    invalidDiffId?: string,
+  ): Promise<PublicationDiff>;
+}
+
 export interface CatalogueReader {
   listSources(request: CataloguePageRequest): Promise<CataloguePage<Source>>;
   listWorkspaces(
@@ -273,7 +329,12 @@ export interface CatalogueHealth {
 }
 
 export interface CatalogueDiscovery
-  extends CatalogueReader, SearchProjectionReader, SearchProjectionWriter {
+  extends
+    CatalogueReader,
+    SearchProjectionReader,
+    SearchProjectionWriter,
+    PublicationSnapshotReader,
+    PublicationDiffStore {
   registerConfiguration(
     sources: readonly ConfiguredSource[],
     workspaces: readonly ConfiguredWorkspace[],

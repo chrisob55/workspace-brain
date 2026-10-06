@@ -5,13 +5,14 @@ discover and organise knowledge in local workspaces, repositories, and
 documents, then produce traceable, versioned Knowledge Models for AI OS and
 other consumers. It is not itself an agent or reasoning platform.
 
-The project is being delivered in vertical slices. Slices 0-5 provide
+The project is being delivered in vertical slices. Slices 0-6 provide
 deterministic filesystem discovery, evidence extraction, immutable Knowledge
-Model publications, publication-scoped lexical search, and one-hop knowledge
-exploration with evidence-backed provenance. Search and exploration remain
-read-only; no AI, embeddings, semantic search, or graph store is used. See the
-[architecture document](docs/architecture/Workspace-Brain-ADD-v1.md), the
-[Slice 5 implementation report](docs/implementation/slice-5-report.md), and
+Model publications, publication-scoped lexical search, one-hop knowledge
+exploration with evidence-backed provenance, and deterministic knowledge
+evolution (diffs between publications). Search, exploration, and diffs never
+modify knowledge; no AI, embeddings, semantic search, or graph store is used.
+See the [architecture document](docs/architecture/Workspace-Brain-ADD-v1.md),
+the [Slice 6 implementation report](docs/implementation/slice-6-report.md), and
 [Slice 1 remediation report](docs/implementation/slice-1-remediation-report.md)
 for architecture, current exploration behavior, and runtime topology.
 
@@ -42,8 +43,11 @@ for the current MVP scope.
   Knowledge Model candidates with immutable publication snapshots.
 - Publication-scoped lexical search and deterministic one-hop relationship
   exploration with source-version provenance.
+- Deterministic publication diffs: added, removed, and modified entities and
+  relationships between two publications of the same Knowledge Model, stored
+  as derived, rebuildable artefacts.
 - Read-only, cursor-paginated API endpoints for sources, workspaces,
-  repositories, documents, search, and published knowledge.
+  repositories, documents, search, published knowledge, and publication diffs.
 - Docker Compose runtime with the API, ingestion worker, NATS JetStream,
   Qdrant, and Ollama. Qdrant and Ollama are part of the broader architecture;
   the completed knowledge-exploration slice does not use them for indexing or
@@ -120,9 +124,11 @@ decision with a new ADR rather than silently rewriting an accepted one.
 
 ## Direction
 
-The intended next steps build on deterministic discovery: extract
-provenance-backed Evidence, add lexical and semantic search, then define,
-validate, and publish immutable Knowledge Model versions. AI-assisted
-enrichment is a later, controlled step: AI output is candidate knowledge and
-does not establish or publish facts. The architecture document describes the
-broader roadmap; these capabilities should not be read as already implemented.
+Deterministic discovery, evidence extraction, immutable Knowledge Model
+publication, lexical search, exploration, and publication diffs are
+implemented. The intended next steps are richer graph queries, analytics,
+semantic search, and AI OS consumption packaging. AI-assisted enrichment is a
+later, controlled step: AI output is candidate knowledge and does not
+establish or publish facts. The architecture document describes the broader
+roadmap; capabilities beyond those listed above should not be read as already
+implemented.

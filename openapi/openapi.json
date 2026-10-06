@@ -996,6 +996,114 @@
         }
       }
     },
+    "/api/v1/knowledge/publications/{publicationId}/diff/{otherPublicationId}": {
+      "get": {
+        "operationId": "getPublicationDiff",
+        "summary": "Compare two publications",
+        "description": "Returns the deterministic diff from `publicationId` to `otherPublicationId`. The diff is computed only from the two immutable publications and the entity/relationship versions they reference, and is materialised as a derived, disposable artefact on first request; repeated requests return the stored diff while it matches its publications. Both publications must belong to the same Knowledge Model.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/PublicationId"
+          },
+          {
+            "$ref": "#/components/parameters/OtherPublicationId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deterministic publication diff",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicationDiff"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/IntegrityFailure"
+          }
+        }
+      }
+    },
+    "/api/v1/knowledge/publications/{publicationId}/changes": {
+      "get": {
+        "operationId": "listPublicationComparisons",
+        "summary": "List known comparisons for a publication",
+        "description": "Lists previously generated diffs in which the publication is either the source or the target, ordered by diff ID. Only comparison headers and summaries are returned; each is verified against a regeneration from its immutable publications, and a stored diff that no longer matches yields an integrity failure. Cursors are opaque and bound to the publication; a cursor issued for another publication is rejected with 400.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/PublicationId"
+          },
+          {
+            "$ref": "#/components/parameters/Cursor"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Known comparisons involving the publication",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicationComparisonPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/IntegrityFailure"
+          }
+        }
+      }
+    },
+    "/api/v1/knowledge/diffs/{diffId}": {
+      "get": {
+        "operationId": "getPublicationDiffById",
+        "summary": "Retrieve a previously generated diff",
+        "description": "Returns a stored diff after verifying that regenerating it from its immutable publications yields identical content.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/DiffId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stored publication diff",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicationDiff"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/IntegrityFailure"
+          }
+        }
+      }
+    },
     "/api/v1/search/entities": {
       "get": {
         "operationId": "searchProjectedEntities",
@@ -1401,6 +1509,25 @@
         "required": true,
         "schema": { "type": "string", "format": "ulid" }
       },
+      "OtherPublicationId": {
+        "name": "otherPublicationId",
+        "in": "path",
+        "required": true,
+        "description": "Publication compared against `publicationId`; must belong to the same Knowledge Model.",
+        "schema": {
+          "type": "string",
+          "format": "ulid"
+        }
+      },
+      "DiffId": {
+        "name": "diffId",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "format": "ulid"
+        }
+      },
       "Cursor": {
         "name": "cursor",
         "in": "query",
@@ -1435,7 +1562,7 @@
         }
       },
       "IntegrityFailure": {
-        "description": "Published membership or mandatory provenance is corrupt or incomplete",
+        "description": "Published membership, mandatory provenance or a stored diff is corrupt or inconsistent",
         "content": {
           "application/problem+json": {
             "schema": { "$ref": "#/components/schemas/ProblemDetails" }
@@ -2658,6 +2785,377 @@
           "builtAt": {
             "type": ["string", "null"],
             "format": "date-time"
+          }
+        }
+      },
+      "ChangeType": {
+        "type": "string",
+        "enum": ["ADDED", "REMOVED", "MODIFIED"],
+        "description": "Observable change of one stable identity between two publications. ADDED: only in the target publication. REMOVED: only in the source publication. MODIFIED: in both with a different immutable version and a different content hash."
+      },
+      "ChangeSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "entitiesAdded",
+          "entitiesRemoved",
+          "entitiesModified",
+          "entitiesUnchanged",
+          "relationshipsAdded",
+          "relationshipsRemoved",
+          "relationshipsModified",
+          "relationshipsUnchanged"
+        ],
+        "properties": {
+          "entitiesAdded": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "entitiesRemoved": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "entitiesModified": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "entitiesUnchanged": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "relationshipsAdded": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "relationshipsRemoved": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "relationshipsModified": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "relationshipsUnchanged": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "KnowledgeVersionReference": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Immutable entity or relationship version on one side of a diff. `contentHash` is SHA-256 over the compared content fields of the version snapshot.",
+        "required": ["versionId", "versionNumber", "contentHash"],
+        "properties": {
+          "versionId": {
+            "type": "string",
+            "format": "ulid"
+          },
+          "versionNumber": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "contentHash": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        }
+      },
+      "EntityChange": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Descriptive fields come from the target version when present, otherwise from the source version. `from` is null for ADDED, `to` is null for REMOVED, and `changedFields` is empty unless MODIFIED.",
+        "required": [
+          "changeType",
+          "entityId",
+          "entityType",
+          "name",
+          "from",
+          "to",
+          "changedFields"
+        ],
+        "properties": {
+          "changeType": {
+            "$ref": "#/components/schemas/ChangeType"
+          },
+          "entityId": {
+            "type": "string",
+            "format": "ulid"
+          },
+          "entityType": {
+            "type": "string",
+            "enum": ["package", "container", "api", "module"]
+          },
+          "name": {
+            "type": "string"
+          },
+          "from": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/KnowledgeVersionReference"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "to": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/KnowledgeVersionReference"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "changedFields": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "type",
+                "name",
+                "lifecycleStatus",
+                "sourceEvidenceIds",
+                "provenance"
+              ]
+            }
+          }
+        }
+      },
+      "RelationshipChange": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Descriptive fields come from the target version when present, otherwise from the source version. `from` is null for ADDED, `to` is null for REMOVED, and `changedFields` is empty unless MODIFIED.",
+        "required": [
+          "changeType",
+          "relationshipId",
+          "relationshipType",
+          "sourceEntityId",
+          "targetEntityId",
+          "from",
+          "to",
+          "changedFields"
+        ],
+        "properties": {
+          "changeType": {
+            "$ref": "#/components/schemas/ChangeType"
+          },
+          "relationshipId": {
+            "type": "string",
+            "format": "ulid"
+          },
+          "relationshipType": {
+            "$ref": "#/components/schemas/KnowledgeRelationshipType"
+          },
+          "sourceEntityId": {
+            "type": "string",
+            "format": "ulid"
+          },
+          "targetEntityId": {
+            "type": "string",
+            "format": "ulid"
+          },
+          "from": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/KnowledgeVersionReference"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "to": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/KnowledgeVersionReference"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "changedFields": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "type",
+                "sourceEntityId",
+                "targetEntityId",
+                "confidence",
+                "lifecycleStatus",
+                "sourceEvidenceIds",
+                "provenance"
+              ]
+            }
+          }
+        }
+      },
+      "PublicationComparison": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Header of a derived, disposable comparison between two immutable publications of one Knowledge Model.",
+        "required": [
+          "id",
+          "schemaVersion",
+          "knowledgeModelId",
+          "fromPublicationId",
+          "fromPublicationVersion",
+          "fromPublicationContentHash",
+          "toPublicationId",
+          "toPublicationVersion",
+          "toPublicationContentHash",
+          "contentHash",
+          "generatedAt",
+          "summary"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "ulid"
+          },
+          "schemaVersion": {
+            "const": 1
+          },
+          "knowledgeModelId": {
+            "type": "string",
+            "format": "ulid"
+          },
+          "fromPublicationId": {
+            "type": "string",
+            "format": "ulid"
+          },
+          "fromPublicationVersion": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "fromPublicationContentHash": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "toPublicationId": {
+            "type": "string",
+            "format": "ulid"
+          },
+          "toPublicationVersion": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "toPublicationContentHash": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "contentHash": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "description": "SHA-256 of the stable JSON of every diff field except `id`, `generatedAt` and `contentHash` itself; identical for identical publication pairs."
+          },
+          "generatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/ChangeSummary"
+          }
+        }
+      },
+      "PublicationDiff": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Derived, non-authoritative, rebuildable comparison of two immutable publications. Changes are ordered by stable entity or relationship ID; unchanged objects are counted in the summary but not listed.",
+        "required": [
+          "id",
+          "schemaVersion",
+          "knowledgeModelId",
+          "fromPublicationId",
+          "fromPublicationVersion",
+          "fromPublicationContentHash",
+          "toPublicationId",
+          "toPublicationVersion",
+          "toPublicationContentHash",
+          "contentHash",
+          "generatedAt",
+          "summary",
+          "entityChanges",
+          "relationshipChanges"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "ulid"
+          },
+          "schemaVersion": {
+            "const": 1
+          },
+          "knowledgeModelId": {
+            "type": "string",
+            "format": "ulid"
+          },
+          "fromPublicationId": {
+            "type": "string",
+            "format": "ulid"
+          },
+          "fromPublicationVersion": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "fromPublicationContentHash": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "toPublicationId": {
+            "type": "string",
+            "format": "ulid"
+          },
+          "toPublicationVersion": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "toPublicationContentHash": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "contentHash": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "description": "SHA-256 of the stable JSON of every diff field except `id`, `generatedAt` and `contentHash` itself; identical for identical publication pairs."
+          },
+          "generatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/ChangeSummary"
+          },
+          "entityChanges": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EntityChange"
+            }
+          },
+          "relationshipChanges": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RelationshipChange"
+            }
+          }
+        }
+      },
+      "PublicationComparisonPage": {
+        "type": "object",
+        "required": ["items", "nextCursor"],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicationComparison"
+            }
+          },
+          "nextCursor": {
+            "type": ["string", "null"]
           }
         }
       },

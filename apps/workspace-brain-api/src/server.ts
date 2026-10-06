@@ -3,9 +3,15 @@ import { randomUUID } from 'node:crypto';
 import type {
   CatalogueHealth,
   CatalogueReader,
+  PublicationDiffStore,
+  PublicationSnapshotReader,
   SearchProjectionReader,
 } from '@workspace-brain/catalogue';
 import { CatalogueIntegrityError } from '@workspace-brain/catalogue';
+import {
+  createPublicationDiffService,
+  PublicationDiffScopeError,
+} from '@workspace-brain/publication-diff-service';
 import {
   knowledgeRelationshipTypes,
   searchMatchModes,
@@ -87,6 +93,14 @@ const relationshipCursorSchema = z
     afterId: sourceIdSchema,
   })
   .strict();
+const publicationChangesCursorSchema = z
+  .object({
+    version: z.literal(1),
+    kind: z.literal('publication-comparisons'),
+    publicationId: sourceIdSchema,
+    afterId: sourceIdSchema,
+  })
+  .strict();
 const provenanceCursorSchema = z
   .object({
     version: z.literal(1),
@@ -98,6 +112,8 @@ const provenanceCursorSchema = z
     afterId: evidenceIdSchema,
   })
   .strict();
+
+const publicationChangesQuerySchema = pageQuerySchema.strict();
 
 const searchTextQuerySchema = z.string().trim().min(1).max(256);
 const searchEntityQuerySchema = pageQuerySchema
@@ -128,6 +144,8 @@ const searchLookupQuerySchema = z
 
 type SearchCatalogue = CatalogueReader &
   SearchProjectionReader &
+  PublicationSnapshotReader &
+  PublicationDiffStore &
   CatalogueHealth;
 
 type ApiServerOptions = {
@@ -159,6 +177,13 @@ export function createApiServer(
     },
   });
 
+  // Diffs are derived artefacts computed in-process from immutable
+  // publications; the API remains the sole DuckDB writer (ADR-017).
+  const publicationDiffs = createPublicationDiffService({
+    snapshots: catalogue,
+    store: catalogue,
+  });
+
   server.addHook('onSend', async (request, reply, payload) => {
     reply.header('x-correlation-id', request.id);
     return payload;
@@ -167,6 +192,9 @@ export function createApiServer(
   server.setErrorHandler((error, request, reply) => {
     if (error instanceof ApiError) {
       return sendProblem(reply, error.statusCode, error.title, error.message);
+    }
+    if (error instanceof PublicationDiffScopeError) {
+      return sendProblem(reply, 400, 'Invalid Request', error.message);
     }
     if (error instanceof CatalogueIntegrityError) {
       request.log.error(
@@ -647,6 +675,98 @@ export function createApiServer(
     },
   );
 
+  server.get(
+    '/api/v1/knowledge/publications/:publicationId/diff/:otherPublicationId',
+    async (request, reply) => {
+      const params = z
+        .object({
+          publicationId: sourceIdSchema,
+          otherPublicationId: sourceIdSchema,
+        })
+        .strict()
+        .safeParse(request.params);
+      if (!params.success) {
+        throw new ApiError(
+          400,
+          'Invalid Request',
+          'Publication ID is invalid.',
+        );
+      }
+      parseCatalogueQuery(request.query, z.object({}).strict());
+      const result = await publicationDiffs.compare(
+        params.data.publicationId,
+        params.data.otherPublicationId,
+      );
+      if (result.status === 'publication-not-found') {
+        throw new ApiError(
+          404,
+          'Not Found',
+          'Knowledge publication was not found.',
+        );
+      }
+      request.log.info(
+        {
+          diffId: result.diff.id,
+          fromPublicationId: result.diff.fromPublicationId,
+          toPublicationId: result.diff.toPublicationId,
+          diffContentHash: result.diff.contentHash,
+        },
+        'publication diff resolved',
+      );
+      return reply.send(result.diff);
+    },
+  );
+
+  server.get(
+    '/api/v1/knowledge/publications/:publicationId/changes',
+    async (request, reply) => {
+      const publicationId = parseIdParam(
+        request.params,
+        'publicationId',
+        'Publication',
+      );
+      const query = parseCatalogueQuery(
+        request.query,
+        publicationChangesQuerySchema,
+      );
+      const cursor =
+        query.cursor === undefined
+          ? undefined
+          : decodePublicationChangesCursor(query.cursor, publicationId);
+      await ensurePublicationExists(catalogue, publicationId);
+      const page = await publicationDiffs.listComparisons({
+        publicationId,
+        ...(cursor === undefined ? {} : { afterId: cursor.afterId }),
+        limit: query.limit + 1,
+      });
+      const hasMore = page.items.length > query.limit;
+      const items = page.items.slice(0, query.limit);
+      const last = items.at(-1);
+      return reply.send({
+        items,
+        nextCursor:
+          hasMore && last !== undefined
+            ? encodeScopedCursor({
+                version: 1,
+                kind: 'publication-comparisons',
+                publicationId,
+                afterId: last.id,
+              })
+            : null,
+      });
+    },
+  );
+
+  server.get('/api/v1/knowledge/diffs/:diffId', async (request, reply) => {
+    const diffId = parseIdParam(request.params, 'diffId', 'Diff');
+    parseCatalogueQuery(request.query, z.object({}).strict());
+    const diff = await publicationDiffs.getDiff(diffId);
+    if (diff === undefined) {
+      throw new ApiError(404, 'Not Found', 'Publication diff was not found.');
+    }
+    return reply.send(diff);
+  });
+
   server.get('/api/v1/search/entities', async (request, reply) => {
     const query = parseCatalogueQuery(request.query, searchEntityQuerySchema);
     const text = searchTextFilter(query, 'name');
@@ -901,6 +1021,17 @@ function encodeProvenanceCursor(
     kind: 'published-provenance',
     ...payload,
   });
+}
+
+function decodePublicationChangesCursor(
+  cursor: string,
+  publicationId: string,
+): z.infer<typeof publicationChangesCursorSchema> {
+  const parsed = decodeScopedCursor(cursor, publicationChangesCursorSchema);
+  if (parsed.publicationId !== publicationId) {
+    throw invalidCursor();
+  }
+  return parsed;
 }
 
 function decodeScopedCursor<T extends z.ZodType>(
