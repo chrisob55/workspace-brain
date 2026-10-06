@@ -8,6 +8,11 @@ export type DiscoveryService = {
   handle(event: DiscoveryEvent): Promise<void>;
 };
 
+type DiscoveryLogger = {
+  info(details: object, message: string): void;
+  error(details: object, message: string): void;
+};
+
 type DiscoveryCatalogue = Pick<
   CatalogueDiscovery,
   | 'getSource'
@@ -25,6 +30,7 @@ type DiscoveryCatalogue = Pick<
 export function createDiscoveryService(
   catalogue: DiscoveryCatalogue,
   events: InternalEventPublisher,
+  logger: DiscoveryLogger,
 ): DiscoveryService {
   return {
     async handle(event) {
@@ -52,6 +58,15 @@ export function createDiscoveryService(
           event.payload.failedAt,
           event.payload.durationMilliseconds,
           event.payload.failureType,
+        );
+        logger.error(
+          {
+            sourceId: event.payload.sourceId,
+            correlationId: event.correlationId,
+            failureType: event.payload.failureType,
+            durationMilliseconds: event.payload.durationMilliseconds,
+          },
+          'source scan failed',
         );
         return;
       }
@@ -91,13 +106,34 @@ export function createDiscoveryService(
         requireApiProducedEvent(event);
         await catalogue.requestSearchProjection(event);
         await publishPendingEvents(catalogue, events);
+        logger.info(
+          {
+            knowledgeModelId: event.payload.publication.knowledgeModelId,
+            publicationId: event.payload.publication.id,
+            publicationVersion: event.payload.publication.version,
+            entityCount: event.payload.publication.entityVersionIds.length,
+            relationshipCount:
+              event.payload.publication.relationshipVersionIds.length,
+            correlationId: event.correlationId,
+          },
+          'knowledge model published; search projection requested',
+        );
         return;
       }
 
       if (event.eventType === 'SearchProjectionRequested') {
         requireApiProducedEvent(event);
-        await catalogue.buildSearchProjection(event);
+        const projection = await catalogue.buildSearchProjection(event);
         await publishPendingEvents(catalogue, events);
+        logger.info(
+          {
+            publicationId: projection.publicationId,
+            projectedEntityCount: projection.projectedEntityCount,
+            projectedRelationshipCount: projection.projectedRelationshipCount,
+            correlationId: event.correlationId,
+          },
+          'search projection built',
+        );
         return;
       }
 
@@ -127,7 +163,7 @@ export function createDiscoveryService(
           throw new Error('Inventory path is outside registered source roots');
         }
       }
-      await catalogue.persistScan(
+      const result = await catalogue.persistScan(
         scan.sourceId,
         scan.repositories,
         scan.documents,
@@ -136,6 +172,35 @@ export function createDiscoveryService(
         event.payload.durationMilliseconds,
       );
       await publishPendingEvents(catalogue, events);
+      const addedDocuments = result.documentChanges.filter(
+        ({ change }) => change === 'added',
+      ).length;
+      const modifiedDocuments = result.documentChanges.filter(
+        ({ change }) => change === 'modified',
+      ).length;
+      const removedDocuments = result.documentChanges.filter(
+        ({ change }) => change === 'removed',
+      ).length;
+      logger.info(
+        {
+          sourceId: scan.sourceId,
+          correlationId: event.correlationId,
+          repositoryCount: result.repositories.length,
+          documentCount: result.documents.length,
+          addedDocuments,
+          modifiedDocuments,
+          removedDocuments,
+          unchangedDocuments:
+            result.documentChanges.length -
+            addedDocuments -
+            modifiedDocuments -
+            removedDocuments,
+          durationMilliseconds: event.payload.durationMilliseconds,
+        },
+        addedDocuments + modifiedDocuments + removedDocuments > 0
+          ? 'source scan completed; document changes detected'
+          : 'source scan completed; no document changes',
+      );
     },
   };
 }

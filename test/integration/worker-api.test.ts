@@ -151,7 +151,10 @@ describe('worker/API application flow', () => {
         catalogueEvents.push(event);
       },
     };
-    const api = createDiscoveryService(catalogue, publisher);
+    const api = createDiscoveryService(catalogue, publisher, {
+      info() {},
+      error() {},
+    });
     const bus = new FakeDiscoveryBus(discoverySource, (event) => {
       if (
         event.eventType === 'SourceScanStarted' ||

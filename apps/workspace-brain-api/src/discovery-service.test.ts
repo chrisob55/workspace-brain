@@ -14,7 +14,7 @@ import {
   type Source,
   type SourceId,
 } from '@workspace-brain/domain';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createDiscoveryService } from './discovery-service.js';
 import type { InternalEventPublisher } from './events.js';
@@ -128,14 +128,20 @@ const publishedEvent: Extract<
   partitionKey: sourceId,
   payload: { publication },
 };
+const logger = { info: vi.fn(), error: vi.fn() };
 
 describe('DiscoveryService', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it('publishes catalogue events from the durable outbox after scan completion', async () => {
     const calls: string[] = [];
     const published: DiscoveryEvent[] = [];
     const service = createDiscoveryService(
       createCatalogue(source, calls),
       createPublisher(published, calls),
+      logger,
     );
 
     await service.handle(inventoryEvent);
@@ -153,6 +159,43 @@ describe('DiscoveryService', () => {
       published.every((event) => event.producer === 'workspace-brain-api'),
     ).toBe(true);
     expect(published[0]?.payload).toMatchObject({ repository });
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceId,
+        correlationId: inventoryEvent.correlationId,
+        documentCount: 1,
+        addedDocuments: 1,
+        modifiedDocuments: 0,
+        removedDocuments: 0,
+        unchangedDocuments: 0,
+      }),
+      'source scan completed; document changes detected',
+    );
+  });
+
+  it('reports an unchanged scan without implying that knowledge was rebuilt', async () => {
+    const calls: string[] = [];
+    const published: DiscoveryEvent[] = [];
+    const service = createDiscoveryService(
+      createCatalogue(source, calls, 'unchanged'),
+      createPublisher(published, calls),
+      logger,
+    );
+
+    await service.handle(inventoryEvent);
+
+    expect(published.map(({ eventType }) => eventType)).toEqual([
+      'SourceScanCompleted',
+    ]);
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        addedDocuments: 0,
+        modifiedDocuments: 0,
+        removedDocuments: 0,
+        unchangedDocuments: 1,
+      }),
+      'source scan completed; no document changes',
+    );
   });
 
   it('retries pending lifecycle events after a publish failure without losing them', async () => {
@@ -169,7 +212,7 @@ describe('DiscoveryService', () => {
         published.push(event);
       },
     };
-    const service = createDiscoveryService(catalogue, publisher);
+    const service = createDiscoveryService(catalogue, publisher, logger);
 
     await expect(service.handle(inventoryEvent)).rejects.toThrow(
       'temporary event transport failure',
@@ -199,11 +242,15 @@ describe('DiscoveryService', () => {
         await baseCatalogue.markDiscoveryEventPublished(eventId, publishedAt);
       },
     };
-    const service = createDiscoveryService(catalogue, {
-      async publish(event) {
-        published.push(event);
+    const service = createDiscoveryService(
+      catalogue,
+      {
+        async publish(event) {
+          published.push(event);
+        },
       },
-    });
+      logger,
+    );
 
     await expect(service.handle(inventoryEvent)).rejects.toThrow(
       'temporary outbox update failure',
@@ -220,6 +267,7 @@ describe('DiscoveryService', () => {
     const service = createDiscoveryService(
       createCatalogue(source, calls),
       createPublisher([], calls),
+      logger,
     );
     const started: DiscoveryEvent = {
       ...inventoryEvent,
@@ -262,6 +310,7 @@ describe('DiscoveryService', () => {
     const service = createDiscoveryService(
       createCatalogue(source, calls),
       createPublisher([], calls),
+      logger,
     );
     const failed: DiscoveryEvent = {
       ...inventoryEvent,
@@ -277,6 +326,13 @@ describe('DiscoveryService', () => {
 
     await service.handle(failed);
     expect(calls).toEqual(['failed']);
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceId,
+        failureType: 'FilesystemError',
+      }),
+      'source scan failed',
+    );
   });
 
   it('persists submitted evidence before publishing the extracted document fact', async () => {
@@ -285,6 +341,7 @@ describe('DiscoveryService', () => {
     const service = createDiscoveryService(
       createCatalogue(source, calls),
       createPublisher(published, calls),
+      logger,
     );
 
     await service.handle(processingEvent);
@@ -307,6 +364,7 @@ describe('DiscoveryService', () => {
     const service = createDiscoveryService(
       createCatalogue(source, calls),
       createPublisher([], calls),
+      logger,
     );
 
     await expect(
@@ -320,6 +378,7 @@ describe('DiscoveryService', () => {
     const service = createDiscoveryService(
       createCatalogue(source, calls),
       createPublisher([], calls),
+      logger,
     );
     const event: DiscoveryEvent = {
       eventId: 'knowledge-candidate-event',
@@ -347,6 +406,7 @@ describe('DiscoveryService', () => {
     const service = createDiscoveryService(
       createCatalogue(source, calls),
       createPublisher(published, calls),
+      logger,
     );
 
     await service.handle(publishedEvent);
@@ -370,6 +430,23 @@ describe('DiscoveryService', () => {
       'SearchProjectionRequested',
       'SearchProjectionBuilt',
     ]);
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        publicationId: publication.id,
+        publicationVersion: 1,
+        entityCount: 0,
+        relationshipCount: 0,
+      }),
+      'knowledge model published; search projection requested',
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        publicationId: publication.id,
+        projectedEntityCount: 0,
+        projectedRelationshipCount: 0,
+      }),
+      'search projection built',
+    );
   });
 
   it('rejects projection events that were not produced by the catalogue owner', async () => {
@@ -377,6 +454,7 @@ describe('DiscoveryService', () => {
     const service = createDiscoveryService(
       createCatalogue(source, calls),
       createPublisher([], calls),
+      logger,
     );
     const forged = {
       ...publishedEvent,
@@ -402,7 +480,11 @@ describe('DiscoveryService', () => {
   });
 });
 
-function createCatalogue(source: Source, calls: string[]) {
+function createCatalogue(
+  source: Source,
+  calls: string[],
+  change: 'added' | 'unchanged' = 'added',
+) {
   const pending: DiscoveryEvent[] = [];
   return {
     async getSource(id: string) {
@@ -417,27 +499,32 @@ function createCatalogue(source: Source, calls: string[]) {
       expect(repositories).toEqual([repositoryCandidate]);
       expect(documents).toEqual([documentCandidate]);
       calls.push('completed');
+      if (change === 'added') {
+        addPending(
+          pending,
+          createCatalogueEvent('RepositoryDiscovered', { repository }),
+          createCatalogueEvent('DocumentDiscovered', { document }),
+        );
+      }
       addPending(
         pending,
-        createCatalogueEvent('RepositoryDiscovered', { repository }),
-        createCatalogueEvent('DocumentDiscovered', { document }),
         createCatalogueEvent('SourceScanCompleted', {
           sourceId,
           discoveredAt: inventoryEvent.payload.scan.discoveredAt,
           repositoryCount: 1,
           documentCount: 1,
-          addedCount: 2,
+          addedCount: change === 'added' ? 2 : 0,
           modifiedCount: 0,
           removedCount: 0,
-          unchangedCount: 0,
+          unchangedCount: change === 'unchanged' ? 2 : 0,
           durationMilliseconds: 15,
         }),
       );
       return {
         repositories: [repository],
         documents: [document],
-        repositoryChanges: [{ change: 'added' as const, record: repository }],
-        documentChanges: [{ change: 'added' as const, record: document }],
+        repositoryChanges: [{ change, record: repository }],
+        documentChanges: [{ change, record: document }],
       };
     },
     async applyDocumentProcessing(event) {

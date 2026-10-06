@@ -261,6 +261,7 @@ async function processKnowledgeEvent(
   logger.info(
     {
       correlationId: event.correlationId,
+      documentId: event.payload.documentId,
       documentVersionId,
       entityCount: candidates.entities.length,
       relationshipCount: candidates.relationships.length,
@@ -349,6 +350,7 @@ async function processDiscoveryEvent(
       correlationId: event.correlationId,
       documentId: document.id,
       sourceId: document.sourceId,
+      documentPath: document.path,
       evidenceCount: processed.evidence.length,
     },
     'document evidence submitted',

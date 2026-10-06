@@ -27,6 +27,7 @@ import {
   type KnowledgeObjectProvenance,
 } from '@workspace-brain/domain';
 import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
+import pino from 'pino';
 import { z } from 'zod';
 
 const pageQuerySchema = z
@@ -197,7 +198,10 @@ export function createApiServer(
   options: ApiServerOptions = {},
 ): FastifyInstance {
   const server = Fastify({
-    logger: options.logger ?? true,
+    logger:
+      options.logger === false
+        ? false
+        : { timestamp: pino.stdTimeFunctions.isoTime },
     genReqId: (request) => {
       const suppliedId = request.headers['x-correlation-id'];
       return typeof suppliedId === 'string' &&
@@ -250,9 +254,11 @@ export function createApiServer(
     );
   });
 
-  server.get('/health', async () => ({ status: 'ok' }));
+  server.get('/health', { logLevel: 'silent' }, async () => ({
+    status: 'ok',
+  }));
 
-  server.get('/ready', async (_request, reply) => {
+  server.get('/ready', { logLevel: 'silent' }, async (_request, reply) => {
     try {
       await catalogue.check();
       return { status: 'ready' };

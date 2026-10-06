@@ -4,7 +4,10 @@ import { connectNatsDiscoveryBus } from '@workspace-brain/nats';
 
 import { createKnowledgeWorker } from './worker.js';
 
-const logger = pino({ level: process.env.LOG_LEVEL ?? 'info' });
+const logger = pino({
+  level: process.env.LOG_LEVEL ?? 'info',
+  timestamp: pino.stdTimeFunctions.isoTime,
+});
 const natsServers = process.env.NATS_SERVERS ?? 'nats://nats:4222';
 const bus = await connectNatsDiscoveryBus(natsServers, logger);
 const worker = createKnowledgeWorker(bus, logger);

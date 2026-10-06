@@ -172,7 +172,11 @@ export async function startWorkspaceBrainApi<
     );
 
     bus = await dependencies.connectBus();
-    const discovery = createDiscoveryService(catalogue, bus);
+    const discovery = createDiscoveryService(
+      catalogue,
+      bus,
+      dependencies.logger,
+    );
     bus.subscribeRequests(
       'workspace.catalogue.discovery.sources',
       async (body) => {

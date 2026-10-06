@@ -85,6 +85,17 @@ readiness endpoints are `/health` and `/ready`. Discovery inventory is exposed
 at `/api/v1/repositories` and `/api/v1/documents`. The full API contract is in
 [openapi/openapi.json](openapi/openapi.json).
 
+Compose logs use structured JSON with ISO-8601 UTC `time` values. Look for
+`source scan started` and `source scan completed` (including added, modified,
+removed and unchanged document counts) in the ingestion/API logs, then
+`document evidence submitted`, `knowledge candidates submitted`,
+`knowledge model published; search projection requested`, and
+`search projection built`. A completed scan with no document changes does not
+by itself create a new publication. Routine `/health` and `/ready` requests
+are omitted from request logs; readiness failures are still logged. Use
+`docker compose -f deploy/compose/compose.yaml logs -f ingestion-worker knowledge-worker workspace-brain-api`
+to follow the pipeline.
+
 To run the end-to-end Compose discovery smoke test:
 
 ```sh
