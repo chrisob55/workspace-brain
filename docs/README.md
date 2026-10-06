@@ -14,10 +14,12 @@ implementation history for Workspace Brain.
 
 ## Current implementation
 
-Slices 0-6 implement deterministic filesystem discovery, evidence extraction,
+Slices 0-7 implement deterministic filesystem discovery, evidence extraction,
 immutable Knowledge Model publication, publication-scoped lexical search,
-publication-scoped knowledge exploration, and deterministic comparison of
-publications. The [Slice 6 implementation
+publication-scoped knowledge exploration, deterministic comparison of
+publications, and read-only publication currency. The [Slice 7 implementation
+report](implementation/slice-7-report.md) records the publication currency
+semantics, API, and determinism guarantees; the [Slice 6 implementation
 report](implementation/slice-6-report.md) records the knowledge evolution
 (publication diff) API, determinism guarantees, and architecture validation;
 the [Slice 5 implementation report](implementation/slice-5-report.md) records

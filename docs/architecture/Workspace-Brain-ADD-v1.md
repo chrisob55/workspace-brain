@@ -278,6 +278,9 @@ MVP exit: configure HMRC Agents -> scan -> process evidence -> extract candidate
 - **v0.3:** repository intelligence, service interactions, knowledge views and provenance search.
 - **v0.4:** assertion/review lifecycle, verification rules and provenance explorer.
 - **v0.5:** duplicates, staleness, missing knowledge and workspace recommendations.
+  Slice 7 delivers an early part of the staleness item: deterministic,
+  read-only publication currency; see the [Slice 7 implementation
+  report](../implementation/slice-7-report.md).
 - **v0.6:** SharePoint, Confluence, GitHub and Azure DevOps sources.
 - **v0.7:** richer model-diff capabilities, context packs and mature AI OS
   packaging. Deterministic publication-to-publication diffs were delivered
@@ -299,6 +302,8 @@ scope evolved; the shipped slices are:
 4. Publication-scoped lexical search projection.
 5. Publication-scoped knowledge exploration.
 6. Deterministic knowledge evolution through publication diffs.
+7. Publication currency: read-only classification of published knowledge as
+   current, stale or unknown against the catalogue's current-version pointers.
 
 The original proposal is retained below for historical context, not as a
 status report:

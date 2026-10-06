@@ -15,6 +15,7 @@
     "@workspace-brain/catalogue": "workspace:*",
     "@workspace-brain/configuration": "workspace:*",
     "@workspace-brain/domain": "workspace:*",
+    "@workspace-brain/domain-currency": "workspace:*",
     "@workspace-brain/domain-evolution": "workspace:*",
     "@workspace-brain/duckdb": "workspace:*",
     "@workspace-brain/nats": "workspace:*",
