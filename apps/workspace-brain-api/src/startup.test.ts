@@ -80,6 +80,7 @@ const builtEvent = {
 type HarnessOptions = {
   readonly rebuild?: () => Promise<readonly unknown[]>;
   readonly publish?: (event: DiscoveryEvent) => Promise<void>;
+  readonly knowledgeEvidence?: readonly unknown[];
   readonly openCatalogue?: () => Promise<never>;
   readonly loadConfiguration?: () => Promise<WorkspaceBrainConfig>;
   readonly registerConfiguration?: () => Promise<void>;
@@ -93,6 +94,10 @@ function createHarness(options: HarnessOptions = {}) {
   const marked: string[] = [];
   const subscriptions: string[] = [];
   const requestSubjects: string[] = [];
+  const requestHandlers = new Map<
+    string,
+    (body: unknown) => Promise<unknown>
+  >();
   const rebuildRequests: unknown[] = [];
   let pending: DiscoveryEvent[] = [builtEvent];
   const logger = recordingLogger();
@@ -118,6 +123,9 @@ function createHarness(options: HarnessOptions = {}) {
     async markDiscoveryEventPublished(eventId: string) {
       marked.push(eventId);
     },
+    async listKnowledgeInputEvidence() {
+      return options.knowledgeEvidence ?? [];
+    },
     async check() {},
     async close() {
       closes.catalogue += 1;
@@ -134,8 +142,9 @@ function createHarness(options: HarnessOptions = {}) {
     async subscribe(subject) {
       subscriptions.push(subject);
     },
-    subscribeRequests(subject) {
+    subscribeRequests(subject, handler) {
       requestSubjects.push(subject);
+      requestHandlers.set(subject, handler);
     },
     async close() {
       closes.bus += 1;
@@ -184,6 +193,7 @@ function createHarness(options: HarnessOptions = {}) {
     marked,
     subscriptions,
     requestSubjects,
+    requestHandlers,
     rebuildRequests,
     logger,
     serverLogger,
@@ -193,6 +203,51 @@ function createHarness(options: HarnessOptions = {}) {
 }
 
 describe('API startup orchestration', () => {
+  it('keeps large knowledge evidence replies below the NATS payload limit', async () => {
+    const evidenceCount = 200;
+    const harness = createHarness({
+      knowledgeEvidence: Array.from({ length: evidenceCount }, (_, index) => ({
+        evidence: {
+          excerpt: `${index}: ${'x'.repeat(4_000)}`,
+        },
+      })),
+    });
+    const api = await startWorkspaceBrainApi(harness.dependencies);
+    const handler = harness.requestHandlers.get(
+      'workspace.catalogue.knowledge.document-evidence',
+    );
+    if (handler === undefined) {
+      throw new Error('Knowledge evidence request handler was not registered');
+    }
+
+    let offset = 0;
+    let pageCount = 0;
+    let receivedCount = 0;
+    while (true) {
+      const rawPage = await handler({
+        documentVersionId: '01K6JQ3Z5JY0N0WZ3MEGFS9WH0',
+        offset,
+      });
+      const page = rawPage as {
+        readonly items: readonly unknown[];
+        readonly nextOffset: number | null;
+      };
+      expect(
+        Buffer.byteLength(JSON.stringify(page), 'utf8'),
+      ).toBeLessThanOrEqual(512 * 1024);
+      pageCount += 1;
+      receivedCount += page.items.length;
+      if (page.nextOffset === null) {
+        break;
+      }
+      offset = page.nextOffset;
+    }
+
+    expect(pageCount).toBeGreaterThan(1);
+    expect(receivedCount).toBe(evidenceCount);
+    await api.close();
+  });
+
   it('reconciles search projections before listening when reconciliation succeeds', async () => {
     const harness = createHarness();
 

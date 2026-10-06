@@ -122,6 +122,12 @@ const knowledgeInputEvidenceSchema = z
       .strict(),
   })
   .strict();
+const knowledgeInputEvidencePageSchema = z
+  .object({
+    items: z.array(knowledgeInputEvidenceSchema),
+    nextOffset: z.number().int().nonnegative().nullable(),
+  })
+  .strict();
 
 type WorkerLogger = Pick<Logger, 'error' | 'info'>;
 
@@ -167,11 +173,27 @@ async function processKnowledgeEvent(
   const documentVersionId = parseDocumentVersionId(
     event.payload.documentVersionId,
   );
-  const rawInputs = await bus.request<unknown>(
-    'workspace.catalogue.knowledge.document-evidence',
-    { documentVersionId },
-  );
-  const parsedInputs = z.array(knowledgeInputEvidenceSchema).parse(rawInputs);
+  const parsedInputs: z.infer<typeof knowledgeInputEvidenceSchema>[] = [];
+  let offset = 0;
+  while (true) {
+    const rawPage = await bus.request<unknown>(
+      'workspace.catalogue.knowledge.document-evidence',
+      { documentVersionId, offset },
+    );
+    const page = knowledgeInputEvidencePageSchema.parse(rawPage);
+    if (
+      page.nextOffset !== null &&
+      (page.items.length === 0 ||
+        page.nextOffset !== offset + page.items.length)
+    ) {
+      throw new Error('Knowledge evidence page returned an invalid offset');
+    }
+    parsedInputs.push(...page.items);
+    if (page.nextOffset === null) {
+      break;
+    }
+    offset = page.nextOffset;
+  }
   const inputs: KnowledgeInputEvidence[] = parsedInputs.map((input) => ({
     evidence: {
       ...input.evidence,

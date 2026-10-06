@@ -5,7 +5,10 @@ import type {
   CatalogueHealth,
 } from '@workspace-brain/catalogue';
 import type { WorkspaceBrainConfig } from '@workspace-brain/configuration';
-import { discoveryEventSubject } from '@workspace-brain/domain';
+import {
+  discoveryEventSubject,
+  type KnowledgeInputEvidence,
+} from '@workspace-brain/domain';
 import type { NatsDiscoveryBus } from '@workspace-brain/nats';
 import { z } from 'zod';
 
@@ -65,11 +68,53 @@ const sourcePageSchema = z
     limit: z.number().int().min(1).max(100),
   })
   .strict();
+const maximumKnowledgeEvidenceResponseBytes = 512 * 1024;
+const maximumKnowledgeEvidencePageItems = 128;
 const knowledgeEvidenceRequestSchema = z
   .object({
     documentVersionId: z.string().regex(/^[0-7][0-9A-HJKMNP-TV-Z]{25}$/),
+    offset: z.number().int().nonnegative(),
   })
   .strict();
+
+function createKnowledgeEvidencePage(
+  evidence: readonly KnowledgeInputEvidence[],
+  offset: number,
+): {
+  readonly items: readonly KnowledgeInputEvidence[];
+  readonly nextOffset: number | null;
+} {
+  const items: KnowledgeInputEvidence[] = [];
+  while (
+    offset + items.length < evidence.length &&
+    items.length < maximumKnowledgeEvidencePageItems
+  ) {
+    const nextItems = [...items, evidence[offset + items.length]!];
+    const nextOffset = offset + nextItems.length;
+    const candidate = {
+      items: nextItems,
+      nextOffset: nextOffset < evidence.length ? nextOffset : null,
+    };
+    if (
+      Buffer.byteLength(JSON.stringify(candidate), 'utf8') >
+      maximumKnowledgeEvidenceResponseBytes
+    ) {
+      if (items.length === 0) {
+        throw new Error(
+          `Knowledge evidence item at offset ${offset} exceeds the NATS response size limit`,
+        );
+      }
+      break;
+    }
+    items.push(evidence[offset + items.length]!);
+  }
+
+  const nextOffset = offset + items.length;
+  return {
+    items,
+    nextOffset: nextOffset < evidence.length ? nextOffset : null,
+  };
+}
 
 export const apiDurableSubscriptions = [
   [
@@ -144,7 +189,10 @@ export async function startWorkspaceBrainApi<
       'workspace.catalogue.knowledge.document-evidence',
       async (body) => {
         const request = knowledgeEvidenceRequestSchema.parse(body);
-        return catalogue.listKnowledgeInputEvidence(request.documentVersionId);
+        const evidence = await catalogue.listKnowledgeInputEvidence(
+          request.documentVersionId,
+        );
+        return createKnowledgeEvidencePage(evidence, request.offset);
       },
     );
     for (const [subject, durableName] of apiDurableSubscriptions) {

@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto';
 
 import {
-  createKnowledgeEntityKey,
   createDocumentId,
   createDocumentVersionId,
   createEvidenceId,
@@ -184,10 +183,12 @@ describe('knowledge worker', () => {
     const documentId = createDocumentId();
     const documentVersionId = createDocumentVersionId();
     const evidenceId = createEvidenceId();
+    const secondEvidenceId = createEvidenceId();
     const sourceId = createSourceId();
     const fingerprint = 'a'.repeat(64);
     const handlers = new Map<string, DiscoveryEventHandler>();
     const published: DiscoveryEvent[] = [];
+    const requestedOffsets: number[] = [];
     let requestedVersionId = '';
     const bus: NatsDiscoveryBus = {
       async publish(event) {
@@ -201,9 +202,13 @@ describe('knowledge worker', () => {
         if (subject !== 'workspace.catalogue.knowledge.document-evidence') {
           throw new Error(`Unexpected catalogue request: ${subject}`);
         }
-        requestedVersionId = (request as { documentVersionId: string })
-          .documentVersionId;
-        return [
+        const pageRequest = request as {
+          documentVersionId: string;
+          offset: number;
+        };
+        requestedVersionId = pageRequest.documentVersionId;
+        requestedOffsets.push(pageRequest.offset);
+        const inputs = [
           {
             evidence: {
               id: evidenceId,
@@ -224,7 +229,7 @@ describe('knowledge worker', () => {
               processorVersion: 1,
               extractionRuleId: 'json-scalar-values',
               extractionRuleVersion: 1,
-              evidenceCount: 1,
+              evidenceCount: 2,
             },
             document: {
               id: documentId,
@@ -242,7 +247,56 @@ describe('knowledge worker', () => {
               extractionRuleVersion: 1,
             },
           },
-        ] as T;
+          {
+            evidence: {
+              id: secondEvidenceId,
+              documentVersionId,
+              key: 'json:/dependencies/lodash',
+              kind: 'structured-value',
+              excerpt: '^1',
+              truncated: false,
+              locator: {
+                kind: 'json-pointer',
+                pointer: '/dependencies/lodash',
+              },
+            },
+            documentVersion: {
+              id: documentVersionId,
+              documentId,
+              contentHash: fingerprint,
+              hashAlgorithm: 'sha256',
+              discoveredAt: '2026-10-05T08:00:00.000Z',
+              processorId: 'json',
+              processorVersion: 1,
+              extractionRuleId: 'json-scalar-values',
+              extractionRuleVersion: 1,
+              evidenceCount: 2,
+            },
+            document: {
+              id: documentId,
+              sourceId,
+              path: 'root/service/package.json',
+              filename: 'package.json',
+              fingerprint,
+            },
+            provenance: {
+              documentPath: 'root/service/package.json',
+              contentFingerprint: fingerprint,
+              processorId: 'json',
+              processorVersion: 1,
+              extractionRuleId: 'json-scalar-values',
+              extractionRuleVersion: 1,
+            },
+          },
+        ];
+        const items = inputs.slice(pageRequest.offset, pageRequest.offset + 1);
+        return {
+          items,
+          nextOffset:
+            pageRequest.offset + items.length < inputs.length
+              ? pageRequest.offset + items.length
+              : null,
+        } as T;
       },
       async close() {},
     };
@@ -264,7 +318,7 @@ describe('knowledge worker', () => {
         documentId,
         documentVersionId,
         contentFingerprint: fingerprint,
-        evidenceCount: 1,
+        evidenceCount: 2,
       },
     };
     const handler = handlers.get('workspace.processing.document.extracted');
@@ -274,6 +328,7 @@ describe('knowledge worker', () => {
     await handler(event);
 
     expect(requestedVersionId).toBe(documentVersionId);
+    expect(requestedOffsets).toEqual([0, 1]);
     expect(published).toHaveLength(1);
     expect(published[0]).toMatchObject({
       eventType: 'KnowledgeCandidatesSubmitted',
@@ -283,28 +338,22 @@ describe('knowledge worker', () => {
         sourceId,
         documentId,
         documentVersionId,
-        entities: [
-          {
-            key: createKnowledgeEntityKey(
-              'package',
-              sourceId,
-              'root/service/package.json',
-              '@workspace/service',
-            ),
-            type: 'package',
-            identityScope: 'root/service/package.json',
+        entities: expect.arrayContaining([
+          expect.objectContaining({
             name: '@workspace/service',
             sourceEvidenceIds: [evidenceId],
-            provenance: [
-              {
-                evidenceId,
-                documentVersionId,
-                knowledgeExtractorId: 'deterministic-knowledge-extractors',
-              },
-            ],
-          },
-        ],
-        relationships: [],
+          }),
+          expect.objectContaining({
+            name: 'lodash',
+            sourceEvidenceIds: [secondEvidenceId],
+          }),
+        ]),
+        relationships: expect.arrayContaining([
+          expect.objectContaining({
+            type: 'DEPENDS_ON',
+            sourceEvidenceIds: [secondEvidenceId],
+          }),
+        ]),
       },
     });
     await worker.stop();
