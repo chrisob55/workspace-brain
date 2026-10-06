@@ -13,9 +13,14 @@ import {
   createWorkspaceId,
 } from '@workspace-brain/domain';
 import type {
+  PublicationSnapshot,
   SearchEntityRequest,
   SearchRelationshipRequest,
 } from '@workspace-brain/catalogue';
+import {
+  publicationComparisonHeader,
+  type PublicationDiff,
+} from '@workspace-brain/domain-evolution';
 import { CatalogueIntegrityError } from '@workspace-brain/catalogue';
 import { describe, expect, it } from 'vitest';
 
@@ -1022,6 +1027,286 @@ describe('Workspace Brain API routes', () => {
         'application/problem+json',
       );
     }
+    await server.close();
+  });
+});
+
+const evolvedEntityVersionId = createEntityVersionId();
+const nextPublication = {
+  ...publication,
+  id: createKnowledgePublicationId(),
+  version: 2,
+  contentHash: 'd'.repeat(64),
+  publishedAt: '2026-10-02T12:00:00.000Z',
+};
+const foreignPublication = {
+  ...publication,
+  id: createKnowledgePublicationId(),
+  knowledgeModelId: createKnowledgeModelId(),
+  contentHash: 'e'.repeat(64),
+};
+
+function createDiffCatalogue() {
+  const base = createCatalogue();
+  const publications = [publication, nextPublication, foreignPublication];
+  const snapshots = new Map<string, PublicationSnapshot>([
+    [
+      publication.id,
+      {
+        publication,
+        entities: [publishedEntity],
+        relationships: [],
+      },
+    ],
+    [
+      nextPublication.id,
+      {
+        publication: nextPublication,
+        entities: [
+          {
+            publicationId: nextPublication.id,
+            entityVersionId: evolvedEntityVersionId,
+            versionNumber: 3,
+            entity: {
+              ...publishedEntityObject,
+              name: 'service-renamed',
+              currentVersionId: evolvedEntityVersionId,
+            },
+          },
+          {
+            publicationId: nextPublication.id,
+            entityVersionId: createEntityVersionId(),
+            versionNumber: 1,
+            entity: {
+              ...publishedEntityObject,
+              id: projectedEntities[1]!.entityId,
+              name: 'lodash',
+            },
+          },
+        ],
+        relationships: [
+          { ...publishedRelationship, publicationId: nextPublication.id },
+        ],
+      },
+    ],
+    [
+      foreignPublication.id,
+      { publication: foreignPublication, entities: [], relationships: [] },
+    ],
+  ]);
+  const diffs = new Map<string, PublicationDiff>();
+  return {
+    ...base,
+    async getKnowledgePublication(publicationId: string) {
+      return publications.find(({ id }) => id === publicationId);
+    },
+    async getPublicationSnapshot(publicationId: string) {
+      return snapshots.get(publicationId);
+    },
+    async findPublicationDiff(fromId: string, toId: string) {
+      return [...diffs.values()].find(
+        (diff) =>
+          diff.fromPublicationId === fromId && diff.toPublicationId === toId,
+      );
+    },
+    async getPublicationDiff(diffId: string) {
+      return diffs.get(diffId);
+    },
+    async listPublicationComparisons(request: {
+      publicationId: string;
+      afterId?: string;
+      limit: number;
+    }) {
+      const items = [...diffs.values()]
+        .filter(
+          (diff) =>
+            (diff.fromPublicationId === request.publicationId ||
+              diff.toPublicationId === request.publicationId) &&
+            (request.afterId === undefined || diff.id > request.afterId),
+        )
+        .sort((left, right) => left.id.localeCompare(right.id))
+        .map(publicationComparisonHeader);
+      return { items: items.slice(0, request.limit) };
+    },
+    async savePublicationDiff(diff: PublicationDiff, invalidDiffId?: string) {
+      const existing = [...diffs.values()].find(
+        (stored) =>
+          stored.fromPublicationId === diff.fromPublicationId &&
+          stored.toPublicationId === diff.toPublicationId,
+      );
+      if (
+        existing?.contentHash === diff.contentHash &&
+        existing.id !== invalidDiffId
+      ) {
+        return existing;
+      }
+      if (existing !== undefined) {
+        diffs.delete(existing.id);
+      }
+      diffs.set(diff.id, diff);
+      return diff;
+    },
+  };
+}
+
+describe('Workspace Brain knowledge evolution routes', () => {
+  it('compares two publications and serves the persisted diff', async () => {
+    const server = createApiServer(createDiffCatalogue(), { logger: false });
+    const diffPath = `/api/v1/knowledge/publications/${publication.id}/diff/${nextPublication.id}`;
+
+    const response = await server.inject(diffPath);
+    const repeated = await server.inject(diffPath);
+
+    expect(response.statusCode).toBe(200);
+    const diff = response.json();
+    expect(diff).toMatchObject({
+      schemaVersion: 1,
+      knowledgeModelId: knowledgeModel.id,
+      fromPublicationId: publication.id,
+      fromPublicationVersion: 1,
+      toPublicationId: nextPublication.id,
+      toPublicationVersion: 2,
+      summary: {
+        entitiesAdded: 1,
+        entitiesRemoved: 0,
+        entitiesModified: 1,
+        entitiesUnchanged: 0,
+        relationshipsAdded: 1,
+        relationshipsRemoved: 0,
+        relationshipsModified: 0,
+        relationshipsUnchanged: 0,
+      },
+    });
+    expect(diff.contentHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(diff.id).toMatch(/^[0-7][0-9A-HJKMNP-TV-Z]{25}$/);
+    expect(
+      diff.entityChanges.map(
+        (change: { changeType: string; changedFields: string[] }) => [
+          change.changeType,
+          change.changedFields,
+        ],
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        ['MODIFIED', ['name']],
+        ['ADDED', []],
+      ]),
+    );
+    expect(diff.relationshipChanges[0]).toMatchObject({
+      changeType: 'ADDED',
+      relationshipId: publishedRelationshipObject.id,
+      from: null,
+      to: { versionId: relationshipVersionId, versionNumber: 3 },
+    });
+    expect(repeated.json()).toEqual(diff);
+
+    const retrieved = await server.inject(`/api/v1/knowledge/diffs/${diff.id}`);
+    expect(retrieved.statusCode).toBe(200);
+    expect(retrieved.json()).toEqual(diff);
+    await server.close();
+  });
+
+  it('lists known comparisons for a publication with cursor pagination', async () => {
+    const server = createApiServer(createDiffCatalogue(), { logger: false });
+    await server.inject(
+      `/api/v1/knowledge/publications/${publication.id}/diff/${nextPublication.id}`,
+    );
+    await server.inject(
+      `/api/v1/knowledge/publications/${nextPublication.id}/diff/${publication.id}`,
+    );
+
+    const page1 = await server.inject(
+      `/api/v1/knowledge/publications/${publication.id}/changes?limit=1`,
+    );
+    const page2 = await server.inject(
+      `/api/v1/knowledge/publications/${publication.id}/changes?limit=1&cursor=${encodeURIComponent(page1.json().nextCursor)}`,
+    );
+    const foreign = await server.inject(
+      `/api/v1/knowledge/publications/${foreignPublication.id}/changes`,
+    );
+    const reusedElsewhere = await server.inject(
+      `/api/v1/knowledge/publications/${nextPublication.id}/changes?limit=1&cursor=${encodeURIComponent(page1.json().nextCursor)}`,
+    );
+    const unscopedCursor = await server.inject(
+      `/api/v1/knowledge/publications/${publication.id}/changes?limit=1&cursor=${Buffer.from(page1.json().items[0].id).toString('base64url')}`,
+    );
+
+    expect(page1.statusCode).toBe(200);
+    expect(page1.json().items).toHaveLength(1);
+    expect(page1.json().items[0]).not.toHaveProperty('entityChanges');
+    expect(page1.json().items[0].summary).toBeDefined();
+    expect(page2.json().items).toHaveLength(1);
+    expect(page2.json().nextCursor).toBeNull();
+    expect(page2.json().items[0].id).not.toBe(page1.json().items[0].id);
+    expect(foreign.json()).toEqual({ items: [], nextCursor: null });
+    // Cursors are bound to the publication whose comparisons they page.
+    expect(reusedElsewhere.statusCode).toBe(400);
+    expect(unscopedCursor.statusCode).toBe(400);
+    await server.close();
+  });
+
+  it('rejects invalid, missing and cross-model comparisons with problem details', async () => {
+    const server = createApiServer(createDiffCatalogue(), { logger: false });
+    const missing = createKnowledgePublicationId();
+    const cases: [string, number][] = [
+      [`/api/v1/knowledge/publications/bad/diff/${publication.id}`, 400],
+      [`/api/v1/knowledge/publications/${publication.id}/diff/bad`, 400],
+      [
+        `/api/v1/knowledge/publications/${publication.id}/diff/${nextPublication.id}?x=1`,
+        400,
+      ],
+      [
+        `/api/v1/knowledge/publications/${publication.id}/diff/${foreignPublication.id}`,
+        400,
+      ],
+      [`/api/v1/knowledge/publications/${publication.id}/diff/${missing}`, 404],
+      [`/api/v1/knowledge/publications/${missing}/diff/${publication.id}`, 404],
+      ['/api/v1/knowledge/publications/bad/changes', 400],
+      [`/api/v1/knowledge/publications/${publication.id}/changes?limit=0`, 400],
+      [
+        `/api/v1/knowledge/publications/${publication.id}/changes?cursor=***`,
+        400,
+      ],
+      [`/api/v1/knowledge/publications/${missing}/changes`, 404],
+      ['/api/v1/knowledge/diffs/not-a-ulid', 400],
+      [`/api/v1/knowledge/diffs/${createKnowledgePublicationId()}`, 404],
+    ];
+    for (const [url, status] of cases) {
+      const response = await server.inject(url);
+      expect(response.statusCode, url).toBe(status);
+      expect(response.headers['content-type'], url).toContain(
+        'application/problem+json',
+      );
+    }
+    await server.close();
+  });
+
+  it('returns an integrity problem when a stored diff no longer matches its publications', async () => {
+    const catalogue = createDiffCatalogue();
+    const server = createApiServer(catalogue, { logger: false });
+    const created = (
+      await server.inject(
+        `/api/v1/knowledge/publications/${publication.id}/diff/${nextPublication.id}`,
+      )
+    ).json();
+    const stored = await catalogue.getPublicationDiff(created.id);
+    await catalogue.savePublicationDiff(
+      { ...stored!, summary: { ...stored!.summary, entitiesAdded: 7 } },
+      created.id,
+    );
+    const tampered = (await catalogue.findPublicationDiff(
+      publication.id,
+      nextPublication.id,
+    ))!;
+
+    const response = await server.inject(
+      `/api/v1/knowledge/diffs/${tampered.id}`,
+    );
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toMatchObject({
+      title: 'Knowledge Integrity Failure',
+    });
     await server.close();
   });
 });

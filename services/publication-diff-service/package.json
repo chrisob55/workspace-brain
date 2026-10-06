@@ -1,5 +1,5 @@
 {
-  "name": "@workspace-brain/duckdb",
+  "name": "@workspace-brain/publication-diff-service",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -16,13 +16,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@duckdb/node-api": "^1.5.6-r.1",
     "@workspace-brain/catalogue": "workspace:*",
     "@workspace-brain/domain": "workspace:*",
-    "@workspace-brain/domain-evolution": "workspace:*",
-    "zod": "^4.1.12"
-  },
-  "devDependencies": {
-    "@workspace-brain/publication-diff-service": "workspace:*"
+    "@workspace-brain/domain-evolution": "workspace:*"
   }
 }

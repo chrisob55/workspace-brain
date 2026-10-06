@@ -16,6 +16,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@workspace-brain/domain": "workspace:*"
+    "@workspace-brain/domain": "workspace:*",
+    "@workspace-brain/domain-evolution": "workspace:*"
   }
 }

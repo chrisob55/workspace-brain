@@ -82,12 +82,18 @@ importers:
       '@workspace-brain/domain':
         specifier: workspace:*
         version: link:../../packages/domain
+      '@workspace-brain/domain-evolution':
+        specifier: workspace:*
+        version: link:../../packages/domain-evolution
       '@workspace-brain/duckdb':
         specifier: workspace:*
         version: link:../../infrastructure/duckdb
       '@workspace-brain/nats':
         specifier: workspace:*
         version: link:../../infrastructure/nats
+      '@workspace-brain/publication-diff-service':
+        specifier: workspace:*
+        version: link:../../services/publication-diff-service
       fastify:
         specifier: ^5.6.2
         version: 5.12.5
@@ -109,9 +115,16 @@ importers:
       '@workspace-brain/domain':
         specifier: workspace:*
         version: link:../../packages/domain
+      '@workspace-brain/domain-evolution':
+        specifier: workspace:*
+        version: link:../../packages/domain-evolution
       zod:
         specifier: ^4.1.12
         version: 4.6.5
+    devDependencies:
+      '@workspace-brain/publication-diff-service':
+        specifier: workspace:*
+        version: link:../../services/publication-diff-service
 
   infrastructure/filesystem:
     dependencies:
@@ -136,6 +149,9 @@ importers:
       '@workspace-brain/domain':
         specifier: workspace:*
         version: link:../domain
+      '@workspace-brain/domain-evolution':
+        specifier: workspace:*
+        version: link:../domain-evolution
 
   packages/configuration:
     dependencies:
@@ -152,6 +168,15 @@ importers:
         specifier: ^3.0.1
         version: 3.0.2
 
+  packages/domain-evolution:
+    dependencies:
+      '@workspace-brain/domain':
+        specifier: workspace:*
+        version: link:../domain
+      ulid:
+        specifier: ^3.0.1
+        version: 3.0.2
+
   packages/processing-core:
     dependencies:
       '@workspace-brain/domain':
@@ -160,6 +185,18 @@ importers:
       yaml:
         specifier: ^2.8.1
         version: 2.9.1
+
+  services/publication-diff-service:
+    dependencies:
+      '@workspace-brain/catalogue':
+        specifier: workspace:*
+        version: link:../../packages/catalogue
+      '@workspace-brain/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
+      '@workspace-brain/domain-evolution':
+        specifier: workspace:*
+        version: link:../../packages/domain-evolution
 
 packages:
   '@cacheable/memory@2.2.0':

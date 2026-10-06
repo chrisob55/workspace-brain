@@ -3,6 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import {
   CatalogueIntegrityError,
   type KnowledgePageRequest,
+  type PublicationSnapshot,
   type PublishedRelationshipRequest,
 } from '@workspace-brain/catalogue';
 import type { DuckDbConnection } from './index.js';
@@ -571,6 +572,30 @@ export async function getKnowledgePublicationSummary(
     entityCount: entities.length,
     relationshipCount: relationships.length,
   };
+}
+
+/**
+ * Loads one integrity-validated publication together with exactly the
+ * immutable entity/relationship versions it references. Read-only.
+ */
+export async function getPublicationSnapshot(
+  connection: DuckDbConnection,
+  publicationId: string,
+): Promise<PublicationSnapshot | undefined> {
+  const publication = await getAvailableKnowledgePublication(
+    connection,
+    publicationId,
+  );
+  if (publication === undefined) {
+    return undefined;
+  }
+  const entities = await loadPublishedEntities(connection, publication);
+  const relationships = await loadPublishedRelationships(
+    connection,
+    publication,
+  );
+  assertPublishedRelationshipEndpoints(relationships, entities, publication);
+  return { publication, entities, relationships };
 }
 
 export async function getPublishedEntity(

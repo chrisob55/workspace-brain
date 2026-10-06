@@ -82,6 +82,7 @@ import {
   getKnowledgePublicationSummary,
   getLatestKnowledgePublication,
   getKnowledgeRelationship,
+  getPublicationSnapshot,
   getPublishedEntity,
   getPublishedEntityProvenance,
   getPublishedRelationship,
@@ -105,6 +106,12 @@ import {
   searchProjectedEntities,
   searchProjectedRelationships,
 } from './search-projection.js';
+import {
+  findPublicationDiff,
+  getPublicationDiff,
+  listPublicationComparisons,
+  savePublicationDiff,
+} from './publication-diffs.js';
 
 export {
   buildSearchProjection,
@@ -928,6 +935,33 @@ export async function createDuckDbCatalogue(
       publicationId: string,
     ): Promise<KnowledgePublicationSummary | undefined> {
       return getKnowledgePublicationSummary(connection, publicationId);
+    },
+
+    async getPublicationSnapshot(publicationId: string) {
+      return getPublicationSnapshot(connection, publicationId);
+    },
+
+    async findPublicationDiff(
+      fromPublicationId: string,
+      toPublicationId: string,
+    ) {
+      return findPublicationDiff(
+        connection,
+        fromPublicationId,
+        toPublicationId,
+      );
+    },
+
+    async getPublicationDiff(diffId: string) {
+      return getPublicationDiff(connection, diffId);
+    },
+
+    async listPublicationComparisons(request) {
+      return listPublicationComparisons(connection, request);
+    },
+
+    async savePublicationDiff(diff, invalidDiffId) {
+      return savePublicationDiff(connection, diff, invalidDiffId);
     },
 
     async getPublishedEntity(

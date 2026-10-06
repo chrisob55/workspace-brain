@@ -4,6 +4,11 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { createApiServer } from '../../apps/workspace-brain-api/src/server.js';
+import {
+  changeTypes,
+  entityContentFields,
+  relationshipContentFields,
+} from '../../packages/domain-evolution/src/index.js';
 
 const openApiPath = resolve(process.cwd(), 'openapi/openapi.json');
 
@@ -32,6 +37,8 @@ type OpenApiDocument = {
       {
         required?: string[];
         properties?: Record<string, unknown>;
+        enum?: string[];
+        additionalProperties?: boolean;
       }
     >;
   };
@@ -452,5 +459,118 @@ describe('OpenAPI contract', () => {
     ]?.get?.parameters?.find(({ name }) => name === 'match') as
       { schema?: { enum?: string[] } } | undefined;
     expect(match?.schema?.enum).toEqual(['contains', 'prefix', 'exact']);
+  });
+  it('declares and registers the Slice 6 knowledge evolution API', async () => {
+    const document = JSON.parse(
+      await readFile(openApiPath, 'utf8'),
+    ) as OpenApiDocument;
+    const operations = [
+      [
+        '/api/v1/knowledge/publications/{publicationId}/diff/{otherPublicationId}',
+        'getPublicationDiff',
+        'PublicationDiff',
+        ['PublicationId', 'OtherPublicationId'],
+      ],
+      [
+        '/api/v1/knowledge/publications/{publicationId}/changes',
+        'listPublicationComparisons',
+        'PublicationComparisonPage',
+        ['PublicationId', 'Cursor', 'Limit'],
+      ],
+      [
+        '/api/v1/knowledge/diffs/{diffId}',
+        'getPublicationDiffById',
+        'PublicationDiff',
+        ['DiffId'],
+      ],
+    ] as const;
+    const server = createApiServer(
+      {} as Parameters<typeof createApiServer>[0],
+      { logger: false },
+    );
+    await server.ready();
+    for (const [path, operationId, schema, parameters] of operations) {
+      const operation = document.paths[path]?.get;
+      expect(Object.keys(document.paths[path] ?? {})).toEqual(['get']);
+      expect(operation?.operationId).toBe(operationId);
+      expect(
+        operation?.parameters?.map(
+          (parameter) => (parameter as { $ref?: string }).$ref,
+        ),
+      ).toEqual(parameters.map((name) => `#/components/parameters/${name}`));
+      expect(
+        operation?.responses?.['200']?.content?.['application/json']?.schema
+          ?.$ref,
+      ).toBe(`#/components/schemas/${schema}`);
+      expect(operation?.responses?.['400']?.$ref).toBe(
+        '#/components/responses/InvalidRequest',
+      );
+      expect(operation?.responses?.['404']?.$ref).toBe(
+        '#/components/responses/NotFound',
+      );
+      expect(operation?.responses?.['500']?.$ref).toBe(
+        '#/components/responses/IntegrityFailure',
+      );
+      expect(
+        server.hasRoute({
+          method: 'GET',
+          url: path.replace(/\{([^}]+)\}/g, ':$1'),
+        }),
+      ).toBe(true);
+    }
+    await server.close();
+
+    const schemas = document.components.schemas;
+    expect(schemas.ChangeType?.enum).toEqual([...changeTypes]);
+    expect(schemas.ChangeSummary?.required).toEqual([
+      'entitiesAdded',
+      'entitiesRemoved',
+      'entitiesModified',
+      'entitiesUnchanged',
+      'relationshipsAdded',
+      'relationshipsRemoved',
+      'relationshipsModified',
+      'relationshipsUnchanged',
+    ]);
+    const changedFieldsEnum = (name: string) =>
+      (
+        schemas[name]?.properties?.changedFields as
+          { items?: { enum?: string[] } } | undefined
+      )?.items?.enum;
+    expect(changedFieldsEnum('EntityChange')).toEqual([...entityContentFields]);
+    expect(changedFieldsEnum('RelationshipChange')).toEqual([
+      ...relationshipContentFields,
+    ]);
+    expect(schemas.PublicationDiff?.required).toEqual([
+      ...(schemas.PublicationComparison?.required ?? []),
+      'entityChanges',
+      'relationshipChanges',
+    ]);
+    for (const name of [
+      'ChangeSummary',
+      'KnowledgeVersionReference',
+      'EntityChange',
+      'RelationshipChange',
+      'PublicationComparison',
+      'PublicationDiff',
+    ]) {
+      expect(schemas[name]?.additionalProperties, name).toBe(false);
+      expect(Object.keys(schemas[name]?.properties ?? {}).sort(), name).toEqual(
+        [...(schemas[name]?.required ?? [])].sort(),
+      );
+    }
+
+    const references = JSON.stringify(document).match(
+      /"#\/components\/[a-zA-Z]+\/[a-zA-Z]+"/g,
+    );
+    for (const reference of references ?? []) {
+      const [, , section, name] = JSON.parse(reference).split('/');
+      expect(
+        (document.components as Record<string, Record<string, unknown>>)[
+          section
+        ]?.[name],
+        reference,
+      ).toBeDefined();
+    }
   });
 });

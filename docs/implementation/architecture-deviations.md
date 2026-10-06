@@ -127,3 +127,31 @@ projection is a disposable cache: it can be truncated and rebuilt (the API
 rebuilds missing projections on startup) without touching authoritative rows,
 and a full rebuild purges orphaned projection rows. Revisit if a projection is
 ever treated as authoritative, which ADR-018 forbids.
+
+## DEV-005 Derived Publication Diffs
+
+- **Status:** Documented Slice 6 layout and storage decision
+- **Introduced:** Slice 6 knowledge evolution
+
+The ADD (section 17) lists `apps/`, `packages/`, and `infrastructure/` but no
+`services/` directory. Slice 6 adds `services/publication-diff-service` (and a
+`services/*` workspace glob) as an application-layer library: it depends only
+on domain packages and catalogue ports, owns no storage, and is invoked
+in-process by the API. It is not a deployable service; the API remains the
+sole DuckDB writer (ADR-009, ADR-010, ADR-017). Revisit if diff generation is
+moved to the knowledge worker.
+
+Migration `014-publication-diffs.sql` names its detail tables
+`publication_diff_entity_changes` and `publication_diff_relationship_changes`
+instead of the suggested `entity_changes` / `relationship_changes`, to keep
+them visibly scoped to derived diffs and away from authoritative knowledge
+tables. As with DEV-004, no foreign keys are declared: diffs are disposable,
+may be truncated at any time, and are regenerated from immutable
+publications.
+
+`GET /api/v1/knowledge/publications/{id}/diff/{otherId}` lazily materialises
+the derived diff on first request (one write into derived tables only) rather
+than through a command endpoint or event. No domain event is emitted, because
+a diff records no change to knowledge; generation is logged with the diff ID
+and content hash. Revisit if diffs become expensive enough to require
+asynchronous generation.
