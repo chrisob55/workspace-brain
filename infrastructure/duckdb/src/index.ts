@@ -504,7 +504,7 @@ export async function createDuckDbCatalogue(
 
       for (const source of sources) {
         const existing = await connection.runAndReadAll(
-          "SELECT id, CAST(config_json AS VARCHAR) AS config_json, strftime(created_at, '%Y-%m-%dT%H:%M:%S.%fZ') AS created_at FROM sources WHERE config_id = $1",
+          "SELECT id, name, config_id, CAST(config_json AS VARCHAR) AS config_json, strftime(created_at, '%Y-%m-%dT%H:%M:%S.%fZ') AS created_at FROM sources WHERE config_id = $1",
           [source.configId],
         );
         const existingRow = existing.getRowObjectsJson()[0];
@@ -547,10 +547,21 @@ export async function createDuckDbCatalogue(
           maxFileSizeBytes: source.maxFileSizeBytes,
           workspaceRules: workspaceRules.get(source.configId) ?? [],
         });
-        await connection.run(
-          'INSERT INTO sources (id, name, provider_type, config_json, created_at, config_id) VALUES ($1, $2, $3, $4, COALESCE((SELECT created_at FROM sources WHERE id = $1), CURRENT_TIMESTAMP), $5) ON CONFLICT (id) DO UPDATE SET name = excluded.name, config_json = excluded.config_json, config_id = excluded.config_id',
-          [id, source.name, 'filesystem', config, source.configId],
-        );
+        if (existingRow === undefined) {
+          await connection.run(
+            'INSERT INTO sources (id, name, provider_type, config_json, created_at, config_id) VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP, $5)',
+            [id, source.name, 'filesystem', config, source.configId],
+          );
+        } else if (
+          existingRow.name !== source.name ||
+          existingRow.config_id !== source.configId ||
+          existingRow.config_json !== config
+        ) {
+          await connection.run(
+            'UPDATE sources SET name = $1, config_json = $2, config_id = $3 WHERE id = $4',
+            [source.name, config, source.configId, id],
+          );
+        }
       }
       for (const workspace of workspaces) {
         const sourceIdsForWorkspace = workspace.sourceConfigIds.map(
@@ -565,10 +576,11 @@ export async function createDuckDbCatalogue(
           },
         );
         const existing = await connection.runAndReadAll(
-          'SELECT id FROM workspaces WHERE config_id = $1',
+          'SELECT id, name, config_id, CAST(config_json AS VARCHAR) AS config_json FROM workspaces WHERE config_id = $1',
           [workspace.configId],
         );
-        const existingId = existing.getRowObjectsJson()[0]?.id;
+        const existingRow = existing.getRowObjectsJson()[0];
+        const existingId = existingRow?.id;
         const id =
           existingId === undefined
             ? createWorkspaceId()
@@ -579,10 +591,21 @@ export async function createDuckDbCatalogue(
           include: workspace.include,
           exclude: workspace.exclude,
         });
-        await connection.run(
-          'INSERT INTO workspaces (id, name, description, config_json, created_at, config_id) VALUES ($1, $2, NULL, $3, COALESCE((SELECT created_at FROM workspaces WHERE id = $1), CURRENT_TIMESTAMP), $4) ON CONFLICT (id) DO UPDATE SET name = excluded.name, config_json = excluded.config_json, config_id = excluded.config_id',
-          [id, workspace.name, config, workspace.configId],
-        );
+        if (existingId === undefined) {
+          await connection.run(
+            'INSERT INTO workspaces (id, name, description, config_json, created_at, config_id) VALUES ($1, $2, NULL, $3, CURRENT_TIMESTAMP, $4)',
+            [id, workspace.name, config, workspace.configId],
+          );
+        } else if (
+          existingRow?.name !== workspace.name ||
+          existingRow.config_id !== workspace.configId ||
+          existingRow.config_json !== config
+        ) {
+          await connection.run(
+            'UPDATE workspaces SET name = $1, config_json = $2, config_id = $3 WHERE id = $4',
+            [workspace.name, config, workspace.configId, id],
+          );
+        }
       }
       await ensureKnowledgeModels(connection);
     },
