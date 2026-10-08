@@ -17,6 +17,7 @@ services:
       - catalogue-data:/var/lib/workspace-brain
     networks:
       - backend
+      - api-host
     depends_on:
       nats:
         condition: service_started
@@ -107,6 +108,7 @@ services:
 networks:
   backend:
     internal: true
+  api-host:
 
 volumes:
   catalogue-data:
