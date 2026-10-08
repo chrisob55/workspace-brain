@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type {
   CatalogueHealth,
   CatalogueReader,
+  PublicationExportReader,
   PublicationCurrencyReader,
   PublicationDiffStore,
   PublicationSnapshotReader,
@@ -21,6 +22,10 @@ import {
   createPublicationDiffService,
   PublicationDiffScopeError,
 } from '@workspace-brain/publication-diff-service';
+import {
+  KnowledgePublicationPackageIntegrityError,
+  serializeKnowledgePublicationPackage,
+} from '@workspace-brain/domain-publication';
 import {
   knowledgeRelationshipTypes,
   searchMatchModes,
@@ -175,6 +180,7 @@ const searchLookupQuerySchema = z
 type SearchCatalogue = CatalogueReader &
   SearchProjectionReader &
   PublicationSnapshotReader &
+  PublicationExportReader &
   PublicationCurrencyReader &
   PublicationDiffStore &
   CatalogueHealth;
@@ -531,6 +537,48 @@ export function createApiServer(
         );
       }
       return reply.send(summary);
+    },
+  );
+
+  server.get(
+    '/api/v1/knowledge/publications/:publicationId/export',
+    async (request, reply) => {
+      const publicationId = parseIdParam(
+        request.params,
+        'publicationId',
+        'Publication',
+      );
+      parseCatalogueQuery(request.query, z.object({}).strict());
+      const publicationPackage =
+        await catalogue.getKnowledgePublicationExport(publicationId);
+      if (publicationPackage === undefined) {
+        throw new ApiError(
+          404,
+          'Not Found',
+          'Knowledge publication was not found.',
+        );
+      }
+      let serialized: string;
+      try {
+        serialized = serializeKnowledgePublicationPackage(publicationPackage);
+      } catch (error) {
+        if (error instanceof KnowledgePublicationPackageIntegrityError) {
+          throw new CatalogueIntegrityError(error.message);
+        }
+        throw error;
+      }
+      request.log.info(
+        {
+          publicationId,
+          contentHash: publicationPackage.metadata.contentHash,
+          entityCount: publicationPackage.metadata.entityCount,
+          relationshipCount: publicationPackage.metadata.relationshipCount,
+        },
+        'knowledge publication exported',
+      );
+      return reply
+        .header('content-type', 'application/json; charset=utf-8')
+        .send(serialized);
     },
   );
 

@@ -26,6 +26,7 @@ type OpenApiDocument = {
     {
       get?: {
         operationId?: string;
+        tags?: string[];
         parameters?: { name: string }[];
         responses?: Record<
           string,
@@ -49,6 +50,7 @@ type OpenApiDocument = {
       }
     >;
   };
+  tags?: { name: string }[];
 };
 
 describe('OpenAPI contract', () => {
@@ -104,6 +106,10 @@ describe('OpenAPI contract', () => {
         'getKnowledgePublicationSummary',
       ],
       [
+        '/api/v1/knowledge/publications/{publicationId}/export',
+        'exportKnowledgePublication',
+      ],
+      [
         '/api/v1/knowledge/publications/{publicationId}/entities/{entityId}',
         'getPublishedEntity',
       ],
@@ -155,6 +161,36 @@ describe('OpenAPI contract', () => {
     ).toBeDefined();
     expect(document.components.schemas.PublishedEntity).toBeDefined();
     expect(document.components.schemas.PublishedRelationship).toBeDefined();
+    expect(
+      document.components.schemas.KnowledgePublicationPackage,
+    ).toBeDefined();
+    expect(
+      document.components.schemas.KnowledgePublicationPackageMetadata,
+    ).toBeDefined();
+    expect(
+      document.components.schemas.PublishedKnowledgeProvenance,
+    ).toBeDefined();
+    expect(
+      document.components.schemas.KnowledgePublicationPackage
+        ?.additionalProperties,
+    ).toBe(false);
+    expect(
+      document.components.schemas.KnowledgePublicationPackage?.required,
+    ).toEqual([
+      'format',
+      'formatVersion',
+      'metadata',
+      'entities',
+      'relationships',
+      'provenance',
+    ]);
+    expect(
+      document.components.schemas.KnowledgePublicationPackageMetadata
+        ?.additionalProperties,
+    ).toBe(false);
+    expect(
+      document.components.schemas.KnowledgePublicationPackageMetadata?.required,
+    ).toContain('contentHash');
     expect(document.components.schemas.KnowledgeProvenancePage).toBeDefined();
     expect(document.components.schemas.PublishedRelationshipPage).toBeDefined();
     expect(document.components.schemas.PublishedEntity?.required).toContain(
@@ -271,6 +307,11 @@ describe('OpenAPI contract', () => {
         'KnowledgePublicationSummary',
       ],
       [
+        '/api/v1/knowledge/publications/{publicationId}/export',
+        'exportKnowledgePublication',
+        'KnowledgePublicationPackage',
+      ],
+      [
         '/api/v1/knowledge/publications/{publicationId}/entities/{entityId}',
         'getPublishedEntity',
         'PublishedEntity',
@@ -336,6 +377,28 @@ describe('OpenAPI contract', () => {
       document.components.schemas.KnowledgeProvenancePage?.required,
     ).toContain('knowledgeVersionNumber');
     await server.close();
+  });
+
+  it('classifies every route as operational or published knowledge', async () => {
+    const document = JSON.parse(
+      await readFile(openApiPath, 'utf8'),
+    ) as OpenApiDocument;
+    const declaredTags = new Set(document.tags?.map(({ name }) => name));
+    expect(declaredTags).toEqual(
+      new Set(['Operational / Current State', 'Published Knowledge']),
+    );
+    for (const [path, pathItem] of Object.entries(document.paths)) {
+      const expectedTag =
+        path.startsWith('/api/v1/knowledge/publications') ||
+        path === '/api/v1/knowledge/models/{modelId}/publications/latest' ||
+        path.startsWith('/api/v1/knowledge/diffs/')
+          ? 'Published Knowledge'
+          : 'Operational / Current State';
+      for (const operation of Object.values(pathItem)) {
+        expect(operation.tags).toEqual([expectedTag]);
+        expect(declaredTags.has(expectedTag)).toBe(true);
+      }
+    }
   });
 
   it('declares the Slice 4 read-only search projection routes and schemas', async () => {

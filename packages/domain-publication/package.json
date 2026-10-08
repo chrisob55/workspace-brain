@@ -1,5 +1,5 @@
 {
-  "name": "@workspace-brain/catalogue",
+  "name": "@workspace-brain/domain-publication",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -16,9 +16,6 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@workspace-brain/domain": "workspace:*",
-    "@workspace-brain/domain-publication": "workspace:*",
-    "@workspace-brain/domain-currency": "workspace:*",
-    "@workspace-brain/domain-evolution": "workspace:*"
+    "@workspace-brain/domain": "workspace:*"
   }
 }

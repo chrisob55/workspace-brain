@@ -17,6 +17,7 @@
     "@workspace-brain/domain": "workspace:*",
     "@workspace-brain/domain-currency": "workspace:*",
     "@workspace-brain/domain-evolution": "workspace:*",
+    "@workspace-brain/domain-publication": "workspace:*",
     "@workspace-brain/duckdb": "workspace:*",
     "@workspace-brain/nats": "workspace:*",
     "@workspace-brain/publication-diff-service": "workspace:*",

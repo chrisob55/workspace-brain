@@ -21,9 +21,14 @@ import {
   publicationComparisonHeader,
   type PublicationDiff,
 } from '@workspace-brain/domain-evolution';
+import {
+  createKnowledgePublicationPackage,
+  serializeKnowledgePublicationPackage,
+} from '@workspace-brain/domain-publication';
 import { CatalogueIntegrityError } from '@workspace-brain/catalogue';
 import { describe, expect, it } from 'vitest';
 
+import { snapshot as publicationPackageSnapshot } from '../../../packages/domain-publication/src/test-fixtures.js';
 import { createApiServer } from './server.js';
 
 const source = {
@@ -268,6 +273,9 @@ const publishedProvenance = {
     left.provenance.evidenceId.localeCompare(right.provenance.evidenceId),
   ),
 };
+const publicationPackage = createKnowledgePublicationPackage(
+  publicationPackageSnapshot,
+);
 
 function createCatalogue(
   ready = true,
@@ -399,6 +407,11 @@ function createCatalogue(
             entityCount: 2,
             relationshipCount: 1,
           }
+        : undefined;
+    },
+    async getKnowledgePublicationExport(publicationId: string) {
+      return publicationId === publicationPackage.metadata.publicationId
+        ? publicationPackage
         : undefined;
     },
     async getPublishedEntity(publicationId: string, entityId: string) {
@@ -624,6 +637,72 @@ describe('Workspace Brain API routes', () => {
       publicationId: relationship.json().publicationId,
     });
     expect(absent.statusCode).toBe(404);
+    await server.close();
+  });
+
+  it('exports a complete publication as deterministic self-describing JSON', async () => {
+    const server = createApiServer(createCatalogue(), { logger: false });
+    const path = `/api/v1/knowledge/publications/${publicationPackage.metadata.publicationId}/export`;
+    const response = await server.inject(path);
+    const repeated = await server.inject(path);
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-type']).toContain('application/json');
+    expect(response.body).toBe(
+      serializeKnowledgePublicationPackage(publicationPackage),
+    );
+    expect(response.json()).toEqual(publicationPackage);
+    expect(response.json()).toMatchObject({
+      format: 'workspace-brain-knowledge-publication',
+      formatVersion: 1,
+      metadata: {
+        publicationId: publicationPackage.metadata.publicationId,
+        contentHash: publicationPackage.metadata.contentHash,
+      },
+      entities: expect.any(Array),
+      relationships: expect.any(Array),
+      provenance: expect.any(Array),
+    });
+    expect(repeated.body).toBe(response.body);
+
+    const missing = await server.inject(
+      `/api/v1/knowledge/publications/${publication.id}/export`,
+    );
+    const invalid = await server.inject(
+      `/api/v1/knowledge/publications/not-a-ulid/export`,
+    );
+    const unexpectedQuery = await server.inject(`${path}?latest=true`);
+    expect(missing.statusCode).toBe(404);
+    expect(invalid.statusCode).toBe(400);
+    expect(unexpectedQuery.statusCode).toBe(400);
+    await server.close();
+  });
+
+  it('reports publication export integrity failures explicitly', async () => {
+    const catalogue = {
+      ...createCatalogue(),
+      async getKnowledgePublicationExport() {
+        return {
+          ...publicationPackage,
+          metadata: {
+            ...publicationPackage.metadata,
+            contentHash: '0'.repeat(64),
+          },
+        };
+      },
+    };
+    const server = createApiServer(
+      catalogue as Parameters<typeof createApiServer>[0],
+      { logger: false },
+    );
+    const response = await server.inject(
+      `/api/v1/knowledge/publications/${publicationPackage.metadata.publicationId}/export`,
+    );
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toMatchObject({
+      title: 'Knowledge Integrity Failure',
+      status: 500,
+    });
     await server.close();
   });
 
