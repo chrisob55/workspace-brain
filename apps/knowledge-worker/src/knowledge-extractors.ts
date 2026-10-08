@@ -1,5 +1,7 @@
 import { posix } from 'node:path';
 
+import ts from 'typescript';
+
 import {
   createKnowledgeEntityKey,
   parseEvidenceId,
@@ -15,7 +17,7 @@ const openApiNamePointer = /^json:\/info\/title$|^yaml:\/info\/title$/;
 const packageNamePointer = 'json:/name';
 const dependencyPointer =
   /^json:\/(?:dependencies|devDependencies|optionalDependencies|peerDependencies)\/(.+)$/;
-const importPattern = /\bfrom\s*['"]([^'"]+)['"]|\bimport\s*['"]([^'"]+)['"]/;
+const moduleStatementStart = /^\s*(?:import|export)\b/;
 
 export type KnowledgeCandidates = {
   readonly entities: readonly KnowledgeEntityCandidate[];
@@ -148,32 +150,35 @@ export function extractKnowledgeCandidates(
       );
       addEntity(entities, 'module', moduleName, moduleScope, firstModuleInput);
       for (const input of moduleInputs) {
-        const match = importPattern.exec(input.evidence.excerpt);
-        const specifier = match?.[1] ?? match?.[2];
-        if (specifier === undefined) {
-          continue;
+        for (const specifier of moduleSpecifiers(input.evidence.excerpt)) {
+          const target = resolveModuleName(moduleScope, specifier);
+          if (target === undefined || target.identityScope === moduleScope) {
+            continue;
+          }
+          const targetName = target.identityScope.startsWith('external:')
+            ? target.name
+            : relativeDocumentPath(target.identityScope);
+          const targetKey = entityKey(
+            'module',
+            document.sourceId,
+            target.identityScope,
+            targetName,
+          );
+          addEntity(
+            entities,
+            'module',
+            targetName,
+            target.identityScope,
+            input,
+          );
+          addRelationship(
+            relationships,
+            'DEPENDS_ON',
+            sourceKey,
+            targetKey,
+            input,
+          );
         }
-        const target = resolveModuleName(moduleScope, specifier);
-        if (target === undefined || target.identityScope === moduleScope) {
-          continue;
-        }
-        const targetName = target.identityScope.startsWith('external:')
-          ? target.name
-          : relativeDocumentPath(target.identityScope);
-        const targetKey = entityKey(
-          'module',
-          document.sourceId,
-          target.identityScope,
-          targetName,
-        );
-        addEntity(entities, 'module', targetName, target.identityScope, input);
-        addRelationship(
-          relationships,
-          'DEPENDS_ON',
-          sourceKey,
-          targetKey,
-          input,
-        );
       }
     }
   }
@@ -295,6 +300,27 @@ function resolveModuleName(
     return { name: relativeDocumentPath(resolved), identityScope: resolved };
   }
   return { name: specifier, identityScope: `external:${specifier}` };
+}
+
+function moduleSpecifiers(excerpt: string): string[] {
+  if (!moduleStatementStart.test(excerpt)) {
+    return [];
+  }
+  const statements = ts.createSourceFile(
+    'evidence.ts',
+    excerpt,
+    ts.ScriptTarget.Latest,
+    false,
+    ts.ScriptKind.TS,
+  ).statements;
+  return statements.flatMap((statement) =>
+    (ts.isImportDeclaration(statement) || ts.isExportDeclaration(statement)) &&
+    statement.moduleSpecifier !== undefined &&
+    ts.isStringLiteral(statement.moduleSpecifier) &&
+    statement.moduleSpecifier.text.length > 0
+      ? [statement.moduleSpecifier.text]
+      : [],
+  );
 }
 
 function decodePointerSegment(value: string): string {
