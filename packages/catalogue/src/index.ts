@@ -34,6 +34,7 @@ import type {
   PublicationDiff,
 } from '@workspace-brain/domain-evolution';
 import type { PublicationCurrencyInputs } from '@workspace-brain/domain-currency';
+import type { KnowledgePublicationPackage } from '@workspace-brain/domain-publication';
 
 export type CataloguePage<T> = {
   readonly items: readonly T[];
@@ -216,6 +217,17 @@ export interface PublicationSnapshotReader {
 }
 
 /**
+ * Read-only export of a complete, integrity-validated publication package.
+ * Implementations derive every field from the selected publication and its
+ * immutable version snapshots, never current-state entities or projections.
+ */
+export interface PublicationExportReader {
+  getKnowledgePublicationExport(
+    publicationId: string,
+  ): Promise<KnowledgePublicationPackage | undefined>;
+}
+
+/**
  * Read-only access to the catalogue facts needed to classify publication
  * currency (Slice 7). One call returns the integrity-validated publication
  * snapshot, the stored hashes of its supporting and current document versions,
@@ -350,6 +362,7 @@ export interface CatalogueDiscovery
     SearchProjectionReader,
     SearchProjectionWriter,
     PublicationSnapshotReader,
+    PublicationExportReader,
     PublicationCurrencyReader,
     PublicationDiffStore {
   registerConfiguration(

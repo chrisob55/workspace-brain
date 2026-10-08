@@ -9,10 +9,21 @@
       "url": "/"
     }
   ],
+  "tags": [
+    {
+      "name": "Operational / Current State",
+      "description": "Catalogue and operational reads over current Workspace Brain state."
+    },
+    {
+      "name": "Published Knowledge",
+      "description": "Read-only consumers retrieve version-specific published knowledge and its provenance."
+    }
+  ],
   "paths": {
     "/health": {
       "get": {
         "operationId": "getHealth",
+        "tags": ["Operational / Current State"],
         "responses": {
           "200": {
             "description": "API process is alive",
@@ -30,6 +41,7 @@
     "/ready": {
       "get": {
         "operationId": "getReadiness",
+        "tags": ["Operational / Current State"],
         "responses": {
           "200": {
             "description": "Catalogue is ready",
@@ -57,6 +69,7 @@
     "/api/v1/sources": {
       "get": {
         "operationId": "listSources",
+        "tags": ["Operational / Current State"],
         "parameters": [
           {
             "name": "cursor",
@@ -103,6 +116,7 @@
     "/api/v1/workspaces": {
       "get": {
         "operationId": "listWorkspaces",
+        "tags": ["Operational / Current State"],
         "parameters": [
           {
             "name": "cursor",
@@ -149,6 +163,7 @@
     "/api/v1/repositories": {
       "get": {
         "operationId": "listRepositories",
+        "tags": ["Operational / Current State"],
         "parameters": [
           {
             "name": "cursor",
@@ -203,6 +218,7 @@
     "/api/v1/documents": {
       "get": {
         "operationId": "listDocuments",
+        "tags": ["Operational / Current State"],
         "parameters": [
           {
             "name": "cursor",
@@ -265,6 +281,7 @@
     "/api/v1/documents/{documentId}/evidence": {
       "get": {
         "operationId": "listDocumentEvidence",
+        "tags": ["Operational / Current State"],
         "parameters": [
           {
             "name": "documentId",
@@ -320,6 +337,7 @@
     "/api/v1/evidence/{evidenceId}/explanation": {
       "get": {
         "operationId": "getEvidenceExplanation",
+        "tags": ["Operational / Current State"],
         "parameters": [
           {
             "name": "evidenceId",
@@ -368,6 +386,7 @@
     "/api/v1/knowledge/models": {
       "get": {
         "operationId": "listKnowledgeModels",
+        "tags": ["Operational / Current State"],
         "parameters": [
           {
             "name": "cursor",
@@ -414,6 +433,7 @@
     "/api/v1/knowledge/models/{modelId}": {
       "get": {
         "operationId": "getKnowledgeModel",
+        "tags": ["Operational / Current State"],
         "parameters": [
           {
             "name": "modelId",
@@ -462,6 +482,7 @@
     "/api/v1/knowledge/entities": {
       "get": {
         "operationId": "listKnowledgeEntities",
+        "tags": ["Operational / Current State"],
         "parameters": [
           {
             "name": "cursor",
@@ -544,6 +565,7 @@
     "/api/v1/knowledge/entities/{entityId}": {
       "get": {
         "operationId": "getKnowledgeEntity",
+        "tags": ["Operational / Current State"],
         "parameters": [
           {
             "name": "entityId",
@@ -592,6 +614,7 @@
     "/api/v1/knowledge/relationships": {
       "get": {
         "operationId": "listKnowledgeRelationships",
+        "tags": ["Operational / Current State"],
         "parameters": [
           {
             "name": "cursor",
@@ -687,6 +710,7 @@
     "/api/v1/knowledge/relationships/{relationshipId}": {
       "get": {
         "operationId": "getKnowledgeRelationship",
+        "tags": ["Operational / Current State"],
         "parameters": [
           {
             "name": "relationshipId",
@@ -735,6 +759,7 @@
     "/api/v1/knowledge/publications": {
       "get": {
         "operationId": "listKnowledgePublications",
+        "tags": ["Published Knowledge"],
         "parameters": [
           {
             "name": "cursor",
@@ -789,6 +814,7 @@
     "/api/v1/knowledge/models/{modelId}/publications/latest": {
       "get": {
         "operationId": "getLatestKnowledgePublication",
+        "tags": ["Published Knowledge"],
         "parameters": [{ "$ref": "#/components/parameters/ModelId" }],
         "responses": {
           "200": {
@@ -817,6 +843,7 @@
     "/api/v1/knowledge/publications/{publicationId}": {
       "get": {
         "operationId": "getKnowledgePublication",
+        "tags": ["Published Knowledge"],
         "parameters": [{ "$ref": "#/components/parameters/PublicationId" }],
         "responses": {
           "200": {
@@ -838,6 +865,7 @@
     "/api/v1/knowledge/publications/{publicationId}/summary": {
       "get": {
         "operationId": "getKnowledgePublicationSummary",
+        "tags": ["Published Knowledge"],
         "parameters": [{ "$ref": "#/components/parameters/PublicationId" }],
         "responses": {
           "200": {
@@ -856,9 +884,32 @@
         }
       }
     },
+    "/api/v1/knowledge/publications/{publicationId}/export": {
+      "get": {
+        "operationId": "exportKnowledgePublication",
+        "tags": ["Published Knowledge"],
+        "parameters": [{ "$ref": "#/components/parameters/PublicationId" }],
+        "responses": {
+          "200": {
+            "description": "Complete deterministic JSON package for the selected immutable publication",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KnowledgePublicationPackage"
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/InvalidRequest" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "500": { "$ref": "#/components/responses/IntegrityFailure" }
+        }
+      }
+    },
     "/api/v1/knowledge/publications/{publicationId}/entities/{entityId}": {
       "get": {
         "operationId": "getPublishedEntity",
+        "tags": ["Published Knowledge"],
         "parameters": [
           { "$ref": "#/components/parameters/PublicationId" },
           { "$ref": "#/components/parameters/EntityId" }
@@ -881,6 +932,7 @@
     "/api/v1/knowledge/publications/{publicationId}/entities/{entityId}/relationships": {
       "get": {
         "operationId": "listPublishedEntityRelationships",
+        "tags": ["Published Knowledge"],
         "parameters": [
           { "$ref": "#/components/parameters/PublicationId" },
           { "$ref": "#/components/parameters/EntityId" },
@@ -923,6 +975,7 @@
     "/api/v1/knowledge/publications/{publicationId}/entities/{entityId}/provenance": {
       "get": {
         "operationId": "getPublishedEntityProvenance",
+        "tags": ["Published Knowledge"],
         "parameters": [
           { "$ref": "#/components/parameters/PublicationId" },
           { "$ref": "#/components/parameters/EntityId" },
@@ -949,6 +1002,7 @@
     "/api/v1/knowledge/publications/{publicationId}/relationships/{relationshipId}": {
       "get": {
         "operationId": "getPublishedRelationship",
+        "tags": ["Published Knowledge"],
         "parameters": [
           { "$ref": "#/components/parameters/PublicationId" },
           { "$ref": "#/components/parameters/RelationshipId" }
@@ -973,6 +1027,7 @@
     "/api/v1/knowledge/publications/{publicationId}/relationships/{relationshipId}/provenance": {
       "get": {
         "operationId": "getPublishedRelationshipProvenance",
+        "tags": ["Published Knowledge"],
         "parameters": [
           { "$ref": "#/components/parameters/PublicationId" },
           { "$ref": "#/components/parameters/RelationshipId" },
@@ -999,6 +1054,7 @@
     "/api/v1/knowledge/publications/{publicationId}/diff/{otherPublicationId}": {
       "get": {
         "operationId": "getPublicationDiff",
+        "tags": ["Published Knowledge"],
         "summary": "Compare two publications",
         "description": "Returns the deterministic diff from `publicationId` to `otherPublicationId`. The diff is computed only from the two immutable publications and the entity/relationship versions they reference, and is materialised as a derived, disposable artefact on first request; repeated requests return the stored diff while it matches its publications. Both publications must belong to the same Knowledge Model.",
         "parameters": [
@@ -1035,6 +1091,7 @@
     "/api/v1/knowledge/publications/{publicationId}/changes": {
       "get": {
         "operationId": "listPublicationComparisons",
+        "tags": ["Published Knowledge"],
         "summary": "List known comparisons for a publication",
         "description": "Lists previously generated diffs in which the publication is either the source or the target, ordered by diff ID. Only comparison headers and summaries are returned; each is verified against a regeneration from its immutable publications, and a stored diff that no longer matches yields an integrity failure. Cursors are opaque and bound to the publication; a cursor issued for another publication is rejected with 400.",
         "parameters": [
@@ -1074,6 +1131,7 @@
     "/api/v1/knowledge/publications/{publicationId}/currency": {
       "get": {
         "operationId": "getPublicationCurrency",
+        "tags": ["Published Knowledge"],
         "summary": "Summarise publication currency",
         "description": "Classifies every entity and relationship version of one immutable publication as CURRENT, STALE or UNKNOWN by comparing the document versions recorded in its provenance with the catalogue's authoritative current-version pointer and revision. STALE takes precedence over UNKNOWN. Computed on demand and read-only; nothing is written, the filesystem is not consulted and timestamps or identifier order are never used as recency. Missing or inconsistent publication membership, snapshots, evidence, provenance, locators or historical document-version lineage yield an integrity failure, never UNKNOWN.",
         "parameters": [
@@ -1107,6 +1165,7 @@
     "/api/v1/knowledge/publications/{publicationId}/currency/details": {
       "get": {
         "operationId": "listPublicationCurrencyDetails",
+        "tags": ["Published Knowledge"],
         "summary": "List publication currency details",
         "description": "Lists currency records for the publication's entity and relationship versions, ordered by object type then stable ID using ordinal comparison. Each record carries its supporting-document results. A relationship's currency is derived only from its own supporting evidence and never from its endpoint entities. Cursors are opaque and bound to the publication, the filters, the last sort key and the currencyBasisHash; a malformed cursor or one issued for another publication or other filters is rejected with 400, and a cursor issued under a different catalogue basis is rejected with 409 so pages never mix catalogue states.",
         "parameters": [
@@ -1155,6 +1214,7 @@
     "/api/v1/knowledge/diffs/{diffId}": {
       "get": {
         "operationId": "getPublicationDiffById",
+        "tags": ["Published Knowledge"],
         "summary": "Retrieve a previously generated diff",
         "description": "Returns a stored diff after verifying that regenerating it from its immutable publications yields identical content.",
         "parameters": [
@@ -1188,6 +1248,7 @@
     "/api/v1/search/entities": {
       "get": {
         "operationId": "searchProjectedEntities",
+        "tags": ["Operational / Current State"],
         "parameters": [
           {
             "name": "cursor",
@@ -1292,6 +1353,7 @@
     "/api/v1/search/relationships": {
       "get": {
         "operationId": "searchProjectedRelationships",
+        "tags": ["Operational / Current State"],
         "parameters": [
           {
             "name": "cursor",
@@ -1404,6 +1466,7 @@
     "/api/v1/search/entity/{entityId}": {
       "get": {
         "operationId": "getProjectedEntity",
+        "tags": ["Operational / Current State"],
         "parameters": [
           {
             "name": "entityId",
@@ -1461,6 +1524,7 @@
     "/api/v1/search/relationship/{relationshipId}": {
       "get": {
         "operationId": "getProjectedRelationship",
+        "tags": ["Operational / Current State"],
         "parameters": [
           {
             "name": "relationshipId",
@@ -1518,6 +1582,7 @@
     "/api/v1/search/publication/{publicationId}": {
       "get": {
         "operationId": "getProjectionStatistics",
+        "tags": ["Operational / Current State"],
         "parameters": [
           {
             "name": "publicationId",
@@ -2805,6 +2870,92 @@
           },
           "entityCount": { "type": "integer", "minimum": 0 },
           "relationshipCount": { "type": "integer", "minimum": 0 }
+        }
+      },
+      "KnowledgePublicationPackage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "format",
+          "formatVersion",
+          "metadata",
+          "entities",
+          "relationships",
+          "provenance"
+        ],
+        "properties": {
+          "format": {
+            "const": "workspace-brain-knowledge-publication"
+          },
+          "formatVersion": { "const": 1 },
+          "metadata": {
+            "$ref": "#/components/schemas/KnowledgePublicationPackageMetadata"
+          },
+          "entities": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/PublishedEntity" }
+          },
+          "relationships": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/PublishedRelationship" }
+          },
+          "provenance": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublishedKnowledgeProvenance"
+            }
+          }
+        }
+      },
+      "KnowledgePublicationPackageMetadata": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "publicationId",
+          "knowledgeModelId",
+          "publicationVersion",
+          "schemaVersion",
+          "createdAt",
+          "contentHash",
+          "entityCount",
+          "relationshipCount"
+        ],
+        "properties": {
+          "publicationId": { "type": "string", "format": "ulid" },
+          "knowledgeModelId": { "type": "string", "format": "ulid" },
+          "publicationVersion": { "type": "integer", "minimum": 1 },
+          "schemaVersion": { "const": 1 },
+          "createdAt": { "type": "string", "format": "date-time" },
+          "contentHash": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "entityCount": { "type": "integer", "minimum": 0 },
+          "relationshipCount": { "type": "integer", "minimum": 0 }
+        }
+      },
+      "PublishedKnowledgeProvenance": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "objectType",
+          "objectId",
+          "versionId",
+          "sourceEvidenceIds",
+          "items"
+        ],
+        "properties": {
+          "objectType": { "enum": ["entity", "relationship"] },
+          "objectId": { "type": "string", "format": "ulid" },
+          "versionId": { "type": "string", "format": "ulid" },
+          "sourceEvidenceIds": {
+            "type": "array",
+            "items": { "type": "string", "format": "ulid" }
+          },
+          "items": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/KnowledgeProvenance" }
+          }
         }
       },
       "PublishedEntity": {

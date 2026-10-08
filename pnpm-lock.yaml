@@ -91,6 +91,9 @@ importers:
       '@workspace-brain/domain-evolution':
         specifier: workspace:*
         version: link:../../packages/domain-evolution
+      '@workspace-brain/domain-publication':
+        specifier: workspace:*
+        version: link:../../packages/domain-publication
       '@workspace-brain/duckdb':
         specifier: workspace:*
         version: link:../../infrastructure/duckdb
@@ -127,6 +130,9 @@ importers:
       '@workspace-brain/domain-evolution':
         specifier: workspace:*
         version: link:../../packages/domain-evolution
+      '@workspace-brain/domain-publication':
+        specifier: workspace:*
+        version: link:../../packages/domain-publication
       zod:
         specifier: ^4.1.12
         version: 4.6.5
@@ -164,6 +170,9 @@ importers:
       '@workspace-brain/domain-evolution':
         specifier: workspace:*
         version: link:../domain-evolution
+      '@workspace-brain/domain-publication':
+        specifier: workspace:*
+        version: link:../domain-publication
 
   packages/configuration:
     dependencies:
@@ -194,6 +203,12 @@ importers:
       ulid:
         specifier: ^3.0.1
         version: 3.0.2
+
+  packages/domain-publication:
+    dependencies:
+      '@workspace-brain/domain':
+        specifier: workspace:*
+        version: link:../domain
 
   packages/processing-core:
     dependencies:

@@ -72,18 +72,38 @@ It includes stable identities, hashes, useful metadata, excerpts, structured ent
 
 A model definition is mutable configuration. A generated Model Version is immutable. Lifecycle: `requested -> building -> generated -> verified -> published`, with failure, withdrawal and supersession paths.
 
-Portable export:
-```text
-knowledge-model/
-|- manifest.json
-|- repositories.ndjson
-|- documents.ndjson
-|- evidence.ndjson
-|- entities.ndjson
-|- relationships.ndjson
-|- assertions.ndjson
-`- checksums.sha256
+Portable publication export is one deterministic UTF-8 JSON document; it
+introduces no archive or compression format. Its versioned envelope contains
+publication metadata, the exact entity and relationship version snapshots,
+and an explicit provenance index:
+
+```json
+{
+  "format": "workspace-brain-knowledge-publication",
+  "formatVersion": 1,
+  "metadata": {
+    "publicationId": "01...",
+    "knowledgeModelId": "01...",
+    "publicationVersion": 1,
+    "schemaVersion": 1,
+    "createdAt": "2026-10-08T10:00:00.000Z",
+    "contentHash": "<sha256>",
+    "entityCount": 1,
+    "relationshipCount": 0
+  },
+  "entities": [],
+  "relationships": [],
+  "provenance": []
+}
 ```
+
+`formatVersion` versions the package envelope independently of the Knowledge
+Model `schemaVersion`. The content hash is SHA-256 over canonical JSON of the
+schema version and entity/relationship snapshots, with objects sorted by
+stable ID. Provenance items retain evidence IDs, source/document/version IDs,
+precise locators and processor/extraction-rule versions. Consumers retrieve a
+specific publication package through
+`GET /api/v1/knowledge/publications/{publicationId}/export`.
 
 ## 5. Knowledge lifecycle
 Overall vocabulary: Discovered, Extracted, Observed, Related, Asserted, Verified, Established, Consumed, Rejected and Superseded.
@@ -197,7 +217,12 @@ Base path `/api/v1`. API and Knowledge Model schema versions are independent. Lo
 
 Management/catalogue surface: health, readiness, capabilities, workspaces, sources, scans, operations, repositories, documents, evidence, entities, relationships, assertions and search.
 
-Model surface: model definitions, builds, versions, validation, publication, withdrawal, latest published, manifest, scoped resources, diff and export.
+Model surface: model definitions, builds, versions, validation, publication,
+withdrawal, latest published, manifest, scoped resources, diff and export.
+OpenAPI classifies operational/current-state routes separately from published
+knowledge routes. Published knowledge endpoints resolve only a selected
+publication and its immutable version snapshots; the export endpoint does not
+read current entity or relationship state or disposable search projections.
 
 AI OS primarily consumes latest-published metadata, manifest, entities, relationships, evidence, export, explanations and search. Never expose SQL, vector-store IDs or event publication.
 
@@ -304,6 +329,8 @@ scope evolved; the shipped slices are:
 6. Deterministic knowledge evolution through publication diffs.
 7. Publication currency: read-only classification of published knowledge as
    current, stale or unknown against the catalogue's current-version pointers.
+8. Portable immutable publication packages: deterministic JSON export of
+   publication metadata, entity and relationship snapshots, and provenance.
 
 The original proposal is retained below for historical context, not as a
 status report:

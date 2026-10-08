@@ -5,15 +5,17 @@ discover and organise knowledge in local workspaces, repositories, and
 documents, then produce traceable, versioned Knowledge Models for AI OS and
 other consumers. It is not itself an agent or reasoning platform.
 
-The project is being delivered in vertical slices. Slices 0-7 provide
+The project is being delivered in vertical slices. Slices 0-8 provide
 deterministic filesystem discovery, evidence extraction, immutable Knowledge
 Model publications, publication-scoped lexical search, one-hop knowledge
 exploration with evidence-backed provenance, deterministic knowledge
 evolution (diffs between publications), and publication currency (whether
-published knowledge still reflects the catalogue's current document versions).
-Search, exploration, diffs, and currency never modify knowledge; no AI,
-embeddings, semantic search, or graph store is used.
+published knowledge still reflects the catalogue's current document versions),
+plus a deterministic JSON package export for each immutable publication.
+Search, exploration, diffs, currency, and export do not mutate knowledge; no
+AI, embeddings, semantic search, or graph store is used.
 See the [architecture document](docs/architecture/Workspace-Brain-ADD-v1.md),
+the [Slice 8 implementation report](docs/implementation/slice-8-report.md),
 the [Slice 7 implementation report](docs/implementation/slice-7-report.md),
 the [Slice 6 implementation report](docs/implementation/slice-6-report.md), and
 [Slice 1 remediation report](docs/implementation/slice-1-remediation-report.md)
@@ -51,6 +53,9 @@ for the current MVP scope.
   as derived, rebuildable artefacts.
 - Read-only, cursor-paginated API endpoints for sources, workspaces,
   repositories, documents, search, published knowledge, and publication diffs.
+- A single `GET /api/v1/knowledge/publications/{publicationId}/export` endpoint
+  returns deterministic publication metadata, immutable entity/relationship
+  snapshots, and evidence-backed provenance as plain JSON.
 - Docker Compose runtime with the API, ingestion worker, NATS JetStream,
   Qdrant, and Ollama. Qdrant and Ollama are part of the broader architecture;
   the completed knowledge-exploration slice does not use them for indexing or

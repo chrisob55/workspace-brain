@@ -22,6 +22,7 @@ import {
   type KnowledgeObjectCurrency,
   type PublicationCurrency,
 } from '@workspace-brain/domain-currency';
+import { serializeKnowledgePublicationPackage } from '@workspace-brain/domain-publication';
 import { createPublicationDiffService } from '@workspace-brain/publication-diff-service';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -397,6 +398,63 @@ async function currency(
   }
   return classifyPublicationCurrency(inputs);
 }
+
+describe('publication package export', () => {
+  it('exports immutable publication snapshots with verified provenance', async () => {
+    const fixture = await createFixture();
+    const initialExport = await fixture.catalogue.getKnowledgePublicationExport(
+      fixture.publication.id,
+    );
+    if (initialExport === undefined) {
+      throw new Error('Expected publication export');
+    }
+    const initialBytes = serializeKnowledgePublicationPackage(initialExport);
+
+    expect(initialExport.metadata).toMatchObject({
+      publicationId: fixture.publication.id,
+      publicationVersion: fixture.publication.version,
+      contentHash: fixture.publication.contentHash,
+      entityCount: 5,
+      relationshipCount: 3,
+    });
+    expect(initialExport.provenance.length).toBe(
+      initialExport.entities.length + initialExport.relationships.length,
+    );
+    expect(
+      initialExport.entities.every(
+        ({ entity }) => entity.provenance.length > 0,
+      ),
+    ).toBe(true);
+
+    const rescanned = await fixture.scan(
+      {
+        service: contents.serviceV2,
+        web: contents.web,
+        other: contents.other,
+      },
+      'publication-export-changed-current-state',
+    );
+    await fixture.publish(
+      rescanned,
+      'service',
+      contents.serviceV2,
+      dependencies.serviceV2,
+      'publication-export-publish-newer',
+    );
+    const historicalExport =
+      await fixture.catalogue.getKnowledgePublicationExport(
+        fixture.publication.id,
+      );
+    if (historicalExport === undefined) {
+      throw new Error('Expected historical publication export');
+    }
+
+    expect(serializeKnowledgePublicationPackage(historicalExport)).toBe(
+      initialBytes,
+    );
+    expect(historicalExport).toEqual(initialExport);
+  });
+});
 
 /** Records keyed by entity name or relationship target name. */
 async function byName(
@@ -915,6 +973,19 @@ describe('DuckDB publication currency', () => {
         }),
       ]);
     const exploreBefore = await slice5And6(catalogue);
+    const publicationExportsBefore = await Promise.all(
+      [fixture.publication.id, latest.id].map((publicationId) =>
+        catalogue.getKnowledgePublicationExport(publicationId),
+      ),
+    );
+    const publicationExportBytesBefore = publicationExportsBefore.map(
+      (publicationPackage) => {
+        if (publicationPackage === undefined) {
+          throw new Error('Expected publication export');
+        }
+        return serializeKnowledgePublicationPackage(publicationPackage);
+      },
+    );
     await catalogue.close();
     const tables = [
       ...authoritativeTables,
@@ -946,6 +1017,19 @@ describe('DuckDB publication currency', () => {
       expect(firstRun[0]?.summary.staleEntities).toBe(3);
       expect(firstRun[1]?.summary.staleEntities).toBe(0);
       expect(await slice5And6(catalogue)).toEqual(exploreBefore);
+      const reopenedExports = await Promise.all(
+        [fixture.publication.id, latest.id].map((publicationId) =>
+          catalogue.getKnowledgePublicationExport(publicationId),
+        ),
+      );
+      expect(
+        reopenedExports.map((publicationPackage) => {
+          if (publicationPackage === undefined) {
+            throw new Error('Expected publication export');
+          }
+          return serializeKnowledgePublicationPackage(publicationPackage);
+        }),
+      ).toEqual(publicationExportBytesBefore);
     } finally {
       await catalogue.close();
     }
