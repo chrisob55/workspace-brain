@@ -8,3 +8,6 @@ coverage/
 !.env.example
 *.duckdb
 *.duckdb.wal
+
+sources/*
+!sources/.gitkeep

@@ -1633,6 +1633,9 @@ describe('DuckDB catalogue migrations', () => {
       'correlation-one',
       100,
     );
+    await expect(
+      catalogue.registerConfiguration(configuredSources, configuredWorkspaces),
+    ).resolves.toBeUndefined();
     await catalogue.recordScanStarted(
       source.id,
       'correlation-one',
