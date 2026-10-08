@@ -67,6 +67,9 @@ importers:
       pino:
         specifier: ^9.14.0
         version: 9.14.0
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
       zod:
         specifier: ^4.6.5
         version: 4.6.5
@@ -197,6 +200,9 @@ importers:
       '@workspace-brain/domain':
         specifier: workspace:*
         version: link:../domain
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
       yaml:
         specifier: ^2.8.1
         version: 2.9.1
