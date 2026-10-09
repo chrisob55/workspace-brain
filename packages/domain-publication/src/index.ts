@@ -130,7 +130,7 @@ export function assertKnowledgePublicationPackageIntegrity(
   const { metadata, entities, relationships, provenance } = publicationPackage;
   const entityIds = new Set(entities.map(({ entity }) => entity.id));
   if (
-    metadata.schemaVersion !== 1 ||
+    (metadata.schemaVersion !== 1 && metadata.schemaVersion !== 2) ||
     !Number.isInteger(metadata.publicationVersion) ||
     metadata.publicationVersion < 1 ||
     !/^[a-f0-9]{64}$/.test(metadata.contentHash) ||

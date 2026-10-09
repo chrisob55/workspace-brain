@@ -12,24 +12,17 @@ import {
   type KnowledgeInputEvidence,
 } from '@workspace-brain/domain';
 import type { NatsDiscoveryBus } from '@workspace-brain/nats';
-import { processDocument } from '@workspace-brain/processing-core';
+import {
+  documentProcessors,
+  processDocument,
+} from '@workspace-brain/processing-core';
 import type { Logger } from 'pino';
 import { z } from 'zod';
 
-import { extractKnowledgeCandidates } from './knowledge-extractors.js';
+import { extractKnowledgeReport } from './knowledge-extractors.js';
 
 const chunkBytes = 256 * 1024;
 const maximumSubmissionBytes = 900_000;
-const supportedExtensions = new Set([
-  '.md',
-  '.markdown',
-  '.txt',
-  '.yaml',
-  '.yml',
-  '.json',
-  '.ts',
-  '.dockerfile',
-]);
 const documentSchema = z
   .object({
     id: z.string().regex(/^[0-7][0-9A-HJKMNP-TV-Z]{25}$/),
@@ -120,6 +113,31 @@ const knowledgeInputEvidenceSchema = z
         extractionRuleVersion: z.number().int().positive(),
       })
       .strict(),
+    extractionContext: z
+      .object({
+        repositories: z.array(
+          z
+            .object({
+              id: z.string(),
+              path: z.string(),
+              fingerprint: z.string(),
+              name: z.string().optional(),
+            })
+            .strict(),
+        ),
+        documents: z.array(
+          z
+            .object({
+              id: z.string(),
+              path: z.string(),
+              filename: z.string(),
+              fingerprint: z.string(),
+            })
+            .strict(),
+        ),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 const knowledgeInputEvidencePageSchema = z
@@ -228,13 +246,27 @@ async function processKnowledgeEvent(
       sourceId: parseSourceId(input.document.sourceId),
     },
     provenance: input.provenance,
+    ...(input.extractionContext === undefined
+      ? {}
+      : {
+          extractionContext: {
+            ...input.extractionContext,
+            repositories: input.extractionContext.repositories.map(
+              ({ name, ...repository }) => ({
+                ...repository,
+                ...(name === undefined ? {} : { name }),
+              }),
+            ),
+          },
+        }),
   }));
   if (inputs.some((input) => input.documentVersion.id !== documentVersionId)) {
     throw new Error(
       'Knowledge evidence response does not match the requested version',
     );
   }
-  const candidates = extractKnowledgeCandidates(inputs);
+  const extraction = extractKnowledgeReport(inputs);
+  const candidates = extraction.candidates;
   const occurredAt = new Date().toISOString();
   const sourceId = parseSourceId(event.partitionKey);
   const candidatePayload = {
@@ -257,6 +289,12 @@ async function processKnowledgeEvent(
     partitionKey: sourceId,
     payload: candidatePayload,
   };
+  if (
+    Buffer.byteLength(JSON.stringify(submission), 'utf8') >
+    maximumSubmissionBytes
+  ) {
+    throw new Error('Knowledge candidates exceed the supported event size');
+  }
   await bus.publish(submission);
   logger.info(
     {
@@ -265,6 +303,8 @@ async function processKnowledgeEvent(
       documentVersionId,
       entityCount: candidates.entities.length,
       relationshipCount: candidates.relationships.length,
+      extractorContributions: extraction.contributions,
+      diagnostics: extraction.diagnostics,
     },
     'knowledge candidates submitted',
   );
@@ -281,17 +321,36 @@ async function processDiscoveryEvent(
   ) {
     return;
   }
-  const parsedDocument = documentSchema.parse(event.payload.document);
+  await submitDocumentProcessing(
+    event.payload.document,
+    bus,
+    logger,
+    event.correlationId,
+  );
+}
+
+export async function submitDocumentProcessing(
+  inventoryDocument: unknown,
+  bus: NatsDiscoveryBus,
+  logger: WorkerLogger,
+  correlationId: string,
+): Promise<'submitted' | 'unsupported'> {
+  const parsedDocument = documentSchema.parse(inventoryDocument);
   const document: Document = {
     ...parsedDocument,
     id: parseDocumentId(parsedDocument.id),
     sourceId: parseSourceId(parsedDocument.sourceId),
   };
   if (
-    !supportedExtensions.has(document.extension.toLocaleLowerCase('en-US')) &&
-    document.filename.toLocaleLowerCase('en-US') !== 'dockerfile'
+    !documentProcessors.some((processor) =>
+      processor.supports(document.filename),
+    )
   ) {
-    return;
+    logger.info(
+      { documentId: document.id, documentPath: document.path },
+      'document processing unsupported',
+    );
+    return 'unsupported';
   }
 
   const started = performance.now();
@@ -317,7 +376,7 @@ async function processDiscoveryEvent(
     eventVersion: 1,
     occurredAt: processedAt,
     producer: 'workspace-brain-knowledge-worker',
-    correlationId: event.correlationId,
+    correlationId,
     idempotencyKey: `document-processing:${document.id}:${fingerprint}:${pipelineKey}`,
     partitionKey: document.sourceId,
     payload: {
@@ -347,7 +406,7 @@ async function processDiscoveryEvent(
   await bus.publish(submission);
   logger.info(
     {
-      correlationId: event.correlationId,
+      correlationId,
       documentId: document.id,
       sourceId: document.sourceId,
       documentPath: document.path,
@@ -355,6 +414,7 @@ async function processDiscoveryEvent(
     },
     'document evidence submitted',
   );
+  return 'submitted';
 }
 
 async function readDocument(

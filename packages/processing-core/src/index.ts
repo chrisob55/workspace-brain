@@ -1,4 +1,5 @@
 import ts from 'typescript';
+import MarkdownIt from 'markdown-it';
 import { isMap, isScalar, isSeq, parseDocument, type Node } from 'yaml';
 
 import { processingDefinitionRegistry } from '@workspace-brain/domain';
@@ -86,7 +87,7 @@ export const documentProcessors: readonly DocumentProcessor[] = [
     'markdown',
     extensionsFor('markdown'),
     definitionFor('markdown').extractionRuleId,
-    normalizeMarkdown,
+    normalizeMarkdownWithLinks,
   ),
   createProcessor(
     'yaml',
@@ -111,8 +112,7 @@ export const documentProcessors: readonly DocumentProcessor[] = [
     extensionsFor('typescript'),
     definitionFor('typescript').extractionRuleId,
     normalizeTypeScript,
-    // Version 2 records complete multi-line import and re-export statements.
-    2,
+    3,
   ),
   createProcessor(
     'dockerfile',
@@ -149,7 +149,7 @@ function createProcessor(
   extensions: readonly string[],
   extractionRuleId: string,
   normalize: (content: string) => readonly NormalizedBlock[],
-  version = 1,
+  version = 3,
 ): DocumentProcessor {
   return {
     id,
@@ -181,6 +181,44 @@ function extensionOf(filename: string): string {
   const name = filename.toLocaleLowerCase('en-US');
   const dot = name.lastIndexOf('.');
   return dot < 0 ? '' : name.slice(dot);
+}
+
+function normalizeMarkdownWithLinks(content: string): NormalizedBlock[] {
+  const blocks = normalizeMarkdown(content);
+  const parser = new MarkdownIt({ html: true });
+  for (const token of parser.parse(content, {})) {
+    if (token.type !== 'inline' || token.map === null) continue;
+    const [start, end] = token.map;
+    if (
+      /^(?:\*\*)?(Status|Supersedes|Superseded[- ]by|Related decisions|References|ADR-ID):(?:\*\*)?\s*.+$/i.test(
+        token.content,
+      )
+    ) {
+      blocks.push(
+        makeBlock(
+          `markdown-metadata:${start + 1}`,
+          'structured-value',
+          token.content,
+          { kind: 'markdown-lines', lineStart: start + 1, lineEnd: end },
+        ),
+      );
+    }
+    let occurrence = 0;
+    for (const child of token.children ?? []) {
+      if (child.type !== 'link_open') continue;
+      const href = child.attrGet('href');
+      if (href === null) continue;
+      blocks.push(
+        makeBlock(
+          `markdown-link:${start + 1}:${occurrence++}`,
+          'structured-value',
+          href,
+          { kind: 'markdown-lines', lineStart: start + 1, lineEnd: end },
+        ),
+      );
+    }
+  }
+  return blocks;
 }
 
 function normalizeMarkdown(content: string): NormalizedBlock[] {
@@ -238,7 +276,7 @@ function normalizeMarkdown(content: string): NormalizedBlock[] {
             kind: 'markdown-lines',
             lineStart: blockStart + 1,
             lineEnd: index,
-            headingPath: [...headings],
+            headingPath: headings.filter(Boolean),
           },
         ),
       );
@@ -251,7 +289,7 @@ function normalizeMarkdown(content: string): NormalizedBlock[] {
           kind: 'markdown-lines',
           lineStart: index + 1,
           lineEnd: index + 1,
-          headingPath: [...headings],
+          headingPath: headings.filter(Boolean),
         }),
       );
       index += 1;
@@ -264,7 +302,7 @@ function normalizeMarkdown(content: string): NormalizedBlock[] {
           kind: 'markdown-lines',
           lineStart: index + 1,
           lineEnd: index + 1,
-          headingPath: [...headings],
+          headingPath: headings.filter(Boolean),
         }),
       );
       index += 1;
@@ -291,7 +329,7 @@ function normalizeMarkdown(content: string): NormalizedBlock[] {
           kind: 'markdown-lines',
           lineStart: blockStart + 1,
           lineEnd: index,
-          headingPath: [...headings],
+          headingPath: headings.filter(Boolean),
         },
       ),
     );
@@ -652,6 +690,13 @@ function visitJson(
       pointer,
     }),
   );
+  addScalarTypeEvidence(
+    'json',
+    pointer,
+    value,
+    { kind: 'json-pointer', pointer },
+    blocks,
+  );
 }
 
 function normalizeYaml(content: string): NormalizedBlock[] {
@@ -715,6 +760,36 @@ function visitYaml(
       lineEnd,
     }),
   );
+  addScalarTypeEvidence(
+    'yaml',
+    pointer,
+    value,
+    { kind: 'yaml-lines', lineStart, lineEnd },
+    blocks,
+  );
+}
+
+function addScalarTypeEvidence(
+  format: 'json' | 'yaml',
+  pointer: string,
+  value: unknown,
+  locator: EvidenceLocator,
+  blocks: NormalizedBlock[],
+): void {
+  if (
+    /^\/(?:name|openapi|info\/(?:title|version)|paths\/[^/]+\/(?:get|put|post|delete|options|head|patch|trace)\/operationId|(?:dependencies|devDependencies|optionalDependencies|peerDependencies)\/[^/]+|main|module|types|typings|files\/\d+|exports(?:\/.*)?)$/.test(
+      pointer,
+    )
+  ) {
+    blocks.push(
+      makeBlock(
+        `${format}-type:${pointer}`,
+        'structured-value',
+        value === null ? 'null' : typeof value,
+        locator,
+      ),
+    );
+  }
 }
 
 function lineOffsets(content: string): number[] {

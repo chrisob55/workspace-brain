@@ -1,348 +1,128 @@
-import { posix } from 'node:path';
-
-import ts from 'typescript';
-
+import type { KnowledgeInputEvidence } from '@workspace-brain/domain';
 import {
-  createKnowledgeEntityKey,
-  parseEvidenceId,
-  type KnowledgeEntityCandidate,
-  type KnowledgeInputEvidence,
-  type KnowledgeProvenance,
-  type KnowledgeRelationshipCandidate,
-} from '@workspace-brain/domain';
+  CandidateBuilder,
+  type KnowledgeCandidates,
+  type KnowledgeExtractor,
+} from './extractors/framework.js';
+import {
+  packageExtractor,
+  moduleExtractor,
+  containerExtractor,
+} from './extractors/dependencies.js';
+import { openApiExtractor } from './extractors/openapi.js';
+import { repositoryExtractor } from './extractors/repositories.js';
+import {
+  adrExtractor,
+  markdownReferenceExtractor,
+} from './extractors/documents.js';
 
-const extractorId = 'deterministic-knowledge-extractors';
-const extractorVersion = 1;
-const openApiNamePointer = /^json:\/info\/title$|^yaml:\/info\/title$/;
-const packageNamePointer = 'json:/name';
-const dependencyPointer =
-  /^json:\/(?:dependencies|devDependencies|optionalDependencies|peerDependencies)\/(.+)$/;
-const moduleStatementStart = /^\s*(?:import|export)\b/;
-
-export type KnowledgeCandidates = {
-  readonly entities: readonly KnowledgeEntityCandidate[];
-  readonly relationships: readonly KnowledgeRelationshipCandidate[];
-};
+export type {
+  KnowledgeCandidates,
+  KnowledgeExtractor,
+} from './extractors/framework.js';
+export const knowledgeExtractors: readonly KnowledgeExtractor[] = [
+  packageExtractor,
+  moduleExtractor,
+  containerExtractor,
+  openApiExtractor,
+  repositoryExtractor,
+  adrExtractor,
+  markdownReferenceExtractor,
+];
 
 export function extractKnowledgeCandidates(
   inputs: readonly KnowledgeInputEvidence[],
+  registry: readonly KnowledgeExtractor[] = knowledgeExtractors,
 ): KnowledgeCandidates {
-  const entities = new Map<string, KnowledgeEntityCandidate>();
-  const relationships = new Map<string, KnowledgeRelationshipCandidate>();
+  return extractKnowledgeReport(inputs, registry).candidates;
+}
+
+export function extractKnowledgeReport(
+  inputs: readonly KnowledgeInputEvidence[],
+  registry: readonly KnowledgeExtractor[] = knowledgeExtractors,
+) {
   const document = inputs[0]?.document;
-  if (document === undefined) {
-    return { entities: [], relationships: [] };
-  }
+  const contributions: {
+    extractorId: string;
+    version: number;
+    entities: number;
+    relationships: number;
+  }[] = [];
+  if (document === undefined)
+    return {
+      candidates: { entities: [], relationships: [] },
+      contributions,
+      diagnostics: [],
+    };
   if (
     inputs.some(
-      ({ document: item }) =>
-        item.id !== document.id || item.path !== document.path,
+      (input) =>
+        input.document.id !== document.id ||
+        input.document.path !== document.path ||
+        input.documentVersion.id !== inputs[0]?.documentVersion.id ||
+        input.document.sourceId !== document.sourceId,
+    )
+  )
+    throw new Error(
+      'Knowledge extraction inputs must belong to one document version',
+    );
+  if (
+    new Set(registry.map((extractor) => extractor.id)).size !== registry.length
+  ) {
+    throw new Error('Duplicate knowledge extractor registration');
+  }
+  if (
+    registry.some(
+      (extractor) =>
+        !/^[a-z][a-z0-9-]{0,127}$/.test(extractor.id) ||
+        !Number.isSafeInteger(extractor.version) ||
+        extractor.version < 1 ||
+        !Number.isSafeInteger(extractor.stage ?? 0) ||
+        (extractor.stage ?? 0) < 0,
     )
   ) {
-    throw new Error('Knowledge extraction inputs must belong to one document');
+    throw new Error('Invalid knowledge extractor registration');
   }
-
-  const documentName = document.filename.toLocaleLowerCase('en-US');
-  const documentScope = document.path;
-  const evidenceByKey = new Map(
-    inputs.map((input) => [input.evidence.key, input]),
-  );
-
-  if (documentName === 'package.json') {
-    const packageName = evidenceByKey.get(packageNamePointer);
-    if (packageName !== undefined) {
-      addEntity(
-        entities,
-        'package',
-        packageName.evidence.excerpt,
-        documentScope,
-        packageName,
-      );
-    }
-    const ownerKey =
-      packageName === undefined
-        ? undefined
-        : entityKey(
-            'package',
-            document.sourceId,
-            documentScope,
-            packageName.evidence.excerpt,
-          );
-    if (ownerKey !== undefined) {
-      for (const input of inputs) {
-        const dependency = dependencyPointer.exec(input.evidence.key);
-        if (dependency === null) {
-          continue;
-        }
-        const dependencyName = decodePointerSegment(dependency[1] ?? '');
-        if (
-          dependencyName.length === 0 ||
-          dependencyName === packageName?.evidence.excerpt
-        ) {
-          continue;
-        }
-        const targetKey = entityKey(
-          'package',
-          document.sourceId,
-          documentScope,
-          dependencyName,
-        );
-        addEntity(entities, 'package', dependencyName, documentScope, input);
-        addRelationship(
-          relationships,
-          'DEPENDS_ON',
-          ownerKey,
-          targetKey,
-          input,
-        );
-      }
-    }
-  }
-
-  if (documentName === 'dockerfile') {
-    for (const input of inputs) {
-      const match =
-        /^FROM\s+(?:(?:--platform=\S+)\s+)?([^\s]+)(?:\s+AS\s+\S+)?/i.exec(
-          input.evidence.excerpt,
-        );
-      if (
-        match?.[1] !== undefined &&
-        match[1].toLocaleLowerCase('en-US') !== 'scratch'
-      ) {
-        addEntity(entities, 'container', match[1], documentScope, input);
-      }
-    }
-  }
-
+  const context = inputs[0]?.extractionContext;
   if (
-    /(?:^|\/)(?:openapi|swagger)(?:\.[^/]*)?$/i.test(document.path) ||
-    documentName.startsWith('openapi.') ||
-    documentName.startsWith('swagger.')
+    inputs.some(
+      (input) =>
+        input.extractionContext !== undefined &&
+        JSON.stringify(input.extractionContext) !== JSON.stringify(context),
+    )
   ) {
-    const title = inputs.find(({ evidence }) =>
-      openApiNamePointer.test(evidence.key),
-    );
-    const titleInput = title ?? inputs[0];
-    if (titleInput !== undefined) {
-      addEntity(
-        entities,
-        'api',
-        title?.evidence.excerpt ?? document.filename,
-        documentScope,
-        titleInput,
-      );
-    }
+    throw new Error('Conflicting immutable extraction contexts');
   }
-
-  if (documentName.endsWith('.ts')) {
-    const moduleName = relativeDocumentPath(document.path);
-    const moduleScope = moduleIdentityPath(document.path);
-    const moduleInputs = inputs.filter(({ evidence }) =>
-      evidence.key.startsWith('typescript:'),
-    );
-    const firstModuleInput = moduleInputs[0];
-    if (firstModuleInput !== undefined) {
-      const sourceKey = entityKey(
-        'module',
-        document.sourceId,
-        moduleScope,
-        moduleName,
-      );
-      addEntity(entities, 'module', moduleName, moduleScope, firstModuleInput);
-      for (const input of moduleInputs) {
-        for (const specifier of moduleSpecifiers(input.evidence.excerpt)) {
-          const target = resolveModuleName(moduleScope, specifier);
-          if (target === undefined || target.identityScope === moduleScope) {
-            continue;
-          }
-          const targetName = target.identityScope.startsWith('external:')
-            ? target.name
-            : relativeDocumentPath(target.identityScope);
-          const targetKey = entityKey(
-            'module',
-            document.sourceId,
-            target.identityScope,
-            targetName,
-          );
-          addEntity(
-            entities,
-            'module',
-            targetName,
-            target.identityScope,
-            input,
-          );
-          addRelationship(
-            relationships,
-            'DEPENDS_ON',
-            sourceKey,
-            targetKey,
-            input,
-          );
-        }
-      }
-    }
+  const normalizedInputs =
+    context === undefined
+      ? inputs
+      : inputs.map((input) => ({
+          ...input,
+          extractionContext: context,
+        }));
+  const combined = new CandidateBuilder('registry', 1);
+  for (const extractor of [...registry].sort(
+    (a, b) =>
+      (a.stage ?? 0) - (b.stage ?? 0) ||
+      (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+  )) {
+    if (!extractor.supports(normalizedInputs)) continue;
+    const result = extractor.extract(normalizedInputs, combined.result());
+    contributions.push({
+      extractorId: extractor.id,
+      version: extractor.version,
+      entities: result.entities.length,
+      relationships: result.relationships.length,
+    });
+    combined.merge(result);
   }
-
+  const result = combined.result();
   return {
-    entities: [...entities.values()].sort((left, right) =>
-      compareOrdinal(left.key, right.key),
-    ),
-    relationships: [...relationships.values()].sort((left, right) =>
-      compareOrdinal(left.key, right.key),
-    ),
+    candidates: {
+      entities: result.entities,
+      relationships: result.relationships,
+    },
+    contributions,
+    diagnostics: result.diagnostics ?? [],
   };
-}
-
-function addEntity(
-  entities: Map<string, KnowledgeEntityCandidate>,
-  type: KnowledgeEntityCandidate['type'],
-  name: string,
-  identityScope: string,
-  input: KnowledgeInputEvidence,
-): void {
-  const normalizedName = name.trim();
-  if (normalizedName.length === 0) {
-    return;
-  }
-  const key = entityKey(
-    type,
-    input.document.sourceId,
-    identityScope,
-    normalizedName,
-  );
-  const provenance = createProvenance(input);
-  const existing = entities.get(key);
-  entities.set(key, {
-    key,
-    type,
-    identityScope,
-    name: normalizedName,
-    sourceEvidenceIds: union(existing?.sourceEvidenceIds ?? [], [
-      parseEvidenceId(input.evidence.id),
-    ]),
-    provenance: unionProvenance(existing?.provenance ?? [], [provenance]),
-    lifecycleStatus: 'observed',
-  });
-}
-
-function addRelationship(
-  relationships: Map<string, KnowledgeRelationshipCandidate>,
-  type: KnowledgeRelationshipCandidate['type'],
-  sourceEntityKey: string,
-  targetEntityKey: string,
-  input: KnowledgeInputEvidence,
-): void {
-  const key = `${type}:${sourceEntityKey}->${targetEntityKey}`;
-  const provenance = createProvenance(input);
-  const existing = relationships.get(key);
-  relationships.set(key, {
-    key,
-    type,
-    sourceEntityKey,
-    targetEntityKey,
-    sourceEvidenceIds: union(existing?.sourceEvidenceIds ?? [], [
-      parseEvidenceId(input.evidence.id),
-    ]),
-    provenance: unionProvenance(existing?.provenance ?? [], [provenance]),
-    confidence: 1,
-    lifecycleStatus: 'related',
-  });
-}
-
-function createProvenance(input: KnowledgeInputEvidence): KnowledgeProvenance {
-  return {
-    evidenceId: parseEvidenceId(input.evidence.id),
-    documentVersionId: input.documentVersion.id,
-    documentId: input.document.id,
-    sourceId: input.document.sourceId,
-    documentPath: input.document.path,
-    contentFingerprint: input.provenance.contentFingerprint,
-    locator: input.evidence.locator,
-    processorId: input.provenance.processorId,
-    processorVersion: input.provenance.processorVersion,
-    extractionRuleId: input.provenance.extractionRuleId,
-    extractionRuleVersion: input.provenance.extractionRuleVersion,
-    knowledgeExtractorId: extractorId,
-    knowledgeExtractorVersion: extractorVersion,
-  };
-}
-
-function entityKey(
-  type: KnowledgeEntityCandidate['type'],
-  sourceId: string,
-  identityScope: string,
-  name: string,
-): string {
-  return createKnowledgeEntityKey(type, sourceId, identityScope, name);
-}
-
-function relativeDocumentPath(path: string): string {
-  const [, ...segments] = path.split('/');
-  const sourceRelativePath = segments.length > 0 ? segments.join('/') : path;
-  return sourceRelativePath.replace(/\.ts$/i, '');
-}
-
-function moduleIdentityPath(path: string): string {
-  return path.replace(/\.(?:tsx?|jsx?)$/i, '');
-}
-
-function resolveModuleName(
-  currentScope: string,
-  specifier: string,
-): { readonly name: string; readonly identityScope: string } | undefined {
-  if (specifier.startsWith('.')) {
-    const resolved = posix
-      .normalize(posix.join(posix.dirname(currentScope), specifier))
-      .replace(/\.(?:tsx?|jsx?)$/i, '');
-    if (resolved.split('/')[0] !== currentScope.split('/')[0]) {
-      return undefined;
-    }
-    return { name: relativeDocumentPath(resolved), identityScope: resolved };
-  }
-  return { name: specifier, identityScope: `external:${specifier}` };
-}
-
-function moduleSpecifiers(excerpt: string): string[] {
-  if (!moduleStatementStart.test(excerpt)) {
-    return [];
-  }
-  const statements = ts.createSourceFile(
-    'evidence.ts',
-    excerpt,
-    ts.ScriptTarget.Latest,
-    false,
-    ts.ScriptKind.TS,
-  ).statements;
-  return statements.flatMap((statement) =>
-    (ts.isImportDeclaration(statement) || ts.isExportDeclaration(statement)) &&
-    statement.moduleSpecifier !== undefined &&
-    ts.isStringLiteral(statement.moduleSpecifier) &&
-    statement.moduleSpecifier.text.length > 0
-      ? [statement.moduleSpecifier.text]
-      : [],
-  );
-}
-
-function decodePointerSegment(value: string): string {
-  return value.replace(/~1/g, '/').replace(/~0/g, '~');
-}
-
-function union<T>(left: readonly T[], right: readonly T[]): T[] {
-  return [...new Set([...left, ...right])];
-}
-
-function unionProvenance(
-  left: readonly KnowledgeProvenance[],
-  right: readonly KnowledgeProvenance[],
-): KnowledgeProvenance[] {
-  const byEvidenceId = new Map(
-    [...left, ...right].map((item) => [item.evidenceId, item]),
-  );
-  return [...byEvidenceId.values()].sort((a, b) =>
-    compareOrdinal(a.evidenceId, b.evidenceId),
-  );
-}
-
-function compareOrdinal(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
 }

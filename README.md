@@ -5,13 +5,18 @@ discover and organise knowledge in local workspaces, repositories, and
 documents, then produce traceable, versioned Knowledge Models for AI OS and
 other consumers. It is not itself an agent or reasoning platform.
 
-The project is being delivered in vertical slices. Slices 0-8 provide
+The project is being delivered in vertical slices. Slices 0-9 provide
 deterministic filesystem discovery, evidence extraction, immutable Knowledge
 Model publications, publication-scoped lexical search, one-hop knowledge
 exploration with evidence-backed provenance, deterministic knowledge
 evolution (diffs between publications), and publication currency (whether
 published knowledge still reflects the catalogue's current document versions),
 plus a deterministic JSON package export for each immutable publication.
+Slice 9 adds independently registered architectural extractors: discovered
+repository containment, OpenAPI 3 operations, explicit ADR metadata/references,
+and resolved Markdown document links. See the
+[Slice 9 report](docs/implementation/slice-9-report.md) and
+[ADR-026](docs/adr/ADR-026-deterministic-architectural-extraction.md).
 Search, exploration, diffs, currency, and export do not mutate knowledge; no
 AI, embeddings, semantic search, or graph store is used.
 See the [architecture document](docs/architecture/Workspace-Brain-ADD-v1.md),
@@ -46,6 +51,12 @@ for the current MVP scope.
 - Stable inventory identities, scan history, and discovery events.
 - Document-version evidence and deterministic, controlled-vocabulary
   Knowledge Model candidates with immutable publication snapshots.
+- Architectural schema 2 publications with `repository`,
+  `architectural-decision`, `document` and `operation` entities alongside the
+  original vocabulary; historical schema 1 publications remain readable.
+- `CONTAINS`, `EXPOSES` and `REFERENCES` extraction from frozen Git boundaries,
+  explicit manifest entries, OpenAPI operations and actual document links.
+  No ownership or relationship is inferred from free prose or folder names.
 - Publication-scoped lexical search and deterministic one-hop relationship
   exploration with source-version provenance.
 - Deterministic publication diffs: added, removed, and modified entities and
@@ -109,6 +120,36 @@ pnpm test:smoke:discovery
 
 The smoke test starts an isolated Compose project, creates a temporary fixture
 under the repository, and removes the project and fixture when it finishes.
+
+### Architectural extraction validation and rollout
+
+After building, validate real sources read-only in a temporary catalogue:
+
+```sh
+node scripts/validate-architecture.mjs /path/to/workspace-brain /path/to/ai-os
+```
+
+The command prints counts, extractor contributions, diagnostics and provenance
+examples, checks deterministic extraction/export/diff/currency, and removes
+only its own temporary catalogue. It does not update the running API.
+
+Existing consumed document versions are not automatically reprocessed by an
+unchanged scan. After deploying the updated API/migrations and worker, and
+completing a fresh scan, explicitly submit reprocessing from a runtime with
+access to both the API and the internal NATS/ingestion services:
+
+```sh
+API_URL=http://workspace-brain-api:3000 NATS_SERVERS=nats://nats:4222 \
+  pnpm reprocess:architecture
+```
+
+Set `SOURCE_ID` to limit reprocessing to one catalogue source. The command
+reuses the worker's bounded, hash-checked content reads and versioned,
+idempotent submissions; it does not fabricate discovery events or modify
+sources. Submission is not publication completion: check API/worker logs and
+pin the resulting publication before querying/exporting it. Reprocessing an
+already accepted processor-3 version reuses its frozen context. Structural-only
+freshness remains outside document-based currency.
 
 ## Repository map
 

@@ -28,6 +28,7 @@ import {
 } from '@workspace-brain/domain-publication';
 import {
   knowledgeRelationshipTypes,
+  knowledgeEntityTypes,
   searchMatchModes,
   type KnowledgeObjectProvenance,
 } from '@workspace-brain/domain';
@@ -64,7 +65,7 @@ const knowledgeEntityQuerySchema = pageQuerySchema
     lifecycleStatus: z
       .enum(['observed', 'verified', 'established', 'rejected', 'superseded'])
       .optional(),
-    type: z.enum(['package', 'container', 'api', 'module']).optional(),
+    type: z.enum(knowledgeEntityTypes).optional(),
   })
   .strict();
 const knowledgeRelationshipQuerySchema = pageQuerySchema
@@ -154,7 +155,7 @@ const searchTextQuerySchema = z.string().trim().min(1).max(256);
 const searchEntityQuerySchema = pageQuerySchema
   .extend({
     publicationId: sourceIdSchema.optional(),
-    type: z.enum(['package', 'container', 'api', 'module']).optional(),
+    type: z.enum(knowledgeEntityTypes).optional(),
     lifecycleStatus: z
       .enum(['observed', 'verified', 'established', 'rejected', 'superseded'])
       .optional(),

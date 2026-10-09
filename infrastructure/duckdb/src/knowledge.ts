@@ -34,6 +34,7 @@ import {
   type KnowledgeEntity,
   type KnowledgeEntityCandidate,
   type KnowledgeInputEvidence,
+  type KnowledgeExtractionContext,
   type KnowledgeModel,
   type KnowledgeProvenance,
   type KnowledgePublication,
@@ -47,8 +48,14 @@ import {
   type StoredKnowledgeProvenance,
 } from '@workspace-brain/domain';
 import { z } from 'zod';
+import {
+  getExtractionContext,
+  repositoryBoundarySchema,
+  extractionDocumentSchema,
+} from './extraction-context.js';
 
-const entityTypes = ['package', 'container', 'api', 'module'] as const;
+import { knowledgeEntityTypes } from '@workspace-brain/domain';
+const entityTypes = knowledgeEntityTypes;
 const entityStatuses = [
   'observed',
   'verified',
@@ -89,8 +96,13 @@ const provenanceSchema = z
     processorVersion: z.number().int().positive(),
     extractionRuleId: z.string().min(1),
     extractionRuleVersion: z.number().int().positive(),
-    knowledgeExtractorId: z.literal('deterministic-knowledge-extractors'),
-    knowledgeExtractorVersion: z.literal(1),
+    knowledgeExtractorId: z.string().regex(/^[a-z][a-z0-9-]{0,127}$/),
+    knowledgeExtractorVersion: z.number().int().positive(),
+    repositoryBoundary: repositoryBoundarySchema.optional(),
+    resolvedDocument: extractionDocumentSchema.optional(),
+    facts: z
+      .record(z.string().min(1).max(128), z.string().max(4096))
+      .optional(),
   })
   .strict();
 const entityCandidateSchema = z
@@ -256,7 +268,13 @@ export async function listKnowledgeInputEvidence(
     "SELECT e.id, e.document_version_id, e.evidence_key, e.evidence_kind, e.excerpt, e.truncated, CAST(e.locator_json AS VARCHAR) AS locator_json, v.id AS version_id, v.document_id, v.content_fingerprint, strftime(v.processed_at, '%Y-%m-%dT%H:%M:%S.%fZ') AS processed_at, v.processor_id, v.processor_version, v.extraction_rule_id, v.extraction_rule_version, v.evidence_count, v.source_id, v.path, v.filename FROM extracted_evidence e JOIN document_versions v ON v.id = e.document_version_id WHERE v.id = $1 ORDER BY e.evidence_key",
     [parsedVersionId],
   );
-  return rows.getRowObjectsJson().map(parseKnowledgeInputEvidence);
+  const context = await getExtractionContext(connection, parsedVersionId);
+  return rows.getRowObjectsJson().map((row, index) => ({
+    ...parseKnowledgeInputEvidence(row),
+    ...(context === undefined || index !== 0
+      ? {}
+      : { extractionContext: context }),
+  }));
 }
 
 export async function listKnowledgeModels(
@@ -794,6 +812,7 @@ async function assertPublicationIntegrity(
     createKnowledgePublicationContentHash(
       entities.map(({ entity }) => entity),
       relationships.map(({ relationship }) => relationship),
+      publication.schemaVersion,
     ) !== publication.contentHash
   ) {
     throw new CatalogueIntegrityError(
@@ -801,14 +820,23 @@ async function assertPublicationIntegrity(
     );
   }
   const provenanceByEvidence = new Map<string, KnowledgeProvenance>();
+  const structuralContexts = new Map<
+    string,
+    KnowledgeExtractionContext | undefined
+  >();
   for (const item of provenance) {
     const previous = provenanceByEvidence.get(item.evidenceId);
-    if (previous !== undefined && stableJson(previous) !== stableJson(item)) {
+    if (
+      previous !== undefined &&
+      stableJson(provenanceLineage(previous)) !==
+        stableJson(provenanceLineage(item))
+    ) {
       throw new CatalogueIntegrityError(
         `Publication ${publication.id} has conflicting provenance for shared evidence`,
       );
     }
     provenanceByEvidence.set(item.evidenceId, item);
+    await validateStructuralProvenance(connection, item, structuralContexts);
   }
   const evidenceIds = [...provenanceByEvidence.keys()].sort(compareOrdinal);
   if (evidenceIds.length === 0) {
@@ -1089,11 +1117,12 @@ function asPublicationIntegrityError(
 export function createKnowledgePublicationContentHash(
   entities: readonly KnowledgeEntity[],
   relationships: readonly KnowledgeRelationship[],
+  schemaVersion: 1 | 2 = 1,
 ): string {
   return createHash('sha256')
     .update(
       stableJson({
-        schemaVersion: 1,
+        schemaVersion,
         entities: [...entities].sort((left, right) =>
           compareOrdinal(left.id, right.id),
         ),
@@ -2088,15 +2117,25 @@ async function publishKnowledgeModel(
     .map(({ relationship }) => relationship.currentVersionId)
     .sort(compareOrdinal);
   const version = (model.latestPublicationVersion ?? 0) + 1;
+  const schemaVersion =
+    model.schemaVersion === 2 ||
+    publishedEntities.some(
+      (entity) =>
+        !['package', 'container', 'api', 'module'].includes(entity.type) ||
+        entity.provenance.some((item) => item.processorVersion >= 3),
+    )
+      ? 2
+      : 1;
   const contentHash = createKnowledgePublicationContentHash(
     publishedEntities,
     publishedRelationships,
+    schemaVersion,
   );
   const publication: KnowledgePublication = {
     id: createKnowledgePublicationId(),
     knowledgeModelId: model.id,
     version,
-    schemaVersion: 1,
+    schemaVersion,
     status: 'published',
     contentHash,
     entityVersionIds,
@@ -2104,7 +2143,7 @@ async function publishKnowledgeModel(
     publishedAt,
   };
   await connection.run(
-    'INSERT INTO knowledge_publications (id, knowledge_model_id, version_number, schema_version, status, content_hash, entity_version_ids_json, relationship_version_ids_json, published_at) VALUES ($1, $2, $3, 1, $4, $5, $6, $7, $8)',
+    'INSERT INTO knowledge_publications (id, knowledge_model_id, version_number, schema_version, status, content_hash, entity_version_ids_json, relationship_version_ids_json, published_at) VALUES ($1, $2, $3, $9, $4, $5, $6, $7, $8)',
     [
       publication.id,
       publication.knowledgeModelId,
@@ -2114,11 +2153,12 @@ async function publishKnowledgeModel(
       JSON.stringify(publication.entityVersionIds),
       JSON.stringify(publication.relationshipVersionIds),
       publication.publishedAt,
+      schemaVersion,
     ],
   );
   await connection.run(
-    'UPDATE knowledge_models SET latest_publication_version = $2 WHERE id = $1',
-    [model.id, version],
+    'UPDATE knowledge_models SET latest_publication_version = $2, schema_version = $3 WHERE id = $1',
+    [model.id, version, schemaVersion],
   );
   await insertKnowledgeOutboxEvent(
     connection,
@@ -2143,11 +2183,32 @@ async function validateCandidateProvenance(
 ): Promise<void> {
   const evidenceIds = sortedUnique(rawEvidenceIds);
   const byEvidenceId = new Map<string, KnowledgeProvenance>();
+  const structuralContexts = new Map<
+    string,
+    KnowledgeExtractionContext | undefined
+  >();
   for (const item of provenance) {
     const evidenceId = parseEvidenceId(item.evidenceId);
     if (item.sourceId !== sourceId) {
       throw new Error('Knowledge provenance source does not match its event');
     }
+    if (
+      item.documentId !== documentId ||
+      item.documentVersionId !== documentVersionId
+    ) {
+      throw new Error(
+        'Knowledge provenance does not match the submitted document version',
+      );
+    }
+    const previous = byEvidenceId.get(evidenceId);
+    if (
+      previous !== undefined &&
+      stableJson(provenanceLineage(previous)) !==
+        stableJson(provenanceLineage(item))
+    ) {
+      throw new Error('Knowledge candidates have conflicting evidence lineage');
+    }
+    await validateStructuralProvenance(connection, item, structuralContexts);
     byEvidenceId.set(evidenceId, item);
   }
   if (evidenceIds.length === 0 && provenance.length === 0) {
@@ -2206,12 +2267,76 @@ async function validateCandidateProvenance(
       extractionRuleVersion: input.provenance.extractionRuleVersion,
       knowledgeExtractorId: item.knowledgeExtractorId,
       knowledgeExtractorVersion: item.knowledgeExtractorVersion,
+      ...(item.repositoryBoundary
+        ? { repositoryBoundary: item.repositoryBoundary }
+        : {}),
+      ...(item.resolvedDocument
+        ? { resolvedDocument: item.resolvedDocument }
+        : {}),
+      ...(item.facts ? { facts: item.facts } : {}),
     };
     if (stableJson(expected) !== stableJson(item)) {
       throw new Error(
         `Knowledge provenance does not match source evidence ${evidenceId}`,
       );
     }
+  }
+}
+
+function provenanceLineage(item: KnowledgeProvenance) {
+  return {
+    evidenceId: item.evidenceId,
+    documentVersionId: item.documentVersionId,
+    documentId: item.documentId,
+    sourceId: item.sourceId,
+    documentPath: item.documentPath,
+    contentFingerprint: item.contentFingerprint,
+    locator: item.locator,
+    processorId: item.processorId,
+    processorVersion: item.processorVersion,
+    extractionRuleId: item.extractionRuleId,
+    extractionRuleVersion: item.extractionRuleVersion,
+  };
+}
+
+async function validateStructuralProvenance(
+  connection: DuckDbConnection,
+  item: KnowledgeProvenance,
+  contexts: Map<string, KnowledgeExtractionContext | undefined>,
+): Promise<void> {
+  if (!item.repositoryBoundary && !item.resolvedDocument) return;
+  if (!contexts.has(item.documentVersionId)) {
+    contexts.set(
+      item.documentVersionId,
+      await getExtractionContext(connection, item.documentVersionId),
+    );
+  }
+  const context = contexts.get(item.documentVersionId);
+  if (context === undefined)
+    throw new CatalogueIntegrityError(
+      'Structural provenance has no immutable extraction context',
+    );
+  if (item.repositoryBoundary) {
+    const nearest = [...context.repositories]
+      .filter((repository) =>
+        item.documentPath.startsWith(repository.path + '/'),
+      )
+      .sort((a, b) => b.path.length - a.path.length)[0];
+    if (stableJson(nearest) !== stableJson(item.repositoryBoundary)) {
+      throw new CatalogueIntegrityError(
+        'Structural provenance does not match the discovered owning Git boundary',
+      );
+    }
+  }
+  if (
+    item.resolvedDocument &&
+    !context.documents.some(
+      (document) => stableJson(document) === stableJson(item.resolvedDocument),
+    )
+  ) {
+    throw new CatalogueIntegrityError(
+      'Resolved reference does not match immutable document inventory',
+    );
   }
 }
 
@@ -2343,14 +2468,14 @@ function parseKnowledgeInputEvidence(row: unknown): KnowledgeInputEvidence {
 
 function parseKnowledgeModelRow(row: unknown): KnowledgeModel {
   const parsed = knowledgeModelRowSchema.parse(row);
-  if (parsed.schema_version !== 1) {
+  if (parsed.schema_version !== 1 && parsed.schema_version !== 2) {
     throw new Error('DuckDB returned an unsupported Knowledge Model schema');
   }
   return {
     id: parseKnowledgeModelId(parsed.id),
     workspaceId: parseWorkspaceId(parsed.workspace_id),
     name: parsed.name,
-    schemaVersion: 1,
+    schemaVersion: parsed.schema_version,
     latestPublicationVersion: parsed.latest_publication_version,
     createdAt: normalizeTimestamp(parsed.created_at),
   };
@@ -2441,14 +2566,30 @@ function parseProvenanceArray(value: string): KnowledgeProvenance[] {
 function parseProvenance(
   provenance: readonly z.infer<typeof provenanceSchema>[],
 ): KnowledgeProvenance[] {
-  return provenance.map((item) => ({
-    ...item,
-    evidenceId: parseEvidenceId(item.evidenceId),
-    documentVersionId: parseDocumentVersionId(item.documentVersionId),
-    documentId: parseDocumentId(item.documentId),
-    sourceId: parseSourceId(item.sourceId),
-    locator: item.locator as EvidenceLocator,
-  }));
+  return provenance.map(
+    ({ repositoryBoundary, resolvedDocument, facts, ...item }) => ({
+      ...item,
+      evidenceId: parseEvidenceId(item.evidenceId),
+      documentVersionId: parseDocumentVersionId(item.documentVersionId),
+      documentId: parseDocumentId(item.documentId),
+      sourceId: parseSourceId(item.sourceId),
+      locator: item.locator as EvidenceLocator,
+      ...(repositoryBoundary === undefined
+        ? {}
+        : {
+            repositoryBoundary: {
+              id: repositoryBoundary.id,
+              path: repositoryBoundary.path,
+              fingerprint: repositoryBoundary.fingerprint,
+              ...(repositoryBoundary.name === undefined
+                ? {}
+                : { name: repositoryBoundary.name }),
+            },
+          }),
+      ...(resolvedDocument === undefined ? {} : { resolvedDocument }),
+      ...(facts === undefined ? {} : { facts }),
+    }),
+  );
 }
 
 function parseJsonStringArray(value: string, label: string): string[] {
@@ -2461,14 +2602,14 @@ function parseJsonStringArray(value: string, label: string): string[] {
 
 function parseKnowledgePublicationRow(row: unknown): KnowledgePublication {
   const parsed = knowledgePublicationRowSchema.parse(row);
-  if (parsed.schema_version !== 1) {
+  if (parsed.schema_version !== 1 && parsed.schema_version !== 2) {
     throw new Error('DuckDB returned an unsupported publication schema');
   }
   return {
     id: parseKnowledgePublicationId(parsed.id),
     knowledgeModelId: parseKnowledgeModelId(parsed.knowledge_model_id),
     version: parsed.version_number,
-    schemaVersion: 1,
+    schemaVersion: parsed.schema_version,
     status: 'published',
     contentHash: parsed.content_hash,
     entityVersionIds: parseJsonStringArray(

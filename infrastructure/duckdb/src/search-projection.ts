@@ -8,6 +8,7 @@ import type {
 } from '@workspace-brain/catalogue';
 import {
   knowledgeRelationshipTypes,
+  knowledgeEntityTypes,
   parseEntityVersionId,
   parseEvidenceId,
   parseKnowledgeEntityId,
@@ -38,7 +39,7 @@ import {
   normalizeSearchText,
 } from './search-projection-builder.js';
 
-const entityTypes = ['package', 'container', 'api', 'module'] as const;
+const entityTypes = knowledgeEntityTypes;
 const entityStatuses = [
   'observed',
   'verified',

@@ -521,7 +521,16 @@
             "name": "type",
             "in": "query",
             "schema": {
-              "enum": ["package", "container", "api", "module"]
+              "enum": [
+                "package",
+                "container",
+                "api",
+                "module",
+                "repository",
+                "architectural-decision",
+                "document",
+                "operation"
+              ]
             }
           },
           {
@@ -1281,7 +1290,16 @@
             "name": "type",
             "in": "query",
             "schema": {
-              "enum": ["package", "container", "api", "module"]
+              "enum": [
+                "package",
+                "container",
+                "api",
+                "module",
+                "repository",
+                "architectural-decision",
+                "document",
+                "operation"
+              ]
             }
           },
           {
@@ -2569,7 +2587,7 @@
             "type": "string"
           },
           "schemaVersion": {
-            "const": 1
+            "enum": [1, 2]
           },
           "latestPublicationVersion": {
             "type": ["integer", "null"],
@@ -2642,7 +2660,39 @@
           },
           "knowledgeExtractorVersion": {
             "type": "integer"
+          },
+          "repositoryBoundary": {
+            "$ref": "#/components/schemas/RepositoryBoundaryEvidence"
+          },
+          "resolvedDocument": {
+            "$ref": "#/components/schemas/ExtractionDocument"
+          },
+          "facts": {
+            "type": "object",
+            "additionalProperties": { "type": "string" }
           }
+        }
+      },
+      "RepositoryBoundaryEvidence": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "path", "fingerprint"],
+        "properties": {
+          "id": { "type": "string", "format": "ulid" },
+          "name": { "type": "string" },
+          "path": { "type": "string" },
+          "fingerprint": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+        }
+      },
+      "ExtractionDocument": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "path", "filename", "fingerprint"],
+        "properties": {
+          "id": { "type": "string", "format": "ulid" },
+          "path": { "type": "string" },
+          "filename": { "type": "string" },
+          "fingerprint": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
         }
       },
       "KnowledgeEntity": {
@@ -2669,7 +2719,16 @@
             "format": "ulid"
           },
           "type": {
-            "enum": ["package", "container", "api", "module"]
+            "enum": [
+              "package",
+              "container",
+              "api",
+              "module",
+              "repository",
+              "architectural-decision",
+              "document",
+              "operation"
+            ]
           },
           "name": {
             "type": "string"
@@ -2831,7 +2890,7 @@
             "minimum": 1
           },
           "schemaVersion": {
-            "const": 1
+            "enum": [1, 2]
           },
           "status": {
             "const": "published"
@@ -2924,7 +2983,7 @@
           "publicationId": { "type": "string", "format": "ulid" },
           "knowledgeModelId": { "type": "string", "format": "ulid" },
           "publicationVersion": { "type": "integer", "minimum": 1 },
-          "schemaVersion": { "const": 1 },
+          "schemaVersion": { "enum": [1, 2] },
           "createdAt": { "type": "string", "format": "date-time" },
           "contentHash": {
             "type": "string",
@@ -3171,7 +3230,16 @@
             "format": "ulid"
           },
           "type": {
-            "enum": ["package", "container", "api", "module"]
+            "enum": [
+              "package",
+              "container",
+              "api",
+              "module",
+              "repository",
+              "architectural-decision",
+              "document",
+              "operation"
+            ]
           },
           "name": {
             "type": "string"
@@ -3459,7 +3527,16 @@
           },
           "entityType": {
             "type": "string",
-            "enum": ["package", "container", "api", "module"]
+            "enum": [
+              "package",
+              "container",
+              "api",
+              "module",
+              "repository",
+              "architectural-decision",
+              "document",
+              "operation"
+            ]
           },
           "name": {
             "type": "string"

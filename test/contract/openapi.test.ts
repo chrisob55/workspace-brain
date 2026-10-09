@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { createApiServer } from '../../apps/workspace-brain-api/src/server.js';
+import { knowledgeEntityTypes } from '../../packages/domain/src/index.js';
 import {
   changeTypes,
   entityContentFields,
@@ -54,6 +55,35 @@ type OpenApiDocument = {
 };
 
 describe('OpenAPI contract', () => {
+  it('declares architectural vocabulary and both immutable publication schemas', async () => {
+    const document = JSON.parse(
+      await readFile(openApiPath, 'utf8'),
+    ) as OpenApiDocument;
+    for (const name of ['KnowledgeEntity', 'ProjectedEntity', 'EntityChange']) {
+      expect(
+        document.components.schemas[name]?.properties?.type ??
+          document.components.schemas[name]?.properties?.entityType,
+      ).toMatchObject({ enum: [...knowledgeEntityTypes] });
+    }
+    for (const name of [
+      'KnowledgeModel',
+      'KnowledgePublication',
+      'KnowledgePublicationPackageMetadata',
+    ]) {
+      expect(
+        document.components.schemas[name]?.properties?.schemaVersion,
+      ).toEqual({ enum: [1, 2] });
+    }
+    expect(
+      document.components.schemas.KnowledgeProvenance?.properties,
+    ).toHaveProperty('repositoryBoundary');
+    expect(
+      document.components.schemas.KnowledgeProvenance?.properties,
+    ).toHaveProperty('resolvedDocument');
+    expect(
+      document.components.schemas.KnowledgeProvenance?.properties,
+    ).toHaveProperty('facts');
+  });
   it('declares the Slice 0 health and read-only catalogue routes', async () => {
     const document = JSON.parse(
       await readFile(openApiPath, 'utf8'),
