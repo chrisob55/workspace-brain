@@ -25,9 +25,11 @@ export package. If the API is unreachable it falls back to the bundled
 5. OpenAPI Visualiser — operations exposed by each API contract.
 6. Architecture Decisions — documents referencing ADRs.
 7. Parser Ecosystem — current and planned parser packs feeding one model.
-8. Enterprise Scaling — organisation-specific estates, one common model.
+8. Behavioural Flow Vision — proposed ADR-027 direction; flow modelling is not
+   implemented and is distinguished from current structural knowledge.
 9. Before vs After Slice 9 — dependency analysis to architectural knowledge.
-10. Future Direction — AI consumes published knowledge; it does not create facts.
+10. Enterprise Scaling — organisation-specific estates, one common model.
+11. Future Direction — AI consumes published knowledge; it does not create facts.
 
 Press **P** to present (fullscreen, sidebar hidden); use **←/→** to move
 between screens and **Esc** to exit.

@@ -32,3 +32,5 @@ Accepted Architecture v1 decisions. Supersede ADRs; do not silently rewrite them
 
 - [ADR-025: Workspace and Nested Repository Boundaries](ADR-025-workspace-and-nested-repository-boundaries.md)
   — proposed after AI OS validation; not an accepted runtime contract.
+- [ADR-027: Deterministic Behavioural Flow Modelling](ADR-027-deterministic-behavioural-flow-modelling.md)
+  — proposed future architecture direction; implementation and contract details are deferred.
