@@ -1,6 +1,7 @@
 import {
   BookOpen,
   Building2,
+  CircleHelp,
   Compass,
   GitCompareArrows,
   Landmark,
@@ -15,6 +16,7 @@ import {
 import type { ComponentType } from 'react';
 
 import { AdrScreen } from './screens/adr-screen';
+import { ArchitectureFaqScreen } from './screens/architecture-faq-screen';
 import { BehaviouralFlowVisionScreen } from './screens/behavioural-flow-vision-screen';
 import { BeforeAfterScreen } from './screens/before-after-screen';
 import { EnterpriseScreen } from './screens/enterprise-screen';
@@ -114,5 +116,12 @@ export const SCREENS: ScreenDefinition[] = [
     question: 'Where is it heading?',
     icon: Rocket,
     component: FutureScreen,
+  },
+  {
+    id: 'architecture-faq',
+    title: 'Architecture FAQ',
+    question: 'What should reviewers know?',
+    icon: CircleHelp,
+    component: ArchitectureFaqScreen,
   },
 ];

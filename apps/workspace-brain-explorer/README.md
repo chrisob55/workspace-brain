@@ -30,6 +30,8 @@ export package. If the API is unreachable it falls back to the bundled
 9. Before vs After Slice 9 — dependency analysis to architectural knowledge.
 10. Enterprise Scaling — organisation-specific estates, one common model.
 11. Future Direction — AI consumes published knowledge; it does not create facts.
+12. Architecture FAQ — searchable architecture-review questions and answers,
+    sourced from `docs/architecture/architecture-faq.md`.
 
 Press **P** to present (fullscreen, sidebar hidden); use **←/→** to move
 between screens and **Esc** to exit.

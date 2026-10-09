@@ -8,6 +8,9 @@ implementation history for Workspace Brain.
 - [Architecture Definition Document v1](architecture/Workspace-Brain-ADD-v1.md)
   — product boundaries, domain model, service responsibilities, runtime
   topology, and roadmap.
+- [Workspace Brain Architecture FAQ](architecture/architecture-faq.md)
+  — architecture review questions and answers, including current capability
+  boundaries and future AI governance.
 - [Accepted ADR index](adr/README.md) — decisions that govern implementation.
 - [Implementation reports](implementation/) — delivered slices, validation
   results, and recorded deviations.
