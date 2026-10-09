@@ -84,18 +84,14 @@ function Panel({
   );
 }
 
-function RelationshipNode({
-  name,
-  type,
-}: {
-  name: string;
-  type: string;
-}) {
+function RelationshipNode({ name, type }: { name: string; type: string }) {
   const color = RELATIONSHIP_STYLE.DEPENDS_ON.color;
   return (
     <div
       className="rounded-lg border bg-background px-3 py-2 text-center"
-      style={{ borderColor: `color-mix(in oklch, ${color} 42%, var(--border))` }}
+      style={{
+        borderColor: `color-mix(in oklch, ${color} 42%, var(--border))`,
+      }}
     >
       <div className="text-sm font-medium">{name}</div>
       <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
@@ -153,10 +149,16 @@ function JourneyColumn({
         <span
           className={cn(
             'flex size-8 items-center justify-center rounded-lg',
-            future ? 'bg-primary/15 text-primary' : 'bg-muted text-muted-foreground',
+            future
+              ? 'bg-primary/15 text-primary'
+              : 'bg-muted text-muted-foreground',
           )}
         >
-          {future ? <Workflow className="size-4" /> : <Network className="size-4" />}
+          {future ? (
+            <Workflow className="size-4" />
+          ) : (
+            <Network className="size-4" />
+          )}
         </span>
         <h3 className="font-semibold">{title}</h3>
         {future && (
@@ -171,9 +173,7 @@ function JourneyColumn({
             <div
               className={cn(
                 'flex min-h-9 w-full items-center gap-2 rounded-lg border px-3 py-2 text-sm',
-                future
-                  ? 'border-primary/20 bg-background'
-                  : 'bg-background',
+                future ? 'border-primary/20 bg-background' : 'bg-background',
               )}
             >
               <span className="text-muted-foreground">
@@ -334,7 +334,12 @@ export function BehaviouralFlowVisionScreen() {
         <div className="grid gap-4 lg:grid-cols-2">
           <JourneyColumn
             title="Today"
-            steps={['Repositories', 'Evidence', 'Knowledge Graph', 'Publication']}
+            steps={[
+              'Repositories',
+              'Evidence',
+              'Knowledge Graph',
+              'Publication',
+            ]}
           />
           <JourneyColumn
             title="Future"
@@ -406,8 +411,8 @@ export function BehaviouralFlowVisionScreen() {
           eyebrow="Future ADR-027 classifications"
         >
           <p className="mt-1 text-xs text-muted-foreground">
-            These labels describe how a behavioural claim is supported. They
-            are not numeric scores or probabilities.
+            These labels describe how a behavioural claim is supported. They are
+            not numeric scores or probabilities.
           </p>
           <div className="mt-4 grid gap-2 sm:grid-cols-2">
             {evidenceBases.map((basis) => (
@@ -437,9 +442,7 @@ export function BehaviouralFlowVisionScreen() {
             className="mt-3 rounded-lg border border-primary/20 bg-primary/5 p-3 text-xs leading-relaxed"
             aria-live="polite"
           >
-            <span className="font-semibold text-primary">
-              {selected.name}:
-            </span>{' '}
+            <span className="font-semibold text-primary">{selected.name}:</span>{' '}
             {selected.detail}
           </div>
         </Panel>
