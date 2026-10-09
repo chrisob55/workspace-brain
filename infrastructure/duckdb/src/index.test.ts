@@ -979,6 +979,7 @@ describe('DuckDB catalogue migrations', () => {
       'discovery_history',
       'discovery_outbox',
       'document_current_versions',
+      'document_extraction_contexts',
       'document_processing_runs',
       'document_versions',
       'documents',

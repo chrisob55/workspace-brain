@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { snapshotExtractionContext } from './extraction-context.js';
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -1434,8 +1435,12 @@ async function applyDocumentProcessing(
   const candidateResult = processingCandidateSchema.safeParse(
     event.payload.candidate,
   );
+  if (!candidateResult.success) {
+    throw new Error('Invalid document processing submission', {
+      cause: candidateResult.error,
+    });
+  }
   if (
-    !candidateResult.success ||
     event.eventId.length === 0 ||
     event.eventId.length > 128 ||
     event.correlationId.length === 0 ||
@@ -1577,6 +1582,14 @@ async function applyDocumentProcessing(
             JSON.stringify(item.locator),
             candidate.processedAt,
           ],
+        );
+      }
+      if (candidate.processorVersion >= 3) {
+        await snapshotExtractionContext(
+          connection,
+          versionId,
+          sourceId,
+          candidate.path,
         );
       }
     } else {

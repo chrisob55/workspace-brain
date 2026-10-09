@@ -5,6 +5,7 @@ import {
 } from '@workspace-brain/catalogue';
 import {
   knowledgeRelationshipTypes,
+  knowledgeEntityTypes,
   parseEntityVersionId,
   parseKnowledgeEntityId,
   parseKnowledgeModelId,
@@ -39,7 +40,7 @@ const idSchema = z.string().regex(/^[0-7][0-9A-HJKMNP-TV-Z]{25}$/);
 const hashSchema = z.string().regex(/^[a-f0-9]{64}$/);
 const countSchema = z.coerce.number().int().nonnegative();
 const versionSchema = z.coerce.number().int().positive();
-const entityTypes = ['package', 'container', 'api', 'module'] as const;
+const entityTypes = knowledgeEntityTypes;
 const insertChunkSize = 200;
 
 const diffRowSchema = z.object({

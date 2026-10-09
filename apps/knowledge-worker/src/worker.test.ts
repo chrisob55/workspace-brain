@@ -13,7 +13,7 @@ import type {
 } from '@workspace-brain/nats';
 import { describe, expect, it } from 'vitest';
 
-import { createKnowledgeWorker } from './worker.js';
+import { createKnowledgeWorker, submitDocumentProcessing } from './worker.js';
 
 describe('knowledge worker', () => {
   it('reads source content through bounded requests and submits evidence candidates', async () => {
@@ -113,6 +113,19 @@ describe('knowledge worker', () => {
       },
     });
     expect(JSON.stringify(published[0])).not.toContain(contents.toString());
+    const result = await submitDocumentProcessing(
+      documentEvent.payload.document,
+      bus,
+      { error() {}, info() {} },
+      'explicit-reprocessing',
+    );
+    expect(result).toBe('submitted');
+    expect(published).toHaveLength(2);
+    expect(published[1]?.eventType).toBe('DocumentProcessingSubmitted');
+    expect(published[1]?.idempotencyKey).toBe(published[0]?.idempotencyKey);
+    if (published[1]?.eventType === 'DocumentProcessingSubmitted') {
+      expect(published[1].payload.candidate.processorVersion).toBe(3);
+    }
     await worker.stop();
   });
 

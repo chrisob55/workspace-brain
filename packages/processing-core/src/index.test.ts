@@ -153,14 +153,14 @@ describe('deterministic document processing', () => {
     ]);
   });
 
-  it('versions the TypeScript processor independently of other processors', () => {
+  it('versions processors for immutable architectural extraction context', () => {
     expect(
       documentProcessors.map(({ id, version }) => [id, version]),
-    ).toContainEqual(['typescript', 2]);
+    ).toContainEqual(['typescript', 3]);
     expect(processDocument('entry.ts', 'const a = 1;').processorVersion).toBe(
-      2,
+      3,
     );
-    expect(processDocument('README.md', '# A').processorVersion).toBe(1);
+    expect(processDocument('README.md', '# A').processorVersion).toBe(3);
   });
 
   it('captures complete multi-line TypeScript import and re-export statements', () => {

@@ -164,7 +164,36 @@ export const knowledgeRelationshipTypes = [
 
 export type KnowledgeRelationshipType =
   (typeof knowledgeRelationshipTypes)[number];
-export type KnowledgeEntityType = 'package' | 'container' | 'api' | 'module';
+export const knowledgeEntityTypes = [
+  'package',
+  'container',
+  'api',
+  'module',
+  'repository',
+  'architectural-decision',
+  'document',
+  'operation',
+] as const;
+export type KnowledgeEntityType = (typeof knowledgeEntityTypes)[number];
+
+export type RepositoryBoundaryEvidence = {
+  readonly id: string;
+  readonly path: string;
+  readonly fingerprint: string;
+  readonly name?: string;
+};
+
+export type ExtractionDocument = {
+  readonly id: string;
+  readonly path: string;
+  readonly filename: string;
+  readonly fingerprint: string;
+};
+
+export type KnowledgeExtractionContext = {
+  readonly repositories: readonly RepositoryBoundaryEvidence[];
+  readonly documents: readonly ExtractionDocument[];
+};
 
 export function createKnowledgeEntityKey(
   type: KnowledgeEntityType,
@@ -201,6 +230,9 @@ export type KnowledgeProvenance = {
   readonly extractionRuleVersion: number;
   readonly knowledgeExtractorId: string;
   readonly knowledgeExtractorVersion: number;
+  readonly repositoryBoundary?: RepositoryBoundaryEvidence;
+  readonly resolvedDocument?: ExtractionDocument;
+  readonly facts?: Readonly<Record<string, string>>;
 };
 
 export type KnowledgeInputEvidence = {
@@ -214,6 +246,7 @@ export type KnowledgeInputEvidence = {
     EvidenceExplanation['provenance'],
     'sourceId' | 'provider'
   >;
+  readonly extractionContext?: KnowledgeExtractionContext;
 };
 
 export type KnowledgeEntityCandidate = {
@@ -285,7 +318,7 @@ export type KnowledgeModel = {
   readonly id: KnowledgeModelId;
   readonly workspaceId: WorkspaceId;
   readonly name: string;
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 1 | 2;
   readonly latestPublicationVersion: number | null;
   readonly createdAt: string;
 };
@@ -294,7 +327,7 @@ export type KnowledgePublication = {
   readonly id: KnowledgePublicationId;
   readonly knowledgeModelId: KnowledgeModelId;
   readonly version: number;
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 1 | 2;
   readonly status: 'published';
   readonly contentHash: string;
   readonly entityVersionIds: readonly EntityVersionId[];
