@@ -9,11 +9,13 @@ import {
   Rocket,
   ScanSearch,
   Sparkles,
+  Workflow,
   type LucideIcon,
 } from 'lucide-react';
 import type { ComponentType } from 'react';
 
 import { AdrScreen } from './screens/adr-screen';
+import { BehaviouralFlowVisionScreen } from './screens/behavioural-flow-vision-screen';
 import { BeforeAfterScreen } from './screens/before-after-screen';
 import { EnterpriseScreen } from './screens/enterprise-screen';
 import { ExplainWhyScreen } from './screens/explain-why-screen';
@@ -86,11 +88,11 @@ export const SCREENS: ScreenDefinition[] = [
     component: ParserEcosystemScreen,
   },
   {
-    id: 'enterprise',
-    title: 'Enterprise Scaling',
-    question: 'Does it scale beyond one repository?',
-    icon: Building2,
-    component: EnterpriseScreen,
+    id: 'behavioural-flow-vision',
+    title: 'Behavioural Flow Vision',
+    question: 'What happens when an operation executes?',
+    icon: Workflow,
+    component: BehaviouralFlowVisionScreen,
   },
   {
     id: 'evolution',
@@ -98,6 +100,13 @@ export const SCREENS: ScreenDefinition[] = [
     question: 'How does it evolve?',
     icon: GitCompareArrows,
     component: BeforeAfterScreen,
+  },
+  {
+    id: 'enterprise',
+    title: 'Enterprise Scaling',
+    question: 'Does it scale beyond one repository?',
+    icon: Building2,
+    component: EnterpriseScreen,
   },
   {
     id: 'future',
