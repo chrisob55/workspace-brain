@@ -23,7 +23,13 @@ export package. If the API is unreachable it falls back to the bundled
 3. Knowledge Graph — search and expand entities with React Flow.
 4. Explain Why — trace a fact to its file, lines, extractor and publication.
 5. OpenAPI Visualiser — operations exposed by each API contract.
-6. Architecture Decisions — documents referencing ADRs.
+6. Architecture Decisions — search ADRs by number, descriptive title or source
+   path across repositories, with an explicitly labelled repository filter.
+   Selecting a record shows its references and source evidence beside the list
+   on desktop, or scrolls the details into view on smaller screens. Titles use
+   recorded source headings or readable ADR filenames where available; missing
+   titles are identified rather than invented. An optional graph shows documents
+   linking to the selected ADR, not inferred dependencies between decisions.
 7. Parser Ecosystem — current and planned parser packs feeding one model.
 8. Behavioural Flow Vision — proposed ADR-027 direction; flow modelling is not
    implemented and is distinguished from current structural knowledge.
@@ -31,7 +37,10 @@ export package. If the API is unreachable it falls back to the bundled
 10. Enterprise Scaling — organisation-specific estates, one common model.
 11. Future Direction — AI consumes published knowledge; it does not create facts.
 12. Architecture FAQ — searchable architecture-review questions and answers,
-    sourced from `docs/architecture/architecture-faq.md`.
+    sourced from `docs/architecture/architecture-faq.md`. A compact executive
+    summary keeps the full source summary expandable. Filter questions by topic
+    or search both questions and answers; select a question to read its answer
+    beside the list on desktop or bring it into view on mobile.
 
 Press **P** to present (fullscreen, sidebar hidden); use **←/→** to move
 between screens and **Esc** to exit.
