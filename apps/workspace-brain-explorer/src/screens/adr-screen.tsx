@@ -7,33 +7,35 @@ import {
   type Edge,
 } from '@xyflow/react';
 import { Info } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 
 import { useKnowledgeState } from '@/app-context';
-import { EntityChip, RelationshipPill } from '@/components/chips';
+import { EntityChip } from '@/components/chips';
 import { EvidencePanel } from '@/components/evidence-panel';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import {
   layoutGraph,
   nodeTypes,
   relationshipEdge,
   type EntityFlowNode,
 } from '@/components/flow';
-import { KeyMessage, ScreenHeader, SectionTitle } from '@/components/story';
-import { displayPath, repositoryOfEntity } from '@/lib/knowledge-graph';
+import { ScreenHeader } from '@/components/story';
+import {
+  collectDecisions,
+  filterDecisions,
+  type Decision,
+} from '@/lib/decisions';
+import { displayPath } from '@/lib/knowledge-graph';
 import type { KnowledgeEntity, KnowledgeRelationship } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
-interface Decision {
-  entity: KnowledgeEntity;
-  repository: string;
-  referencedBy: KnowledgeRelationship[];
-}
-
-function documentLabel(entity: KnowledgeEntity): string {
-  const path = entity.provenance[0]
-    ? displayPath(entity.provenance[0].documentPath)
-    : entity.name;
-  return path.split('/').slice(1).join('/') || entity.name;
+function documentLabel(
+  entity: KnowledgeEntity,
+  reference?: KnowledgeRelationship,
+): string {
+  const item = reference?.provenance[0] ?? entity.provenance[0];
+  return item ? displayPath(item.documentPath) : entity.name;
 }
 
 function AdrGraph({
@@ -46,6 +48,7 @@ function AdrGraph({
   onSelect: (id: string | undefined) => void;
 }) {
   const { graph } = useKnowledgeState();
+  const [open, setOpen] = useState(false);
   const { nodes, edges } = useMemo(() => {
     const rels = decisions.flatMap((d) => d.referencedBy);
     const ids = new Set<string>();
@@ -78,7 +81,12 @@ function AdrGraph({
           data: {
             entity,
             label:
-              entity.type === 'document' ? documentLabel(entity) : entity.name,
+              entity.type === 'document'
+                ? documentLabel(
+                    entity,
+                    rels.find((rel) => rel.sourceEntityId === id),
+                  )
+                : entity.name,
             focus: id === selectedId,
             dimmed: selectedId !== undefined && !focus.has(id),
           },
@@ -101,157 +109,229 @@ function AdrGraph({
   }, [decisions, graph, selectedId]);
 
   return (
-    <ReactFlow
-      nodes={nodes}
-      edges={edges}
-      nodeTypes={nodeTypes}
-      onNodeClick={(_, node) => onSelect(node.id)}
-      onPaneClick={() => onSelect(undefined)}
-      fitView
-      fitViewOptions={{ padding: 0.1 }}
-      minZoom={0.1}
-      proOptions={{ hideAttribution: true }}
+    <details
+      className="rounded-lg border"
+      onToggle={(event) => setOpen(event.currentTarget.open)}
     >
-      <Background
-        variant={BackgroundVariant.Dots}
-        gap={22}
-        size={1.2}
-        color="var(--canvas-dot)"
-      />
-      <Controls showInteractive={false} />
-    </ReactFlow>
+      <summary className="cursor-pointer px-3 py-2 text-sm font-medium">
+        Explore reference graph
+      </summary>
+      <p className="px-3 pb-2 text-xs text-muted-foreground">
+        Arrows point from a document to this ADR. Select a document to inspect
+        its evidence.
+      </p>
+      <div className="h-[320px] overflow-hidden rounded-b-lg bg-card/40">
+        {open && (
+          <ReactFlowProvider>
+            <ReactFlow
+              nodes={nodes}
+              edges={edges}
+              nodeTypes={nodeTypes}
+              onNodeClick={(_, node) => onSelect(node.id)}
+              onPaneClick={() => onSelect(undefined)}
+              fitView
+              fitViewOptions={{ padding: 0.1 }}
+              minZoom={0.1}
+              proOptions={{ hideAttribution: true }}
+            >
+              <Background
+                variant={BackgroundVariant.Dots}
+                gap={22}
+                size={1.2}
+                color="var(--canvas-dot)"
+              />
+              <Controls showInteractive={false} />
+            </ReactFlow>
+          </ReactFlowProvider>
+        )}
+      </div>
+    </details>
   );
 }
 
 export function AdrScreen() {
   const { graph } = useKnowledgeState();
-  const decisions = useMemo<Decision[]>(() => {
-    return graph.entities
-      .filter((e) => e.type === 'architectural-decision')
-      .map((entity) => ({
-        entity,
-        repository: repositoryOfEntity(entity),
-        referencedBy: graph.relationships.filter(
-          (r) => r.type === 'REFERENCES' && r.targetEntityId === entity.id,
-        ),
-      }))
-      .sort((a, b) =>
-        a.entity.name.localeCompare(b.entity.name, 'en', { numeric: true }),
-      );
-  }, [graph]);
+  const decisions = useMemo(() => collectDecisions(graph), [graph]);
   const repositories = useMemo(
     () => [...new Set(decisions.map((d) => d.repository))].sort(),
     [decisions],
   );
-  const [repository, setRepository] = useState(() =>
-    repositories.includes('workspace-brain')
-      ? 'workspace-brain'
-      : (repositories[0] ?? ''),
+  const [repository, setRepository] = useState('');
+  const [query, setQuery] = useState('');
+  const scoped = filterDecisions(decisions, repository, query);
+  const [selectedId, setSelectedId] = useState<string>();
+  const selected = scoped.find((d) => d.entity.id === selectedId) ?? scoped[0];
+  const [documentId, setDocumentId] = useState<string>();
+  const selectedReference = selected?.referencedBy.find(
+    (rel) => rel.sourceEntityId === documentId,
   );
-  const scoped = decisions.filter((d) => d.repository === repository);
-  const [selectedId, setSelectedId] = useState<string | undefined>(
-    () =>
-      decisions.find(
-        (d) =>
-          d.entity.name === 'ADR-026' && d.repository === 'workspace-brain',
-      )?.entity.id,
-  );
-  const selected = decisions.find((d) => d.entity.id === selectedId);
-  const selectedEntity = selectedId
-    ? graph.entityById.get(selectedId)
+  const selectedDocument = selectedReference
+    ? graph.entityById.get(selectedReference.sourceEntityId)
     : undefined;
-  const maxRefs = Math.max(1, ...scoped.map((d) => d.referencedBy.length));
+  const selectedEntity = selectedDocument ?? selected?.entity;
+  const detailsHeading = useRef<HTMLHeadingElement>(null);
+
+  function revealDetails() {
+    requestAnimationFrame(() => {
+      detailsHeading.current?.scrollIntoView({
+        block: window.matchMedia('(min-width: 1024px)').matches
+          ? 'nearest'
+          : 'start',
+      });
+    });
+  }
+
+  function selectDecision(id: string) {
+    setSelectedId(id);
+    setDocumentId(undefined);
+    revealDetails();
+  }
+
+  function selectDocument(id: string) {
+    setDocumentId(id);
+    revealDetails();
+  }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <ScreenHeader
         eyebrow="Architecture Decisions"
-        title="Decisions become first-class knowledge"
-        lead="The architectural-decisions extractor recognises explicit ADR metadata; markdown-references records each actual link to an ADR. Decisions are now entities you can search, trace and explore."
-      >
-        <div className="flex gap-1 rounded-lg border bg-card p-1">
-          {repositories.map((repo) => (
-            <button
-              key={repo}
-              type="button"
-              onClick={() => {
-                setRepository(repo);
-                setSelectedId(undefined);
-              }}
-              className={cn(
-                'rounded-md px-3 py-1 text-sm',
-                repo === repository
-                  ? 'bg-primary text-primary-foreground'
-                  : 'text-muted-foreground hover:text-foreground',
-              )}
-            >
-              {repo}{' '}
-              <span className="text-xs opacity-75">
-                {decisions.filter((d) => d.repository === repo).length}
-              </span>
-            </button>
-          ))}
-        </div>
-      </ScreenHeader>
+        title="Browse architecture decisions"
+        lead="Architecture Decision Records (ADRs) capture architectural choices. Select a record to see the documents that link to it and the source evidence behind it."
+      />
 
-      <section>
-        <SectionTitle
-          aside={
-            <span className="text-xs text-muted-foreground">
-              Shade = how often each decision is referenced
-            </span>
-          }
+      <div className="grid items-start gap-4 lg:grid-cols-[20rem_minmax(0,1fr)]">
+        <section
+          aria-label="Decision browser"
+          className="min-w-0 rounded-2xl border bg-card"
         >
-          Decision record
-        </SectionTitle>
-        <div className="grid grid-cols-4 gap-2 sm:grid-cols-7 lg:grid-cols-[repeat(13,minmax(0,1fr))]">
-          {scoped.map((d, i) => {
-            const active = d.entity.id === selectedId;
-            const intensity = d.referencedBy.length / maxRefs;
-            return (
-              <button
-                key={d.entity.id}
-                type="button"
-                onClick={() => setSelectedId(d.entity.id)}
-                style={{
-                  animationDelay: `${i * 20}ms`,
-                  background: `color-mix(in oklch, #f472b6 ${Math.round(8 + intensity * 40)}%, var(--card))`,
-                  boxShadow: active ? '0 0 0 2px #f472b6' : undefined,
+          <div className="space-y-3 border-b p-4">
+            <label className="block space-y-1 text-sm">
+              <span className="font-medium">Search decisions</span>
+              <Input
+                value={query}
+                onChange={(event) => {
+                  setQuery(event.target.value);
+                  setDocumentId(undefined);
                 }}
-                className="animate-fade-up rounded-lg border px-1 py-2 text-center transition-transform hover:-translate-y-0.5"
+                placeholder="ADR number, title or source path"
+              />
+            </label>
+            <label className="block space-y-1 text-sm">
+              <span className="font-medium">Repository</span>
+              <select
+                value={repository}
+                onChange={(event) => {
+                  setRepository(event.target.value);
+                  setDocumentId(undefined);
+                }}
+                className="h-9 w-full rounded-md border border-input bg-card px-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
-                <div className="font-mono text-xs font-semibold">
-                  {d.entity.name.replace('ADR-', '')}
-                </div>
-                <div className="text-[10px] text-muted-foreground">
-                  {d.referencedBy.length} refs
-                </div>
-              </button>
-            );
-          })}
-        </div>
-      </section>
-
-      <div className="grid gap-4 xl:grid-cols-[1fr_24rem]">
-        <div className="h-[560px] overflow-hidden rounded-2xl border bg-card/40">
-          <ReactFlowProvider key={repository}>
-            <AdrGraph
-              decisions={scoped}
-              selectedId={selectedId}
-              onSelect={setSelectedId}
-            />
-          </ReactFlowProvider>
-        </div>
-        <aside className="rounded-2xl border bg-card p-4 xl:max-h-[560px] xl:overflow-y-auto">
+                <option value="">All repositories</option>
+                {repositories.map((repo) => (
+                  <option key={repo} value={repo}>
+                    {repo}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <p className="text-xs text-muted-foreground" role="status">
+              {scoped.length} of {decisions.length} decisions
+            </p>
+          </div>
+          <div className="max-h-72 overflow-y-auto p-2 lg:max-h-[28rem]">
+            {scoped.length ? (
+              <ul className="space-y-1">
+                {scoped.map((decision) => (
+                  <li key={decision.entity.id}>
+                    <button
+                      type="button"
+                      aria-pressed={decision.entity.id === selected?.entity.id}
+                      aria-controls="adr-details"
+                      onClick={() => selectDecision(decision.entity.id)}
+                      className={cn(
+                        'w-full rounded-lg border p-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                        decision.entity.id === selected?.entity.id
+                          ? 'border-primary bg-primary/10'
+                          : 'border-transparent hover:bg-accent',
+                      )}
+                    >
+                      <span className="flex flex-wrap justify-between gap-1 text-xs">
+                        <span className="font-mono font-semibold">
+                          {decision.entity.name}
+                        </span>
+                        <span className="text-muted-foreground">
+                          {decision.repository}
+                        </span>
+                      </span>
+                      <span className="mt-1 block text-sm font-medium">
+                        {decision.title ??
+                          'Title not available in this publication'}
+                      </span>
+                      <span className="mt-1 block text-xs text-muted-foreground">
+                        {decision.referencedBy.length} explicit{' '}
+                        {decision.referencedBy.length === 1
+                          ? 'reference'
+                          : 'references'}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="p-3 text-sm text-muted-foreground">
+                {decisions.length
+                  ? 'No decisions match these filters. Try another search or repository.'
+                  : 'No architecture decisions in this publication.'}
+              </p>
+            )}
+          </div>
+        </section>
+        <section
+          id="adr-details"
+          aria-labelledby="adr-details-heading"
+          className="min-w-0 rounded-2xl border bg-card p-4 lg:max-h-[calc(100dvh-18rem)] lg:overflow-y-auto"
+        >
+          <h2
+            id="adr-details-heading"
+            ref={detailsHeading}
+            className="mb-3 scroll-mt-4 text-sm font-semibold uppercase tracking-wider text-muted-foreground"
+          >
+            {selectedDocument ? 'Referencing document' : 'Decision details'}
+          </h2>
           {selectedEntity ? (
             <div key={selectedEntity.id} className="animate-fade-up space-y-4">
+              {selectedDocument && selected && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => selectDecision(selected.entity.id)}
+                >
+                  Back to {selected.entity.name}
+                </Button>
+              )}
               <EntityChip entity={selectedEntity} size="lg" />
-              {selected ? (
+              {selected && !selectedDocument ? (
                 <>
                   <div>
-                    <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                      Referenced by {selected.referencedBy.length} documents
+                    <h3 className="text-xl font-semibold">
+                      {selected.title ??
+                        'Title not available in this publication'}
                     </h3>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      Repository: {selected.repository}
+                    </p>
+                  </div>
+                  <div>
+                    <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                      Documents linking to this decision
+                    </h3>
+                    {!selected.referencedBy.length && (
+                      <p className="text-sm text-muted-foreground">
+                        No explicit document links in this publication. This
+                        does not mean the decision is unused.
+                      </p>
+                    )}
                     <ul className="space-y-1">
                       {selected.referencedBy.map((rel) => {
                         const doc = graph.entityById.get(rel.sourceEntityId);
@@ -260,16 +340,12 @@ export function AdrScreen() {
                             key={rel.id}
                             className="flex items-center gap-2 text-xs"
                           >
-                            <RelationshipPill
-                              type="REFERENCES"
-                              className="!px-1.5"
-                            />
                             <button
                               type="button"
-                              className="truncate font-mono hover:underline"
-                              onClick={() => setSelectedId(doc.id)}
+                              className="break-all text-left font-mono text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                              onClick={() => selectDocument(doc.id)}
                             >
-                              {documentLabel(doc)}
+                              {documentLabel(doc, rel)}
                             </button>
                           </li>
                         ) : null;
@@ -278,24 +354,38 @@ export function AdrScreen() {
                   </div>
                   <div>
                     <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                      Why this decision is known
+                      Source evidence
                     </h3>
                     <EvidencePanel
                       provenance={selectedEntity.provenance}
                       compact
                     />
                   </div>
+                  <AdrGraph
+                    decisions={[selected]}
+                    selectedId={selected.entity.id}
+                    onSelect={(id) => {
+                      if (id && id !== selected.entity.id) selectDocument(id);
+                    }}
+                  />
                 </>
               ) : (
-                <EvidencePanel provenance={selectedEntity.provenance} compact />
+                <EvidencePanel
+                  provenance={
+                    selectedReference?.provenance ?? selectedEntity.provenance
+                  }
+                  compact
+                />
               )}
             </div>
           ) : (
             <p className="text-sm text-muted-foreground">
-              Select a decision or document to see its references and evidence.
+              {decisions.length
+                ? 'Choose a matching decision to see its references and evidence.'
+                : 'Decision details will appear here when ADRs are published.'}
             </p>
           )}
-        </aside>
+        </section>
       </div>
 
       <div className="flex items-start gap-2 rounded-lg border bg-card px-4 py-3 text-xs text-muted-foreground">
@@ -307,10 +397,6 @@ export function AdrScreen() {
           not infer relationships from free text.
         </p>
       </div>
-
-      <KeyMessage>
-        Architectural decisions become first-class Knowledge Model entities.
-      </KeyMessage>
     </div>
   );
 }
