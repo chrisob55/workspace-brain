@@ -17,6 +17,9 @@ describe('deterministic document processing', () => {
       ['json', ['.json']],
       ['plain-text', ['.txt']],
       ['typescript', ['.ts']],
+      ['scala-source', ['.scala']],
+      ['play-routes', ['.routes']],
+      ['hocon', ['.conf']],
       ['dockerfile', ['.dockerfile']],
     ]);
     expect(
@@ -157,6 +160,13 @@ describe('deterministic document processing', () => {
     expect(
       documentProcessors.map(({ id, version }) => [id, version]),
     ).toContainEqual(['typescript', 3]);
+    expect(documentProcessors.map(({ id, version }) => [id, version])).toEqual(
+      expect.arrayContaining([
+        ['scala-source', 1],
+        ['play-routes', 1],
+        ['hocon', 1],
+      ]),
+    );
     expect(processDocument('entry.ts', 'const a = 1;').processorVersion).toBe(
       3,
     );
@@ -324,6 +334,316 @@ describe('deterministic document processing', () => {
       ["export type * as Types /* … */ from './types.js';", true],
       ["export type * /* … */ from './more.js';", true],
     ]);
+  });
+
+  it('preserves Play route set, declared handler, comments, and mounts as separate facts', () => {
+    const evidence = processDocument(
+      'app.routes',
+      [
+        '# GET /ignored controllers.IgnoredController.index',
+        'GET     /items/:id    controllers.ItemsController.get(id: Id)',
+        '->      /prefix       app.routes',
+      ].join('\n'),
+      'conf/app.routes',
+    ).evidence;
+
+    expect(evidence.map(({ excerpt, locator }) => [excerpt, locator])).toEqual([
+      [
+        'GET     /items/:id    controllers.ItemsController.get(id: Id)',
+        {
+          kind: 'play-route',
+          routeSet: 'app',
+          method: 'GET',
+          declaredPath: '/items/:id',
+          handlerExpression: 'controllers.ItemsController.get(id: Id)',
+          lineStart: 2,
+          lineEnd: 2,
+        },
+      ],
+      [
+        '->      /prefix       app.routes',
+        {
+          kind: 'play-route',
+          routeSet: 'app',
+          mountPrefix: '/prefix',
+          includeTarget: 'app.routes',
+          lineStart: 3,
+          lineEnd: 3,
+        },
+      ],
+    ]);
+  });
+
+  it('classifies route sets without promoting unknown or test routes', () => {
+    const routes = processDocument(
+      'testOnly.routes',
+      'GET /health controllers.HealthController.check\n',
+      'conf/testOnly.routes',
+    );
+    expect(routes.evidence[0]?.locator).toMatchObject({
+      kind: 'play-route',
+      routeSet: 'test-only',
+    });
+
+    const unknown = processDocument(
+      'custom.routes',
+      'GET /health controllers.HealthController.check\n',
+      'conf/custom.routes',
+    );
+    expect(unknown.evidence[0]?.locator).toMatchObject({
+      kind: 'play-route',
+      routeSet: 'other',
+    });
+  });
+
+  it('extracts nested HOCON literals and substitutions without exposing secret values', () => {
+    const evidence = processDocument(
+      'application.conf',
+      [
+        'microservice {',
+        '  services {',
+        '    agent {',
+        '      host = ${AGENT_HOST}',
+        '      port = 1234',
+        '      password = "must-not-escape"',
+        '    }',
+        '  }',
+        '}',
+      ].join('\n'),
+      'conf/application.conf',
+    ).evidence;
+
+    expect(evidence.map(({ excerpt, locator }) => [excerpt, locator])).toEqual([
+      [
+        'microservice.services.agent.host = ${AGENT_HOST}',
+        {
+          kind: 'hocon-key',
+          key: 'microservice.services.agent.host',
+          valueKind: 'substitution',
+          substitutions: ['AGENT_HOST'],
+          lineStart: 4,
+          lineEnd: 4,
+        },
+      ],
+      [
+        'microservice.services.agent.port = 1234',
+        {
+          kind: 'hocon-key',
+          key: 'microservice.services.agent.port',
+          valueKind: 'number',
+          literalValue: '1234',
+          lineStart: 5,
+          lineEnd: 5,
+        },
+      ],
+      [
+        'microservice.services.agent.password = <redacted>',
+        {
+          kind: 'hocon-key',
+          key: 'microservice.services.agent.password',
+          valueKind: 'redacted',
+          lineStart: 6,
+          lineEnd: 6,
+        },
+      ],
+    ]);
+  });
+
+  it('retains unsupported HOCON values without resolving or exposing URI credentials', () => {
+    const evidence = processDocument(
+      'application.conf',
+      [
+        'items = [one, two]',
+        'joined = "first" "second"',
+        'mongodb.uri = "mongodb://user:password@db.example/items"',
+      ].join('\n'),
+    ).evidence;
+
+    expect(evidence.map(({ excerpt, locator }) => [excerpt, locator])).toEqual([
+      [
+        'items = <unsupported>',
+        {
+          kind: 'hocon-key',
+          key: 'items',
+          valueKind: 'unsupported',
+          lineStart: 1,
+          lineEnd: 1,
+        },
+      ],
+      [
+        'joined = <unsupported>',
+        {
+          kind: 'hocon-key',
+          key: 'joined',
+          valueKind: 'unsupported',
+          lineStart: 2,
+          lineEnd: 2,
+        },
+      ],
+      [
+        'mongodb.uri = <redacted>',
+        {
+          kind: 'hocon-key',
+          key: 'mongodb.uri',
+          valueKind: 'redacted',
+          lineStart: 3,
+          lineEnd: 3,
+        },
+      ],
+    ]);
+  });
+
+  it('extracts Scala declarations and direct calls, excluding comments and strings', () => {
+    const evidence = processDocument(
+      'ExampleController.scala',
+      [
+        'package uk.gov.hmrc.example',
+        'class ExampleController(service: ExampleService) {',
+        '  def get(id: String) = {',
+        '    // service.ignored(id)',
+        '    val message = "service.ignored(id)"',
+        '    if (valid(id)) service.find(id).map(value => service.normalize(value)) else fallback()',
+        '  }',
+        '}',
+      ].join('\n'),
+      'app/uk/gov/hmrc/example/ExampleController.scala',
+    ).evidence;
+
+    const locators = evidence.map(({ locator }) => locator);
+    expect(locators).toEqual(
+      expect.arrayContaining([
+        {
+          kind: 'scala-symbol',
+          packageName: 'uk.gov.hmrc.example',
+          symbolKind: 'class',
+          symbolName: 'uk.gov.hmrc.example.ExampleController',
+          signature: 'class ExampleController(service: ExampleService) {',
+          lineStart: 2,
+          lineEnd: 2,
+        },
+        {
+          kind: 'scala-symbol',
+          packageName: 'uk.gov.hmrc.example',
+          symbolKind: 'constructor-parameter',
+          symbolName: 'service',
+          enclosingSymbol: 'uk.gov.hmrc.example.ExampleController',
+          signature: 'ExampleService',
+          lineStart: 2,
+          lineEnd: 2,
+        },
+        expect.objectContaining({
+          kind: 'scala-symbol',
+          packageName: 'uk.gov.hmrc.example',
+          symbolKind: 'method',
+          symbolName: 'uk.gov.hmrc.example.ExampleController.get',
+          enclosingSymbol: 'uk.gov.hmrc.example.ExampleController',
+        }),
+        expect.objectContaining({
+          kind: 'scala-call-site',
+          targetText: 'service.find',
+          methodName: 'find',
+          receiver: 'service',
+          branchContext: 'if',
+        }),
+        expect.objectContaining({
+          kind: 'scala-call-site',
+          targetText: 'fallback',
+          methodName: 'fallback',
+          branchContext: 'else',
+        }),
+        expect.objectContaining({
+          kind: 'scala-call-site',
+          targetText: 'service.normalize',
+          methodName: 'normalize',
+          receiver: 'service',
+          asyncGroup: 'map',
+        }),
+      ]),
+    );
+    expect(
+      locators.filter(
+        (locator) =>
+          locator.kind === 'scala-call-site' &&
+          locator.targetText.includes('ignored'),
+      ),
+    ).toEqual([]);
+  });
+
+  it('extracts constructor parameters after Scala injection annotations', () => {
+    const evidence = processDocument(
+      'InjectedController.scala',
+      [
+        'package uk.gov.hmrc.example.controllers',
+        'import javax.inject.Inject',
+        'class InjectedController @Inject() (private val service: ExampleService) {',
+        '  def get() = service.find()',
+        '}',
+      ].join('\n'),
+    ).evidence;
+
+    expect(
+      evidence
+        .map(({ locator }) => locator)
+        .filter(
+          (locator) =>
+            locator.kind === 'scala-symbol' &&
+            locator.symbolKind === 'constructor-parameter',
+        ),
+    ).toEqual([
+      {
+        kind: 'scala-symbol',
+        packageName: 'uk.gov.hmrc.example.controllers',
+        symbolKind: 'constructor-parameter',
+        symbolName: 'service',
+        enclosingSymbol: 'uk.gov.hmrc.example.controllers.InjectedController',
+        signature: 'ExampleService',
+        lineStart: 3,
+        lineEnd: 3,
+      },
+    ]);
+  });
+
+  it('keeps Scala methods separate across nested blocks and default arguments', () => {
+    const evidence = processDocument(
+      'Example.scala',
+      [
+        'class Example {',
+        '  def first(limit: Int = 1) = if (limit > 0) {',
+        '    service.first(limit)',
+        '  } else service.empty()',
+        '  def second() = service.second()',
+        '}',
+      ].join('\n'),
+    ).evidence;
+
+    const calls = evidence.flatMap(({ locator }) =>
+      locator.kind === 'scala-call-site' ? [locator] : [],
+    );
+    expect(
+      calls.map(({ enclosingSymbol, targetText }) => [
+        enclosingSymbol,
+        targetText,
+      ]),
+    ).toEqual([
+      ['Example.first', 'service.first'],
+      ['Example.first', 'service.empty'],
+      ['Example.second', 'service.second'],
+    ]);
+  });
+
+  it('bounds oversized structured evidence and rejects unbalanced Scala comments', () => {
+    expect(() =>
+      processDocument(
+        'routes.routes',
+        Array.from(
+          { length: 300 },
+          (_, index) => `GET /${index} ${'x'.repeat(2048)}`,
+        ).join('\n'),
+      ),
+    ).toThrow('Structured parser evidence exceeds');
+    expect(() =>
+      processDocument('invalid.scala', 'class Example { /* not closed'),
+    ).toThrow('Unterminated Scala block comment');
   });
 
   it('rejects malformed structured documents and unsupported formats', () => {

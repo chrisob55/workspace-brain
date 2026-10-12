@@ -29,6 +29,9 @@ describe('parseWorkspaceBrainConfig', () => {
     expect(config.ai.policy.allow_remote_fallback).toBe(false);
     expect(config.governance.allow_source_mutation).toBe(false);
     expect(config.sources[0]?.roots).toEqual(['/sources/projects']);
+    expect(config.sources[0]?.defaults.include_extensions).toEqual(
+      expect.arrayContaining(['.scala', '.routes', '.conf']),
+    );
   });
 
   it('accepts the checked-in local-first example configuration', async () => {

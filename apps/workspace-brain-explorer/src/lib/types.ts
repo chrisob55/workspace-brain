@@ -19,7 +19,51 @@ export type EvidenceLocator =
       lineEnd: number;
       headingPath?: string[];
     }
-  | { kind: 'json-pointer'; pointer: string };
+  | { kind: 'json-pointer'; pointer: string }
+  | {
+      kind: 'scala-symbol';
+      packageName: string;
+      symbolKind: string;
+      symbolName: string;
+      enclosingSymbol?: string;
+      signature?: string;
+      extendsType?: string;
+      lineStart: number;
+      lineEnd: number;
+    }
+  | {
+      kind: 'scala-call-site';
+      packageName: string;
+      enclosingSymbol: string;
+      targetText: string;
+      methodName: string;
+      receiver?: string;
+      branchContext?: string;
+      asyncGroup?: string;
+      callIndex: number;
+      lineStart: number;
+      lineEnd: number;
+    }
+  | {
+      kind: 'play-route';
+      routeSet: string;
+      method?: string;
+      declaredPath?: string;
+      handlerExpression?: string;
+      mountPrefix?: string;
+      includeTarget?: string;
+      lineStart: number;
+      lineEnd: number;
+    }
+  | {
+      kind: 'hocon-key';
+      key: string;
+      valueKind: string;
+      literalValue?: string;
+      substitutions?: string[];
+      lineStart: number;
+      lineEnd: number;
+    };
 
 export interface ProvenanceItem {
   contentFingerprint: string;

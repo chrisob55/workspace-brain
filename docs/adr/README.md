@@ -34,3 +34,7 @@ Accepted Architecture v1 decisions. Supersede ADRs; do not silently rewrite them
   — proposed after AI OS validation; not an accepted runtime contract.
 - [ADR-027: Deterministic Behavioural Flow Modelling](ADR-027-deterministic-behavioural-flow-modelling.md)
   — proposed future architecture direction; implementation and contract details are deferred.
+- [ADR-028: HMRC Static Parser Candidate Boundary](ADR-028-hmrc-static-parser-candidate-boundary.md)
+  — proposed boundary for parser evidence and non-published static candidates.
+- [ADR-028: HMRC Static Parser Candidate Boundary](ADR-028-hmrc-static-parser-candidate-boundary.md)
+  — proposed boundary for parser evidence and non-published static candidates.

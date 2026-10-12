@@ -158,8 +158,7 @@ export function EvidencePanel({
         </Row>
         <Row icon={FileSearch} label="Source location">
           {describeLocator(item)}
-          {item.locator.kind !== 'json-pointer' &&
-          item.locator.headingPath?.length ? (
+          {'headingPath' in item.locator && item.locator.headingPath?.length ? (
             <span className="text-muted-foreground">
               {' '}
               · {item.locator.headingPath.join(' › ')}

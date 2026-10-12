@@ -15,7 +15,18 @@ const sourceDefaultsSchema = z
       .default(['.git', 'node_modules', 'dist', 'build']),
     include_extensions: z
       .array(z.string().regex(/^\.[a-zA-Z0-9]+$/))
-      .default(['.md', '.txt', '.yaml', '.yml', '.json', '.ts', '.js']),
+      .default([
+        '.md',
+        '.txt',
+        '.yaml',
+        '.yml',
+        '.json',
+        '.ts',
+        '.js',
+        '.scala',
+        '.routes',
+        '.conf',
+      ]),
     max_file_size_mb: z.number().positive().default(50),
     follow_symbolic_links: z.literal(false).default(false),
   })

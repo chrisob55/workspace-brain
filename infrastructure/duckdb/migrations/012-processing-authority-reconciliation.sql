@@ -15,6 +15,9 @@ INSERT INTO accepted_processing_definitions VALUES
   ('suffix', '.json', 'json', 'json-scalar-values'),
   ('suffix', '.txt', 'plain-text', 'text-paragraphs'),
   ('suffix', '.ts', 'typescript', 'typescript-imports'),
+  ('suffix', '.scala', 'scala-source', 'scala-symbols-and-calls'),
+  ('suffix', '.routes', 'play-routes', 'play-route-declarations'),
+  ('suffix', '.conf', 'hocon', 'hocon-key-values'),
   ('exact', 'dockerfile', 'dockerfile', 'dockerfile-base-images'),
   ('suffix', '.dockerfile', 'dockerfile', 'dockerfile-base-images')
 ON CONFLICT DO NOTHING;

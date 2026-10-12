@@ -266,6 +266,74 @@ const evidenceLocatorSchema = z.union([
       pointer: z.string().regex(/^(?:\/(?:[^~]|~[01])*)*$/),
     })
     .strict(),
+  z
+    .object({
+      kind: z.literal('scala-symbol'),
+      packageName: z.string().max(512),
+      symbolKind: z.enum([
+        'package',
+        'import',
+        'class',
+        'object',
+        'trait',
+        'method',
+        'constructor-parameter',
+      ]),
+      symbolName: z.string().max(1024),
+      enclosingSymbol: z.string().max(1024).optional(),
+      signature: z.string().max(2000).optional(),
+      extendsType: z.string().max(1024).optional(),
+      lineStart: z.number().int().positive(),
+      lineEnd: z.number().int().positive(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('scala-call-site'),
+      packageName: z.string().max(512),
+      enclosingSymbol: z.string().max(1024),
+      targetText: z.string().max(1024),
+      methodName: z.string().max(256),
+      receiver: z.string().max(512).optional(),
+      branchContext: z.string().max(64).optional(),
+      asyncGroup: z.string().max(64).optional(),
+      callIndex: z.number().int().positive(),
+      lineStart: z.number().int().positive(),
+      lineEnd: z.number().int().positive(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('play-route'),
+      routeSet: z.string().max(64),
+      method: z.string().max(16).optional(),
+      declaredPath: z.string().max(4096).optional(),
+      handlerExpression: z.string().max(2048).optional(),
+      mountPrefix: z.string().max(4096).optional(),
+      includeTarget: z.string().max(1024).optional(),
+      lineStart: z.number().int().positive(),
+      lineEnd: z.number().int().positive(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('hocon-key'),
+      key: z.string().min(1).max(1024),
+      valueKind: z.enum([
+        'substitution',
+        'string',
+        'boolean',
+        'number',
+        'unquoted',
+        'unsupported',
+        'redacted',
+      ]),
+      literalValue: z.string().max(2000).optional(),
+      substitutions: z.array(z.string().max(1024)).max(50).optional(),
+      lineStart: z.number().int().positive(),
+      lineEnd: z.number().int().positive(),
+    })
+    .strict(),
 ]);
 
 const processingCandidateSchema = z
@@ -282,6 +350,9 @@ const processingCandidateSchema = z
       'json',
       'plain-text',
       'typescript',
+      'scala-source',
+      'play-routes',
+      'hocon',
       'dockerfile',
     ]),
     processorVersion: z.number().int().positive(),
@@ -291,6 +362,9 @@ const processingCandidateSchema = z
       'json-scalar-values',
       'text-paragraphs',
       'typescript-imports',
+      'scala-symbols-and-calls',
+      'play-route-declarations',
+      'hocon-key-values',
       'dockerfile-base-images',
     ]),
     extractionRuleVersion: z.number().int().positive(),
@@ -323,6 +397,9 @@ const processingCandidateSchema = z
       json: 'json-scalar-values',
       'plain-text': 'text-paragraphs',
       typescript: 'typescript-imports',
+      'scala-source': 'scala-symbols-and-calls',
+      'play-routes': 'play-route-declarations',
+      hocon: 'hocon-key-values',
       dockerfile: 'dockerfile-base-images',
     };
     if (expectedRule[candidate.processorId] !== candidate.extractionRuleId) {
@@ -1837,24 +1914,9 @@ async function listEvidenceForVersion(
 
 function parseEvidenceRow(row: unknown): Evidence {
   const parsed = evidenceRowSchema.parse(row);
-  const rawLocator = evidenceLocatorSchema.parse(
-    JSON.parse(parsed.locator_json) as unknown,
+  const locator = normalizeEvidenceLocator(
+    evidenceLocatorSchema.parse(JSON.parse(parsed.locator_json) as unknown),
   );
-  const locator: EvidenceLocator =
-    rawLocator.kind === 'json-pointer'
-      ? rawLocator
-      : rawLocator.headingPath === undefined
-        ? {
-            kind: rawLocator.kind,
-            lineStart: rawLocator.lineStart,
-            lineEnd: rawLocator.lineEnd,
-          }
-        : {
-            kind: rawLocator.kind,
-            lineStart: rawLocator.lineStart,
-            lineEnd: rawLocator.lineEnd,
-            headingPath: rawLocator.headingPath,
-          };
   return {
     id: parseEvidenceId(parsed.id),
     documentVersionId: parseDocumentVersionId(parsed.document_version_id),
@@ -1864,6 +1926,107 @@ function parseEvidenceRow(row: unknown): Evidence {
     truncated: parsed.truncated,
     locator,
   };
+}
+
+function normalizeEvidenceLocator(
+  locator: z.infer<typeof evidenceLocatorSchema>,
+): EvidenceLocator {
+  if (
+    locator.kind === 'markdown-lines' ||
+    locator.kind === 'text-lines' ||
+    locator.kind === 'yaml-lines'
+  ) {
+    return locator.headingPath === undefined
+      ? {
+          kind: locator.kind,
+          lineStart: locator.lineStart,
+          lineEnd: locator.lineEnd,
+        }
+      : {
+          kind: locator.kind,
+          lineStart: locator.lineStart,
+          lineEnd: locator.lineEnd,
+          headingPath: locator.headingPath,
+        };
+  }
+  if ('pointer' in locator) {
+    return { kind: 'json-pointer', pointer: locator.pointer };
+  }
+  if ('symbolKind' in locator) {
+    return {
+      kind: 'scala-symbol',
+      packageName: locator.packageName,
+      symbolKind: locator.symbolKind,
+      symbolName: locator.symbolName,
+      ...(locator.enclosingSymbol === undefined
+        ? {}
+        : { enclosingSymbol: locator.enclosingSymbol }),
+      ...(locator.signature === undefined
+        ? {}
+        : { signature: locator.signature }),
+      ...(locator.extendsType === undefined
+        ? {}
+        : { extendsType: locator.extendsType }),
+      lineStart: locator.lineStart,
+      lineEnd: locator.lineEnd,
+    };
+  }
+  if ('targetText' in locator) {
+    return {
+      kind: 'scala-call-site',
+      packageName: locator.packageName,
+      enclosingSymbol: locator.enclosingSymbol,
+      targetText: locator.targetText,
+      methodName: locator.methodName,
+      ...(locator.receiver === undefined ? {} : { receiver: locator.receiver }),
+      ...(locator.branchContext === undefined
+        ? {}
+        : { branchContext: locator.branchContext }),
+      ...(locator.asyncGroup === undefined
+        ? {}
+        : { asyncGroup: locator.asyncGroup }),
+      callIndex: locator.callIndex,
+      lineStart: locator.lineStart,
+      lineEnd: locator.lineEnd,
+    };
+  }
+  if ('routeSet' in locator) {
+    return {
+      kind: 'play-route',
+      routeSet: locator.routeSet,
+      ...(locator.method === undefined ? {} : { method: locator.method }),
+      ...(locator.declaredPath === undefined
+        ? {}
+        : { declaredPath: locator.declaredPath }),
+      ...(locator.handlerExpression === undefined
+        ? {}
+        : { handlerExpression: locator.handlerExpression }),
+      ...(locator.mountPrefix === undefined
+        ? {}
+        : { mountPrefix: locator.mountPrefix }),
+      ...(locator.includeTarget === undefined
+        ? {}
+        : { includeTarget: locator.includeTarget }),
+      lineStart: locator.lineStart,
+      lineEnd: locator.lineEnd,
+    };
+  }
+  if ('valueKind' in locator) {
+    return {
+      kind: 'hocon-key',
+      key: locator.key,
+      valueKind: locator.valueKind,
+      ...(locator.literalValue === undefined
+        ? {}
+        : { literalValue: locator.literalValue }),
+      ...(locator.substitutions === undefined
+        ? {}
+        : { substitutions: locator.substitutions }),
+      lineStart: locator.lineStart,
+      lineEnd: locator.lineEnd,
+    };
+  }
+  throw new Error('Unsupported evidence locator');
 }
 
 function stableJson(value: unknown): string {

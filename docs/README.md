@@ -48,6 +48,23 @@ of the initial implementation and its subsequently resolved discrepancy.
   — explicit workspace membership, repository ownership and hierarchy proposal;
   no runtime behavior changes until acceptance and implementation.
 
+## Parser-pack discovery
+
+- [HMRC Scala Play Parser Pack Discovery](hmrc-scala-play-parser-pack-discovery.md)
+  — evidence-based service patterns, candidate knowledge model, extractor
+  blueprint, and behavioural-flow feasibility.
+- [HMRC parser MVP assessment](implementation/hmrc-scala-play-parser-pack-mvp-assessment.md)
+  — reconciliation of proposed concepts with accepted vocabulary and contracts.
+- [HMRC parser MVP implementation report](implementation/hmrc-scala-play-parser-pack-mvp-implementation.md)
+  — delivered validation-only scope, six-service acceptance counts, and
+  deterministic-resolution limits.
+- [HMRC Scala Play extractor contracts](parser-packs/hmrc-scala-play-extractor-contracts.md)
+  — versioned extraction rules, provenance, stable identities, and rejection
+  behavior.
+- [Proposed ADR-028](adr/ADR-028-hmrc-static-parser-candidate-boundary.md)
+  — keeps unsupported component interactions and static paths outside immutable
+  Knowledge Model publications.
+
 ## Changing architecture
 
 Accepted ADRs are not silently rewritten. Propose a new ADR that supersedes an
