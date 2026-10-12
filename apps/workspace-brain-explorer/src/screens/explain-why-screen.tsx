@@ -265,7 +265,7 @@ export function ExplainWhyScreen() {
           >
             <p className="text-sm">
               {describeLocator(item)}
-              {item.locator.kind !== 'json-pointer' &&
+              {'headingPath' in item.locator &&
               item.locator.headingPath?.length ? (
                 <span className="text-muted-foreground">
                   {' '}

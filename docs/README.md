@@ -55,6 +55,9 @@ of the initial implementation and its subsequently resolved discrepancy.
   blueprint, and behavioural-flow feasibility.
 - [HMRC parser MVP assessment](implementation/hmrc-scala-play-parser-pack-mvp-assessment.md)
   — reconciliation of proposed concepts with accepted vocabulary and contracts.
+- [HMRC parser MVP implementation report](implementation/hmrc-scala-play-parser-pack-mvp-implementation.md)
+  — delivered validation-only scope, six-service acceptance counts, and
+  deterministic-resolution limits.
 - [HMRC Scala Play extractor contracts](parser-packs/hmrc-scala-play-extractor-contracts.md)
   — versioned extraction rules, provenance, stable identities, and rejection
   behavior.

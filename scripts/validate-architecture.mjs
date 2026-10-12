@@ -5,7 +5,7 @@ import process from 'node:process';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { resolve } from 'node:path';
+import { basename, resolve } from 'node:path';
 import { fileURLToPath, URL } from 'node:url';
 
 import { createDuckDbCatalogue } from '../infrastructure/duckdb/dist/index.js';
@@ -13,7 +13,10 @@ import {
   FilesystemSourceScanner,
   readDocumentContentChunk,
 } from '../infrastructure/filesystem/dist/index.js';
-import { processDocument } from '../packages/processing-core/dist/index.js';
+import {
+  analyzeHmrcScalaPlayRepository,
+  processDocument,
+} from '../packages/processing-core/dist/index.js';
 import { extractKnowledgeReport } from '../apps/knowledge-worker/dist/knowledge-extractors.js';
 import { serializeKnowledgePublicationPackage } from '../packages/domain-publication/dist/index.js';
 import { classifyPublicationCurrency } from '../packages/domain-currency/dist/index.js';
@@ -63,6 +66,9 @@ try {
           '.yml',
           '.json',
           '.ts',
+          '.scala',
+          '.routes',
+          '.conf',
           '.dockerfile',
         ],
         maxFileSizeBytes: 50 * 1024 * 1024,
@@ -97,7 +103,16 @@ try {
     inventory.repositories
       .filter((repository) => path.startsWith(repository.path + '/'))
       .sort((a, b) => b.path.length - a.path.length)[0];
+  const sourceRootForRepository = (repository) => {
+    const rootId = repository.path.split('/')[0];
+    const root = source.roots.find(({ id }) => id === rootId);
+    assert.ok(root, `No source root for repository: ${repository.path}`);
+    return root;
+  };
   const candidateCounts = new Map();
+  const processorCounts = new Map();
+  const locatorCounts = new Map();
+  const hmrcEvidenceByRepository = new Map();
 
   for (const document of [...inventory.documents].sort((a, b) =>
     a.path < b.path ? -1 : 1,
@@ -123,11 +138,29 @@ try {
       document.fingerprint,
       'Source changed during validation',
     );
-    const processed = processDocument(
-      document.filename,
-      bytes.toString('utf8'),
-    );
+    let processed;
+    try {
+      processed = processDocument(
+        document.filename,
+        bytes.toString('utf8'),
+        document.path.split('/').slice(1).join('/') || document.filename,
+      );
+    } catch (error) {
+      throw new Error(`Document parsing failed: ${document.path}`, {
+        cause: error,
+      });
+    }
     const now = new Date().toISOString();
+    processorCounts.set(
+      processed.processorId,
+      (processorCounts.get(processed.processorId) ?? 0) + 1,
+    );
+    for (const item of processed.evidence) {
+      locatorCounts.set(
+        item.locator.kind,
+        (locatorCounts.get(item.locator.kind) ?? 0) + 1,
+      );
+    }
     const result = await catalogue
       .applyDocumentProcessing({
         eventId: randomUUID(),
@@ -158,6 +191,13 @@ try {
     const inputs = await catalogue.listKnowledgeInputEvidence(
       result.documentVersion.id,
     );
+    const repository = owner(document.path);
+    if (repository) {
+      const repositoryEvidence =
+        hmrcEvidenceByRepository.get(repository.id) ?? [];
+      repositoryEvidence.push(...inputs);
+      hmrcEvidenceByRepository.set(repository.id, repositoryEvidence);
+    }
     const extraction = extractKnowledgeReport(inputs);
     assert.deepEqual(
       extraction.candidates,
@@ -177,7 +217,6 @@ try {
       });
     }
     diagnostics.push(...extraction.diagnostics);
-    const repository = owner(document.path);
     documentOwners.set(document.id, repository?.id);
     if (repository) {
       const previous = candidateCounts.get(repository.id) ?? {
@@ -215,6 +254,56 @@ try {
     );
     await catalogue.applyKnowledgeCandidates(event);
   }
+  const hmrcCandidateRepositories = inventory.repositories
+    .filter(({ id }) => hmrcEvidenceByRepository.has(id))
+    .map((repository) => {
+      const repositoryPath = basename(
+        sourceRootForRepository(repository).absolutePath,
+      );
+      const evidence = hmrcEvidenceByRepository.get(repository.id) ?? [];
+      const analysis = analyzeHmrcScalaPlayRepository(repositoryPath, evidence);
+      assert.deepEqual(
+        analysis,
+        analyzeHmrcScalaPlayRepository(repositoryPath, evidence),
+        `HMRC candidate replay changed: ${repositoryPath}`,
+      );
+      assert.ok(
+        analysis.staticPaths.every(
+          ({ label }) => label === 'Candidate Static Path',
+        ),
+      );
+      return {
+        repositoryPath,
+        routes: analysis.routes.length,
+        resolvedRoutes: analysis.routes.filter(
+          ({ resolvedHandlerMethod }) => resolvedHandlerMethod !== undefined,
+        ).length,
+        components: analysis.components.length,
+        dependencies: analysis.dependencies.length,
+        calls: analysis.calls.length,
+        resolvedCalls: analysis.calls.filter(
+          ({ resolvedTargetMethod }) => resolvedTargetMethod !== undefined,
+        ).length,
+        httpInteractions: analysis.httpInteractions.length,
+        staticPaths: analysis.staticPaths.length,
+        diagnostics: {
+          unresolved: analysis.diagnostics.filter(
+            ({ disposition }) => disposition === 'unresolved',
+          ).length,
+          rejected: analysis.diagnostics.filter(
+            ({ disposition }) => disposition === 'rejected',
+          ).length,
+          reasons: countBy(analysis.diagnostics, 'reason'),
+        },
+      };
+    })
+    .sort((left, right) =>
+      left.repositoryPath < right.repositoryPath
+        ? -1
+        : left.repositoryPath > right.repositoryPath
+          ? 1
+          : 0,
+    );
   const model = (await catalogue.listKnowledgeModels({ limit: 10 })).items[0];
   assert.ok(model);
   const publication = await catalogue.getLatestKnowledgePublication(model.id);
@@ -320,13 +409,10 @@ try {
           (item) => documentOwners.get(item.documentId) === repository.id,
         ),
       );
-    const root = source.roots.find(
-      (root) => repository.path.split('/')[0] === root.id,
-    );
-    assert.ok(root);
+    const root = sourceRootForRepository(repository);
     return {
       root: root.absolutePath,
-      path: repository.path.split('/').slice(1).join('/') || '.',
+      path: basename(root.absolutePath),
       candidateContributions: candidateCounts.get(repository.id) ?? {
         documents: 0,
         entities: 0,
@@ -358,6 +444,33 @@ try {
         observedAt: new Date().toISOString(),
         sourceRoots: roots,
         documents: inventory.documents.length,
+        processors: Object.fromEntries(
+          [...processorCounts].sort(([a], [b]) => (a < b ? -1 : 1)),
+        ),
+        locators: Object.fromEntries(
+          [...locatorCounts].sort(([a], [b]) => (a < b ? -1 : 1)),
+        ),
+        hmrcCandidates: {
+          repositories: hmrcCandidateRepositories,
+          totals: Object.fromEntries(
+            [
+              'routes',
+              'resolvedRoutes',
+              'components',
+              'dependencies',
+              'calls',
+              'resolvedCalls',
+              'httpInteractions',
+              'staticPaths',
+            ].map((field) => [
+              field,
+              hmrcCandidateRepositories.reduce(
+                (total, repository) => total + (repository[field] ?? 0),
+                0,
+              ),
+            ]),
+          ),
+        },
         publication: {
           id: publication.id,
           version: publication.version,

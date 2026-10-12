@@ -82,6 +82,74 @@ const locatorSchema = z.union([
     })
     .strict(),
   z.object({ kind: z.literal('json-pointer'), pointer: z.string() }).strict(),
+  z
+    .object({
+      kind: z.literal('scala-symbol'),
+      packageName: z.string().max(512),
+      symbolKind: z.enum([
+        'package',
+        'import',
+        'class',
+        'object',
+        'trait',
+        'method',
+        'constructor-parameter',
+      ]),
+      symbolName: z.string().max(1024),
+      enclosingSymbol: z.string().max(1024).optional(),
+      signature: z.string().max(2000).optional(),
+      extendsType: z.string().max(1024).optional(),
+      lineStart: z.number().int().positive(),
+      lineEnd: z.number().int().positive(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('scala-call-site'),
+      packageName: z.string().max(512),
+      enclosingSymbol: z.string().max(1024),
+      targetText: z.string().max(1024),
+      methodName: z.string().max(256),
+      receiver: z.string().max(512).optional(),
+      branchContext: z.string().max(64).optional(),
+      asyncGroup: z.string().max(64).optional(),
+      callIndex: z.number().int().positive(),
+      lineStart: z.number().int().positive(),
+      lineEnd: z.number().int().positive(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('play-route'),
+      routeSet: z.string().max(64),
+      method: z.string().max(16).optional(),
+      declaredPath: z.string().max(4096).optional(),
+      handlerExpression: z.string().max(2048).optional(),
+      mountPrefix: z.string().max(4096).optional(),
+      includeTarget: z.string().max(1024).optional(),
+      lineStart: z.number().int().positive(),
+      lineEnd: z.number().int().positive(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('hocon-key'),
+      key: z.string().min(1).max(1024),
+      valueKind: z.enum([
+        'substitution',
+        'string',
+        'boolean',
+        'number',
+        'unquoted',
+        'unsupported',
+        'redacted',
+      ]),
+      literalValue: z.string().max(2000).optional(),
+      substitutions: z.array(z.string().max(1024)).max(50).optional(),
+      lineStart: z.number().int().positive(),
+      lineEnd: z.number().int().positive(),
+    })
+    .strict(),
 ]);
 const provenanceSchema = z
   .object({

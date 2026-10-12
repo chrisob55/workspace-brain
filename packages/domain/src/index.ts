@@ -44,6 +44,24 @@ export const processingDefinitionRegistry = [
     extractionRuleId: 'typescript-imports',
   },
   {
+    filenameMatchKind: 'suffix',
+    filenameMatch: '.scala',
+    processorId: 'scala-source',
+    extractionRuleId: 'scala-symbols-and-calls',
+  },
+  {
+    filenameMatchKind: 'suffix',
+    filenameMatch: '.routes',
+    processorId: 'play-routes',
+    extractionRuleId: 'play-route-declarations',
+  },
+  {
+    filenameMatchKind: 'suffix',
+    filenameMatch: '.conf',
+    processorId: 'hocon',
+    extractionRuleId: 'hocon-key-values',
+  },
+  {
     filenameMatchKind: 'exact',
     filenameMatch: 'dockerfile',
     processorId: 'dockerfile',
@@ -564,6 +582,64 @@ export type EvidenceLocator =
   | {
       readonly kind: 'json-pointer';
       readonly pointer: string;
+    }
+  | {
+      readonly kind: 'scala-symbol';
+      readonly packageName: string;
+      readonly symbolKind:
+        | 'package'
+        | 'import'
+        | 'class'
+        | 'object'
+        | 'trait'
+        | 'method'
+        | 'constructor-parameter';
+      readonly symbolName: string;
+      readonly enclosingSymbol?: string;
+      readonly signature?: string;
+      readonly extendsType?: string;
+      readonly lineStart: number;
+      readonly lineEnd: number;
+    }
+  | {
+      readonly kind: 'scala-call-site';
+      readonly packageName: string;
+      readonly enclosingSymbol: string;
+      readonly targetText: string;
+      readonly methodName: string;
+      readonly receiver?: string;
+      readonly branchContext?: string;
+      readonly asyncGroup?: string;
+      readonly callIndex: number;
+      readonly lineStart: number;
+      readonly lineEnd: number;
+    }
+  | {
+      readonly kind: 'play-route';
+      readonly routeSet: string;
+      readonly method?: string;
+      readonly declaredPath?: string;
+      readonly handlerExpression?: string;
+      readonly mountPrefix?: string;
+      readonly includeTarget?: string;
+      readonly lineStart: number;
+      readonly lineEnd: number;
+    }
+  | {
+      readonly kind: 'hocon-key';
+      readonly key: string;
+      readonly valueKind:
+        | 'substitution'
+        | 'string'
+        | 'boolean'
+        | 'number'
+        | 'unquoted'
+        | 'unsupported'
+        | 'redacted';
+      readonly literalValue?: string;
+      readonly substitutions?: readonly string[];
+      readonly lineStart: number;
+      readonly lineEnd: number;
     };
 
 export type EvidenceCandidate = {

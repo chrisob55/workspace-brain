@@ -18,7 +18,7 @@ export function decisionTitle(entity: KnowledgeEntity): string | undefined {
     const filename = item.documentPath.split('/').at(-1) ?? '';
     if (!filename.toLowerCase().startsWith(prefix)) continue;
     const heading =
-      item.locator.kind !== 'json-pointer'
+      'headingPath' in item.locator
         ? item.locator.headingPath?.find((text) =>
             text.toLowerCase().startsWith(entity.name.toLowerCase()),
           )

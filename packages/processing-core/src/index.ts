@@ -2,19 +2,31 @@ import ts from 'typescript';
 import MarkdownIt from 'markdown-it';
 import { isMap, isScalar, isSeq, parseDocument, type Node } from 'yaml';
 
-import { processingDefinitionRegistry } from '@workspace-brain/domain';
+import {
+  processingDefinitionRegistry,
+  type EvidenceLocator as DomainEvidenceLocator,
+} from '@workspace-brain/domain';
+import {
+  normalizeHocon,
+  normalizePlayRoutes,
+  normalizeScala,
+} from './hmrc-scala-play.js';
 
-export type EvidenceLocator =
-  | {
-      readonly kind: 'markdown-lines' | 'text-lines' | 'yaml-lines';
-      readonly lineStart: number;
-      readonly lineEnd: number;
-      readonly headingPath?: readonly string[];
-    }
-  | {
-      readonly kind: 'json-pointer';
-      readonly pointer: string;
-    };
+export { analyzeHmrcScalaPlayRepository } from './hmrc-scala-play-candidates.js';
+export type {
+  HmrcCallCandidate,
+  HmrcCandidateProvenance,
+  HmrcCandidateStaticPath,
+  HmrcComponentCandidate,
+  HmrcDependencyCandidate,
+  HmrcDiagnostic,
+  HmrcHttpInteractionCandidate,
+  HmrcRouteCandidate,
+  HmrcScalaPlayAnalysis,
+  HmrcStaticPathStep,
+} from './hmrc-scala-play-candidates.js';
+
+export type EvidenceLocator = DomainEvidenceLocator;
 
 export type EvidenceCandidate = {
   readonly key: string;
@@ -47,7 +59,7 @@ export type DocumentProcessor = {
   readonly version: number;
   readonly supportedExtensions: readonly string[];
   supports(filename: string): boolean;
-  process(content: string): NormalizedDocument;
+  process(content: string, relativePath?: string): NormalizedDocument;
   readonly extractionRuleId: string;
   readonly extractionRuleVersion: 1;
 };
@@ -115,6 +127,27 @@ export const documentProcessors: readonly DocumentProcessor[] = [
     3,
   ),
   createProcessor(
+    'scala-source',
+    extensionsFor('scala-source'),
+    definitionFor('scala-source').extractionRuleId,
+    normalizeScala,
+    1,
+  ),
+  createProcessor(
+    'play-routes',
+    extensionsFor('play-routes'),
+    definitionFor('play-routes').extractionRuleId,
+    (text, path) => normalizePlayRoutes(text, path),
+    1,
+  ),
+  createProcessor(
+    'hocon',
+    extensionsFor('hocon'),
+    definitionFor('hocon').extractionRuleId,
+    (text, path) => normalizeHocon(text, path),
+    1,
+  ),
+  createProcessor(
     'dockerfile',
     extensionsFor('dockerfile'),
     definitionFor('dockerfile').extractionRuleId,
@@ -125,6 +158,7 @@ export const documentProcessors: readonly DocumentProcessor[] = [
 export function processDocument(
   filename: string,
   content: string,
+  relativePath = filename,
 ): ProcessedDocument {
   const processor = documentProcessors.find(({ supports }) =>
     supports(filename),
@@ -134,7 +168,7 @@ export function processDocument(
       `Unsupported document extension: ${extensionOf(filename) || '(none)'}`,
     );
   }
-  const normalized = processor.process(content);
+  const normalized = processor.process(content, relativePath);
   return {
     processorId: processor.id,
     processorVersion: processor.version,
@@ -148,7 +182,10 @@ function createProcessor(
   id: string,
   extensions: readonly string[],
   extractionRuleId: string,
-  normalize: (content: string) => readonly NormalizedBlock[],
+  normalize: (
+    content: string,
+    relativePath: string,
+  ) => readonly NormalizedBlock[],
   version = 3,
 ): DocumentProcessor {
   return {
@@ -159,7 +196,9 @@ function createProcessor(
       extensions.includes(extensionOf(filename)) ||
       (id === 'dockerfile' &&
         filename.toLocaleLowerCase('en-US') === 'dockerfile'),
-    process: (content) => ({ blocks: normalize(content) }),
+    process: (content, relativePath = 'unknown') => ({
+      blocks: normalize(content, relativePath),
+    }),
     extractionRuleId,
     extractionRuleVersion: 1,
   };
