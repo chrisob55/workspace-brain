@@ -3,6 +3,7 @@ import {
   Building2,
   CircleHelp,
   Compass,
+  Cpu,
   GitCompareArrows,
   Landmark,
   Network,
@@ -16,6 +17,7 @@ import {
 import type { ComponentType } from 'react';
 
 import { AdrScreen } from './screens/adr-screen';
+import { ArchitectureMapScreen } from './screens/architecture-map-screen';
 import { ArchitectureFaqScreen } from './screens/architecture-faq-screen';
 import { BehaviouralFlowVisionScreen } from './screens/behavioural-flow-vision-screen';
 import { BeforeAfterScreen } from './screens/before-after-screen';
@@ -45,6 +47,13 @@ export const SCREENS: ScreenDefinition[] = [
     question: 'What is Workspace Brain?',
     icon: Sparkles,
     component: OverviewScreen,
+  },
+  {
+    id: 'architecture-map',
+    title: 'Technical Architecture',
+    question: 'How does the system fit together?',
+    icon: Cpu,
+    component: ArchitectureMapScreen,
   },
   {
     id: 'concepts',
