@@ -104,6 +104,36 @@ pnpm librechat:up
 See [docs/librechat-compose.md](docs/librechat-compose.md) for setup, tests and
 troubleshooting.
 
+#### Rebuild and run everything
+
+Full clean rebuild of the backend, LibreChat and the explorer dev server.
+Run it from the repository root; the first command only needs to run once (it
+creates the git-ignored `deploy/compose/.env` with generated secrets and never
+overwrites existing values):
+
+```sh
+pnpm librechat:env
+
+COMPOSE="docker compose -f deploy/compose/compose.yaml --profile librechat"
+$COMPOSE build --no-cache workspace-brain-api ingestion-worker knowledge-worker librechat
+$COMPOSE up -d --force-recreate --wait \
+  workspace-brain-api ingestion-worker knowledge-worker librechat-mongo librechat
+
+pnpm install
+pnpm --filter @workspace-brain/workspace-brain-explorer dev
+```
+
+- API: `http://localhost:3000`; LibreChat: `http://localhost:3080`.
+- `librechat` is rebuilt too because it bundles the MCP server; a plain
+  restart would keep the old MCP code.
+- Omit `--profile librechat`, `librechat-mongo` and `librechat` for the
+  backend only. Drop `--no-cache` for faster incremental rebuilds.
+- Add `TURBO_BUILD_ARGS=--concurrency=1` before the build command on
+  low-memory Docker VMs (for example 2 GB Colima).
+- Stop with `docker compose -f deploy/compose/compose.yaml --profile librechat down`
+  (volumes are kept; add `-v` to wipe them).
+- Verify the LibreChat/MCP wiring with `pnpm librechat:verify`.
+
 By default, Compose mounts `./sources` read-only into the ingestion worker.
 Place a test workspace there or set `WORKSPACE_SOURCES_PATH` to another
 directory. The API is available at `http://localhost:3000`; its health and
