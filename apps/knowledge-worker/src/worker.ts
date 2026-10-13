@@ -71,6 +71,7 @@ const locatorSchema = z.discriminatedUnion('kind', [
         'object',
         'trait',
         'method',
+        'value',
         'constructor-parameter',
       ]),
       symbolName: z.string().max(1024),

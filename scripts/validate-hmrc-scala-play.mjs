@@ -73,6 +73,13 @@ assert.equal(report.validation.completeProvenance, true);
 assert.ok(report.hmrcCandidates.totals.routes > 0);
 assert.ok(report.hmrcCandidates.totals.resolvedRoutes > 0);
 assert.ok(report.hmrcCandidates.totals.staticPaths > 0);
+assert.ok(report.publication.hmrcScalaPlay.entities > 0);
+assert.ok(report.publication.hmrcScalaPlay.operations > 0);
+assert.ok(report.publication.hmrcScalaPlay.semanticRelationships.CALLS > 0);
+assert.ok(
+  report.publication.hmrcScalaPlay.semanticRelationships.IMPLEMENTED_BY > 0,
+);
+assert.ok(report.publication.hmrcScalaPlay.downstreamSystems > 0);
 
 console.log(
   JSON.stringify(

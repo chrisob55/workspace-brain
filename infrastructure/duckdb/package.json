@@ -22,6 +22,7 @@
     "@workspace-brain/domain-currency": "workspace:*",
     "@workspace-brain/domain-evolution": "workspace:*",
     "@workspace-brain/domain-publication": "workspace:*",
+    "@workspace-brain/processing-core": "workspace:*",
     "zod": "^4.1.12"
   },
   "devDependencies": {

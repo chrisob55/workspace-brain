@@ -194,6 +194,9 @@ importers:
       '@workspace-brain/domain-publication':
         specifier: workspace:*
         version: link:../../packages/domain-publication
+      '@workspace-brain/processing-core':
+        specifier: workspace:*
+        version: link:../../packages/processing-core
       zod:
         specifier: ^4.1.12
         version: 4.6.5

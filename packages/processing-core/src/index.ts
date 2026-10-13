@@ -13,6 +13,8 @@ import {
 } from './hmrc-scala-play.js';
 
 export { analyzeHmrcScalaPlayRepository } from './hmrc-scala-play-candidates.js';
+export * from './knowledge-extractors.js';
+export { extractHmrcScalaPlayKnowledge } from './hmrc-scala-play-knowledge.js';
 export type {
   HmrcCallCandidate,
   HmrcCandidateProvenance,
@@ -131,7 +133,7 @@ export const documentProcessors: readonly DocumentProcessor[] = [
     extensionsFor('scala-source'),
     definitionFor('scala-source').extractionRuleId,
     normalizeScala,
-    1,
+    2,
   ),
   createProcessor(
     'play-routes',

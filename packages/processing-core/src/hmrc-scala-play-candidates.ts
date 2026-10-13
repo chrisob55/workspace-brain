@@ -4,7 +4,7 @@ import type {
 } from '@workspace-brain/domain';
 
 const parserPackId = 'hmrc-scala-play';
-const parserPackVersion = 1;
+const parserPackVersion = 2;
 const routeExtractorId = 'hmrc-play-route-facts';
 const componentExtractorId = 'hmrc-scala-components';
 const pathExtractorId = 'hmrc-candidate-static-paths';

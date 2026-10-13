@@ -310,6 +310,73 @@ try {
   assert.ok(publication);
   const snapshot = await catalogue.getPublicationSnapshot(publication.id);
   assert.ok(snapshot);
+  const parserEntities = snapshot.entities
+    .map(({ entity }) => entity)
+    .filter((entity) =>
+      entity.provenance.some(
+        (item) => item.facts?.parserPackId === 'hmrc-scala-play',
+      ),
+    );
+  const parserRelationships = snapshot.relationships
+    .map(({ relationship }) => relationship)
+    .filter((relationship) =>
+      relationship.provenance.some(
+        (item) => item.facts?.parserPackId === 'hmrc-scala-play',
+      ),
+    );
+  assert.ok(
+    parserRelationships.some(
+      (item) => item.provenance[0]?.facts?.relationship === 'CALLS',
+    ),
+    'Publication is missing deterministically resolved Scala calls',
+  );
+  assert.ok(
+    parserRelationships.some(
+      (item) => item.provenance[0]?.facts?.relationship === 'IMPLEMENTED_BY',
+    ),
+    'Publication is missing route-to-controller relationships',
+  );
+  const parserPackPublication = {
+    entities: parserEntities.length,
+    operations: parserEntities.filter(
+      (entity) => entity.provenance[0]?.facts?.role === 'route',
+    ).length,
+    relationships: countBy(
+      parserRelationships.filter((item) =>
+        item.provenance.some(
+          (support) => support.facts?.parserPackId === 'hmrc-scala-play',
+        ),
+      ),
+      'type',
+    ),
+    semanticRelationships: Object.fromEntries(
+      [
+        ...new Set(
+          parserRelationships.flatMap((relationship) =>
+            relationship.provenance
+              .map((item) => item.facts?.relationship)
+              .filter((value) => value !== undefined),
+          ),
+        ),
+      ]
+        .sort()
+        .map((kind) => [
+          kind,
+          parserRelationships.filter((relationship) =>
+            relationship.provenance.some(
+              (item) => item.facts?.relationship === kind,
+            ),
+          ).length,
+        ]),
+    ),
+    downstreamSystems: parserEntities.filter(
+      (entity) => entity.provenance[0]?.facts?.role === 'downstream-system',
+    ).length,
+  };
+  assert.ok(
+    parserPackPublication.downstreamSystems > 0,
+    'Publication is missing exactly resolved downstream service identifiers',
+  );
   const packageOne = await catalogue.getKnowledgePublicationExport(
     publication.id,
   );
@@ -476,6 +543,7 @@ try {
           version: publication.version,
           schemaVersion: publication.schemaVersion,
           contentHash: publication.contentHash,
+          hmrcScalaPlay: parserPackPublication,
         },
         entityCount: snapshot.entities.length,
         relationshipCount: snapshot.relationships.length,
