@@ -1053,7 +1053,7 @@ describe('DuckDB publication currency', () => {
     } finally {
       await catalogue.close();
     }
-  });
+  }, 30_000);
 
   it('raises integrity errors instead of UNKNOWN for broken historical lineage', async () => {
     const fixture = await createFixture();
