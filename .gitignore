@@ -1,6 +1,7 @@
 .DS_Store
 node_modules/
 dist/
+out/
 .turbo/
 coverage/
 .env
@@ -11,3 +12,4 @@ coverage/
 
 sources/*
 !sources/.gitkeep
+*.tsbuildinfo
