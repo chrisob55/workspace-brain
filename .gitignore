@@ -12,3 +12,4 @@ coverage/
 
 sources/*
 !sources/.gitkeep
+*.tsbuildinfo
