@@ -48,6 +48,7 @@ import {
   type StoredKnowledgeProvenance,
 } from '@workspace-brain/domain';
 import { z } from 'zod';
+import { extractHmrcScalaPlayKnowledge } from '@workspace-brain/processing-core';
 import {
   getExtractionContext,
   repositoryBoundarySchema,
@@ -93,6 +94,7 @@ const locatorSchema = z.union([
         'object',
         'trait',
         'method',
+        'value',
         'constructor-parameter',
       ]),
       symbolName: z.string().max(1024),
@@ -1692,6 +1694,47 @@ async function activeContributionModels(
   return rows.getRowObjectsJson().map(parseKnowledgeModelRow);
 }
 
+async function loadActiveParserEvidence(
+  connection: DuckDbConnection,
+  modelId: string,
+): Promise<KnowledgeInputEvidence[]> {
+  const rows = await connection.runAndReadAll(
+    `SELECT e.id, e.document_version_id, e.evidence_key, e.evidence_kind, e.excerpt, e.truncated,
+      CAST(e.locator_json AS VARCHAR) AS locator_json, v.id AS version_id, v.document_id,
+      v.content_fingerprint, strftime(v.processed_at, '%Y-%m-%dT%H:%M:%S.%fZ') AS processed_at,
+      v.processor_id, v.processor_version, v.extraction_rule_id, v.extraction_rule_version,
+      v.evidence_count, v.source_id, v.path, v.filename,
+      CAST(json_extract(x.context_json, '$.repositories') AS VARCHAR) AS repositories_json
+    FROM knowledge_active_document_contributions a
+    JOIN document_versions v ON v.id = a.document_version_id
+    JOIN extracted_evidence e ON e.document_version_id = v.id
+    JOIN document_extraction_contexts x ON x.document_version_id = v.id
+    WHERE a.knowledge_model_id = $1 AND v.processor_id IN ('scala-source', 'play-routes', 'hocon')
+      AND regexp_matches(v.path, '/(app|conf|src/main)/')
+    ORDER BY v.id, e.evidence_key`,
+    [modelId],
+  );
+  const repositoriesByVersion = new Map<
+    string,
+    KnowledgeExtractionContext['repositories']
+  >();
+  return rows.getRowObjectsJson().map((row) => {
+    const input = parseKnowledgeInputEvidence(row);
+    let repositories = repositoriesByVersion.get(input.documentVersion.id);
+    if (repositories === undefined) {
+      repositories = z
+        .array(repositoryBoundarySchema)
+        .parse(JSON.parse(z.string().parse(row.repositories_json)) as unknown)
+        .map(({ name, ...repository }) => ({
+          ...repository,
+          ...(name === undefined ? {} : { name }),
+        }));
+      repositoriesByVersion.set(input.documentVersion.id, repositories);
+    }
+    return { ...input, extractionContext: { repositories, documents: [] } };
+  });
+}
+
 async function reconcileKnowledgeModel(
   connection: DuckDbConnection,
   model: KnowledgeModel,
@@ -1700,7 +1743,17 @@ async function reconcileKnowledgeModel(
   occurredAt: string,
 ): Promise<void> {
   const contributions = await loadActiveContributions(connection, model.id);
+  const parserCandidates = extractHmrcScalaPlayKnowledge(
+    await loadActiveParserEvidence(connection, model.id),
+  );
   const desiredEntities = aggregateEntityCandidates(contributions);
+  for (const candidate of parserCandidates.entities) {
+    if (desiredEntities.has(candidate.key))
+      throw new CatalogueIntegrityError(
+        'Parser pack entity identity conflicts with document extraction',
+      );
+    desiredEntities.set(candidate.key, candidate);
+  }
   const existingEntities = await loadModelEntities(connection, model.id);
   const entitiesByKey = new Map(
     existingEntities.map((item) => [item.entityKey, item.entity]),
@@ -1764,6 +1817,13 @@ async function reconcileKnowledgeModel(
   }
 
   const desiredRelationships = aggregateRelationshipCandidates(contributions);
+  for (const candidate of parserCandidates.relationships) {
+    if (desiredRelationships.has(candidate.key))
+      throw new CatalogueIntegrityError(
+        'Parser pack relationship identity conflicts with document extraction',
+      );
+    desiredRelationships.set(candidate.key, candidate);
+  }
   const existingRelationships = await loadModelRelationships(
     connection,
     model.id,

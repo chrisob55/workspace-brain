@@ -349,7 +349,12 @@ export function normalizeScala(content: string): NormalizedBlock[] {
     const classDeclaration = nearestEnclosingClass(classTokens, index);
     if (!classDeclaration) continue;
     const headerEnd = findMethodHeaderEnd(tokens, index + 2);
-    const methodEnd = findMethodEnd(tokens, headerEnd, classDeclaration.end);
+    const methodEnd = findMethodEnd(
+      tokens,
+      headerEnd,
+      classDeclaration.end,
+      token.column,
+    );
     const fullName = `${classDeclaration.fullName}.${name.text}`;
     methodTokens.set(index, { fullName, end: methodEnd });
     symbolTokens.add(index + 1);
@@ -371,6 +376,71 @@ export function normalizeScala(content: string): NormalizedBlock[] {
           lineStart: token.line,
           lineEnd: tokens[headerEnd]?.line ?? name.line,
         },
+      ),
+    );
+  }
+
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    const name = tokens[index + 1];
+    if (token?.text !== 'val' || name?.kind !== 'identifier') continue;
+    const owner = nearestEnclosingClass(classTokens, index);
+    const method = nearestEnclosingMethod(methodTokens, index);
+    if (!owner || index <= owner.declarationEnd) continue;
+    const nesting = tokens
+      .slice(owner.declarationEnd, index)
+      .reduce(
+        (depth, item) =>
+          depth + (item.text === '{' ? 1 : item.text === '}' ? -1 : 0),
+        0,
+      );
+    if (!method && nesting !== 1) continue;
+    let cursor = index + 2;
+    while (
+      cursor < owner.end &&
+      tokens[cursor]?.line === name.line &&
+      tokens[cursor]?.text !== '='
+    )
+      cursor += 1;
+    if (tokens[cursor]?.text !== '=') continue;
+    const start = cursor + 1;
+    const first = tokens[start];
+    if (!first) continue;
+    let depth = 0;
+    cursor = start;
+    while (cursor < owner.end) {
+      const next = tokens[cursor];
+      if (
+        !next ||
+        (depth === 0 &&
+          (next.line > first.line || next.text === ';' || next.text === '}'))
+      )
+        break;
+      if (next.text === '(' || next.text === '[') depth += 1;
+      if (next.text === ')' || next.text === ']') depth -= 1;
+      if (depth < 0 || next.text === '{') break;
+      cursor += 1;
+    }
+    if (depth !== 0 || cursor === start) continue;
+    const expression = tokens
+      .slice(start, cursor)
+      .map(({ text }) => text)
+      .join('');
+    blocks.push(
+      structuredBlock(
+        `scala:value:${method?.fullName ?? owner.fullName}.${name.text}:${token.line}`,
+        expression.slice(0, maxEvidenceText),
+        {
+          kind: 'scala-symbol',
+          packageName: currentPackage,
+          symbolKind: 'value',
+          symbolName: `${method?.fullName ?? owner.fullName}.${name.text}`,
+          enclosingSymbol: method?.fullName ?? owner.fullName,
+          signature: expression,
+          lineStart: token.line,
+          lineEnd: tokens[cursor - 1]?.line ?? token.line,
+        },
+        expression.length > maxEvidenceText,
       ),
     );
   }
@@ -782,6 +852,7 @@ function findMethodEnd(
   tokens: readonly Token[],
   headerEnd: number,
   classEnd: number,
+  declarationColumn: number,
 ): number {
   const bodyOpen =
     tokens[headerEnd]?.text === '{'
@@ -795,7 +866,6 @@ function findMethodEnd(
   const bodyStart = headerEnd + 1;
   const start = tokens[bodyStart];
   if (!start) return headerEnd;
-  const baseIndent = start.column;
   let end = bodyStart;
   let nestedBraces = 0;
   for (
@@ -814,8 +884,18 @@ function findMethodEnd(
     if (
       nestedBraces === 0 &&
       token.line > previous.line &&
-      token.column <= baseIndent &&
-      token.text === 'def'
+      token.column <= declarationColumn &&
+      [
+        'def',
+        'val',
+        'var',
+        'lazy',
+        'override',
+        'private',
+        'protected',
+        'final',
+        '@',
+      ].includes(token.text)
     ) {
       return index - 1;
     }
@@ -825,9 +905,12 @@ function findMethodEnd(
 }
 
 function nearestEnclosingClass(
-  classes: ReadonlyMap<number, { fullName: string; end: number }>,
+  classes: ReadonlyMap<
+    number,
+    { fullName: string; end: number; declarationEnd: number }
+  >,
   index: number,
-): { fullName: string; end: number } | undefined {
+): { fullName: string; end: number; declarationEnd: number } | undefined {
   return [...classes.entries()]
     .filter(([start, item]) => start < index && item.end >= index)
     .sort((a, b) => b[0] - a[0])[0]?.[1];

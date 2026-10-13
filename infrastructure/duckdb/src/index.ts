@@ -277,6 +277,7 @@ const evidenceLocatorSchema = z.union([
         'object',
         'trait',
         'method',
+        'value',
         'constructor-parameter',
       ]),
       symbolName: z.string().max(1024),
@@ -1661,7 +1662,13 @@ async function applyDocumentProcessing(
           ],
         );
       }
-      if (candidate.processorVersion >= 3) {
+      if (
+        candidate.processorVersion >= 3 ||
+        (candidate.processorId === 'scala-source' &&
+          candidate.processorVersion >= 2) ||
+        candidate.processorId === 'play-routes' ||
+        candidate.processorId === 'hocon'
+      ) {
         await snapshotExtractionContext(
           connection,
           versionId,

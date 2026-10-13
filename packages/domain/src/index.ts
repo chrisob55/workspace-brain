@@ -593,6 +593,7 @@ export type EvidenceLocator =
         | 'object'
         | 'trait'
         | 'method'
+        | 'value'
         | 'constructor-parameter';
       readonly symbolName: string;
       readonly enclosingSymbol?: string;

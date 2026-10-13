@@ -162,7 +162,7 @@ describe('deterministic document processing', () => {
     ).toContainEqual(['typescript', 3]);
     expect(documentProcessors.map(({ id, version }) => [id, version])).toEqual(
       expect.arrayContaining([
-        ['scala-source', 1],
+        ['scala-source', 2],
         ['play-routes', 1],
         ['hocon', 1],
       ]),

@@ -1,26 +1,27 @@
 # HMRC Scala Play Extractor Definition Contracts
 
 **Parser pack:** `hmrc-scala-play`
-**Parser pack version:** `1`
+**Parser pack version:** `2`
 **Owner:** Workspace Brain knowledge processing
 **Contract status:** MVP implementation boundary
 **Determinism:** deterministic parsing and resolution only; no AI, runtime
 observations, probabilistic scoring, or dynamic third-party plug-in loading.
 
-These contracts authorize only the outputs listed below. Candidate-only
-extractors produce validation artifacts, not Knowledge Model entities or
-relationships. All outputs are sorted by stable identity and retain complete
-source evidence lineage.
+These contracts authorize the outputs listed below. Parser-pack version 2
+joins active, immutable evidence during publication reconciliation; it does not
+run as a separate user validation command. Outputs are sorted by stable
+identity and retain complete source evidence lineage.
 
 ## Implementation coverage
 
-The [MVP implementation report](../implementation/hmrc-scala-play-parser-pack-mvp-implementation.md)
-records delivered behavior and six-service acceptance results. The Scala,
-route, and HOCON processors are implemented. Route, component/dependency/call,
-direct `HttpClientV2` verb, and Candidate Static Path analysis are implemented
-as validation-only candidates. HOCON-to-integration resolution and the Mongo
-persistence candidate extractor described below remain future work; their
-contracts do not imply that those facts are currently produced.
+The [implementation report](../implementation/hmrc-scala-play-parser-pack-mvp-implementation.md)
+records delivered behavior and acceptance results. The Scala, route, and HOCON
+processors and candidate analyzer are implemented. Publication reconciliation
+joins their active evidence into operation/module/api entities and existing
+`USES`, `DEPENDS_ON`, `EXPOSES`, and `CONSUMES` relationship types. The facts
+field records semantic distinctions such as `IMPLEMENTED_BY`, `CALLS`,
+`EXPOSES_ENDPOINT`, and `HTTP`; no publication vocabulary extension is implied.
+The Mongo persistence candidate extractor remains future work.
 
 ## Common contract
 
@@ -28,7 +29,7 @@ contracts do not imply that those facts are currently produced.
   fingerprint-checked by Workspace Brain.
 - Supported document processors emit bounded structured evidence with exact
   line-aware locators; generic prose blocks are not a substitute.
-- Parser pack identity is `hmrc-scala-play@1`. Processor/extractor identities
+- Parser pack identity is `hmrc-scala-play@2`. Processor/extractor identities
   and versions are independently recorded.
 - Provenance contains source ID, document ID/version, evidence ID, relative
   document path, content fingerprint, locator, processor/rule ID and versions,
@@ -45,6 +46,23 @@ contracts do not imply that those facts are currently produced.
   exposure.
 - No confidence number is emitted. `Observed` and `Corroborated` are not
   emitted without a separately governed runtime evidence source.
+- Repository joins consume only active document versions in the owning model
+  and nearest immutable Git boundary. Test and integration-test paths and
+  non-`app.routes` route sets are not published as production endpoints.
+- A named downstream system is emitted only when a direct `HttpClientV2`
+  request's URL resolves through exact, supported Scala values or
+  `ServicesConfig.baseUrl("service-id")` syntax. Its service identifier is
+  code-derived evidence; an exact HOCON `microservice.services.<id>.host` key
+  is included when present, but the configured host value is never interpreted.
+- If exact code evidence resolves a service identifier but no matching HOCON
+  host key exists, the deterministic downstream edge is retained with an
+  explicit `downstream-hocon-host-not-found` diagnostic. Unsupported or
+  ambiguous code expressions do not create the edge.
+- Existing Knowledge Model types are used: route declarations are `operation`
+  entities, Scala components are `module` entities, and downstream service
+  identifiers are `api` entities. Provenance facts carry the HMRC parser-pack
+  version, repository boundary, component role, and semantic relationship
+  label. These are deterministic static facts, not runtime flows.
 
 ## Processor contracts
 
@@ -112,17 +130,17 @@ contracts do not imply that those facts are currently produced.
 | Field                          | Contract                                                                                                                                                                                       |
 | ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | ID / version                   | `hmrc-play-route-facts` / `1`                                                                                                                                                                  |
-| Owner / purpose                | HMRC parser pack; retain explicit route declarations as typed validation candidates without assigning them Knowledge Model operation semantics.                                                |
+| Owner / purpose                | HMRC parser pack; retain exact route facts for publication as `operation` entities and route-to-controller relationships.                                                                      |
 | Supported source types         | Structured evidence from `play-routes`.                                                                                                                                                        |
 | Evidence consumed              | A single route document version's structured route records.                                                                                                                                    |
-| Entities authorized            | None. `PlayRouteCandidate` is validation-only and not a Knowledge Model entity.                                                                                                                |
-| Relationships authorized       | None.                                                                                                                                                                                          |
+| Entities authorized            | `app` route declarations may become `operation` entities during publication reconciliation; other route sets remain evidence only.                                                             |
+| Relationships authorized       | Resolved `app` routes may create `USES` with semantic fact `IMPLEMENTED_BY` and reverse `EXPOSES` with semantic fact `EXPOSES_ENDPOINT`.                                                       |
 | Deterministic extraction rules | Retain method/path/handler as exact declared facts; candidate includes route-set and explicit mount context where present. Test/definition/other route candidates retain their classification. |
 | Stable identity rules          | Parser-local route candidate identity from repository scope + route-set + normalized relative route-file + exact method/path/handler. It does not use the published entity-key contract.       |
 | Required provenance            | Common contract and the exact route evidence; extractor ID/version and parser-pack facts are mandatory.                                                                                        |
-| Rejection rules                | No candidate without method, path, handler, evidence locator, or recognized route syntax. No `EXPOSES` edge or claim of deployable/public endpoint.                                            |
+| Rejection rules                | No candidate without method, path, handler, evidence locator, or recognized route syntax. Non-`app` sets never become production endpoints.                                                    |
 | Unresolved-reference behaviour | Retain a written unresolved handler; symbol resolution is a separate corpus candidate.                                                                                                         |
-| Compatibility requirements     | Validation-only; no `operation` candidate and no changes to entity/relationship vocabularies, hashes, export envelope, or historical snapshots.                                                |
+| Compatibility requirements     | Existing entity/relationship vocabularies, hashes, export envelope, and historical snapshots are unchanged.                                                                                    |
 | Positive examples              | A non-comment, parsed `POST /agents ...` declaration with line evidence emits one `PlayRouteCandidate`.                                                                                        |
 | Negative examples              | No candidate from a comment, test route represented as production, joined mount path, or inferred route from controller code.                                                                  |
 
@@ -131,38 +149,50 @@ contracts do not imply that those facts are currently produced.
 | Field                          | Contract                                                                                                                                                                                                                                                                              |
 | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | ID / version                   | `hmrc-scala-components` / `1`                                                                                                                                                                                                                                                         |
-| Owner / purpose                | HMRC parser pack; resolve package-qualified Scala declarations, limited component roles, constructor dependencies, and direct calls for validation.                                                                                                                                   |
+| Owner / purpose                | HMRC parser pack; resolve package-qualified Scala declarations, constructor dependencies, and direct calls for repository-scoped publication.                                                                                                                                         |
 | Supported source types         | Structured evidence from `scala-source`; corpus scope is one discovered repository boundary.                                                                                                                                                                                          |
 | Evidence consumed              | Scala declaration/call evidence across source documents and route-handler facts.                                                                                                                                                                                                      |
-| Entities authorized            | Validation-only `ComponentCandidate` records; no Knowledge Model component/entity.                                                                                                                                                                                                    |
-| Relationships authorized       | Validation-only constructor-dependency and direct-call facts; no Knowledge Model relationship.                                                                                                                                                                                        |
+| Entities authorized            | Resolved components may become `module` entities; controller roles come from routes/base types, service roles from controller injection, and connector roles from direct HTTP calls.                                                                                                  |
+| Relationships authorized       | Constructor links use `DEPENDS_ON`; exact direct calls use `USES` with semantic fact `CALLS`.                                                                                                                                                                                         |
 | Deterministic extraction rules | Resolve a role only from supported declaration/type/usage evidence; suffixes and folder paths are hints but never sufficient. Resolve handler and call target only by exact package-qualified symbol/type and method match. Distinguish constructor parameter from actual invocation. |
 | Stable identity rules          | Repository-relative package-qualified declaration + kind + normalized signature; calls add enclosing method and exact call-site locator.                                                                                                                                              |
 | Required provenance            | Common contract; every role/dependency/call fact references exact declaration and call evidence as relevant.                                                                                                                                                                          |
 | Rejection rules                | Reject ambiguous duplicate symbols, unresolved types, suffix-only roles, unresolved overloads, dynamic dispatch, reflection, macros, generated sources, and inferred service layers.                                                                                                  |
 | Unresolved-reference behaviour | Preserve raw handler/call text, line and reason in diagnostics; do not link by simple class/method basename.                                                                                                                                                                          |
-| Compatibility requirements     | Candidate-only and non-published; all input documents must belong to the same repository boundary.                                                                                                                                                                                    |
+| Compatibility requirements     | All joined input documents must belong to the same immutable repository boundary; no new publication vocabulary is introduced.                                                                                                                                                        |
 | Positive examples              | Route handler resolves to `pkg.Ctrl.get`; `class Ctrl @Inject() (svc: Svc)` plus a visible `svc.run()` resolves dependency and call separately.                                                                                                                                       |
 | Negative examples              | `class Ctrl(repo: Repo) { def get = Ok }` does not create a call to `repo`; a `Repository` suffix without explicit repository operations does not establish a repository role.                                                                                                        |
 
 ### HMRC HTTP connector candidate extractor
 
-| Field                          | Contract                                                                                                                                                                                                                                              |
-| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| ID / version                   | `hmrc-http-connectors` / `1`                                                                                                                                                                                                                          |
-| Owner / purpose                | HMRC parser pack; emit validation-only candidates for explicitly written HTTP verb calls on a constructor parameter typed `HttpClientV2`.                                                                                                             |
-| Supported source types         | Scala constructor-parameter and call-site evidence.                                                                                                                                                                                                   |
-| Evidence consumed              | `HttpClientV2`-typed constructor parameter and a direct recognized verb call using that parameter as receiver.                                                                                                                                        |
-| Entities authorized            | Validation-only HTTP interaction candidates; no Knowledge Model entity.                                                                                                                                                                               |
-| Relationships authorized       | Validation-only request and call-site facts; no Knowledge Model edge.                                                                                                                                                                                 |
-| Deterministic extraction rules | Record the written verb and target expression for direct `get`, `post`, `put`, `patch`, `delete`, `head`, `options`, or `request` calls. This does not establish execution, final URL, downstream identity, request completion, or response behavior. |
-| Stable identity rules          | Enclosing package-qualified method + exact call-site identity.                                                                                                                                                                                        |
-| Required provenance            | Common contract plus constructor-parameter and call-site evidence.                                                                                                                                                                                    |
-| Rejection rules                | Do not infer named integrations, configured destinations, remote success, hidden headers, credentials, or runtime behavior.                                                                                                                           |
-| Unresolved-reference behaviour | Preserve the exact target expression; HOCON substitutions and AppConfig access are not resolved by the current implementation.                                                                                                                        |
-| Compatibility requirements     | Candidate-only; no network requests or runtime configuration reads during extraction.                                                                                                                                                                 |
-| Positive examples              | `http.get(url"$serviceBase/path")` on an injected `HttpClientV2` parameter emits a direct HTTP verb candidate with the call-site evidence.                                                                                                            |
-| Negative examples              | Injected but unused connector or a comment mentioning `HttpClientV2` does not emit an interaction candidate.                                                                                                                                          |
+| Field                          | Contract                                                                                                                                                                                                                    |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ID / version                   | `hmrc-http-connectors` / `1`                                                                                                                                                                                                |
+| Owner / purpose                | HMRC parser pack; identify explicit `HttpClientV2` calls and resolve supported service identifiers for publication.                                                                                                         |
+| Supported source types         | Scala constructor-parameter and call-site evidence.                                                                                                                                                                         |
+| Evidence consumed              | `HttpClientV2`-typed constructor parameter and a direct recognized verb call using that parameter as receiver.                                                                                                              |
+| Entities authorized            | Exactly resolved service identifiers may become `api` downstream-system entities.                                                                                                                                           |
+| Relationships authorized       | `CONSUMES` links with semantic fact `HTTP` connect the connector to that service identifier.                                                                                                                                |
+| Deterministic extraction rules | Record direct supported HTTP verbs and resolve only exact URL/value chains ending in a literal `ServicesConfig.baseUrl` service ID. This does not establish execution, final URL, request completion, or response behavior. |
+| Stable identity rules          | Enclosing package-qualified method + exact call-site identity.                                                                                                                                                              |
+| Required provenance            | Common contract plus constructor-parameter and call-site evidence.                                                                                                                                                          |
+| Rejection rules                | Do not infer integrations from names alone, remote success, hidden headers, credentials, or runtime behavior.                                                                                                               |
+| Unresolved-reference behaviour | Preserve the exact target expression and emit a diagnostic; ambiguous or unsupported expressions do not create a downstream edge.                                                                                           |
+| Compatibility requirements     | No network requests or runtime configuration reads during extraction; HOCON host keys corroborate service identity but their values are not interpreted.                                                                    |
+| Positive examples              | `http.get(url"$serviceBase/path")` on an injected `HttpClientV2` parameter emits a direct HTTP verb candidate with the call-site evidence.                                                                                  |
+| Negative examples              | Injected but unused connector or a comment mentioning `HttpClientV2` does not emit an interaction candidate.                                                                                                                |
+
+### Publication reconciliation
+
+Publication consumes active route, Scala, and HOCON evidence per model and
+nearest Git boundary. It recalculates the parser-pack graph when any document
+contribution changes or is withdrawn. Exact relationships retain evidence from
+all supporting document versions. Test/integration-test paths are excluded;
+only `app.routes` declarations are emitted as production `operation` entities.
+If code resolves an explicit service ID but the exact HOCON host key is absent,
+the named downstream edge remains publishable and carries an unresolved
+`downstream-hocon-host-not-found` diagnostic. Parser-pack facts on published
+provenance carry `hmrc-scala-play@2`; old publications remain immutable.
 
 ### HMRC persistence candidate extractor
 
