@@ -24,7 +24,8 @@ import { cn } from './lib/utils';
 import { SCREENS } from './screens';
 
 function screenFromHash(): string {
-  const id = window.location.hash.replace(/^#\/?/, '');
+  // Screens may deep link below their id, e.g. `#/how-it-works/glossary/evidence`.
+  const id = window.location.hash.replace(/^#\/?/, '').split('/')[0] ?? '';
   return SCREENS.some((screen) => screen.id === id) ? id : SCREENS[0]!.id;
 }
 
