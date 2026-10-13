@@ -193,17 +193,17 @@ export function AdrScreen() {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 lg:flex lg:h-[calc(100dvh-7.5rem)] lg:flex-col">
       <ScreenHeader
         eyebrow="Architecture Decisions"
         title="Browse architecture decisions"
         lead="Architecture Decision Records (ADRs) capture architectural choices. Select a record to see the documents that link to it and the source evidence behind it."
       />
 
-      <div className="grid items-start gap-4 lg:grid-cols-[20rem_minmax(0,1fr)]">
+      <div className="grid gap-4 lg:min-h-0 lg:flex-1 lg:grid-cols-[20rem_minmax(0,1fr)] lg:grid-rows-1">
         <section
           aria-label="Decision browser"
-          className="min-w-0 rounded-2xl border bg-card"
+          className="min-w-0 rounded-2xl border bg-card lg:flex lg:min-h-0 lg:flex-col"
         >
           <div className="space-y-3 border-b p-4">
             <label className="block space-y-1 text-sm">
@@ -239,7 +239,7 @@ export function AdrScreen() {
               {scoped.length} of {decisions.length} decisions
             </p>
           </div>
-          <div className="max-h-72 overflow-y-auto p-2 lg:max-h-[28rem]">
+          <div className="max-h-72 overflow-y-auto p-2 lg:min-h-0 lg:flex-1 lg:max-h-none">
             {scoped.length ? (
               <ul className="space-y-1">
                 {scoped.map((decision) => (
@@ -268,6 +268,10 @@ export function AdrScreen() {
                         {decision.title ??
                           'Title not available in this publication'}
                       </span>
+                      <span className="mt-1 line-clamp-2 block text-xs leading-relaxed text-muted-foreground">
+                        {decision.summary ??
+                          'Summary unavailable in this publication.'}
+                      </span>
                       <span className="mt-1 block text-xs text-muted-foreground">
                         {decision.referencedBy.length} explicit{' '}
                         {decision.referencedBy.length === 1
@@ -290,7 +294,7 @@ export function AdrScreen() {
         <section
           id="adr-details"
           aria-labelledby="adr-details-heading"
-          className="min-w-0 rounded-2xl border bg-card p-4 lg:max-h-[calc(100dvh-18rem)] lg:overflow-y-auto"
+          className="min-w-0 rounded-2xl border bg-card p-4 lg:min-h-0 lg:overflow-y-auto"
         >
           <h2
             id="adr-details-heading"
@@ -320,6 +324,15 @@ export function AdrScreen() {
                     </h3>
                     <p className="mt-1 text-sm text-muted-foreground">
                       Repository: {selected.repository}
+                    </p>
+                  </div>
+                  <div>
+                    <h3 className="mb-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                      Decision summary
+                    </h3>
+                    <p className="text-sm leading-relaxed">
+                      {selected.summary ??
+                        'Summary unavailable in this publication.'}
                     </p>
                   </div>
                   <div>

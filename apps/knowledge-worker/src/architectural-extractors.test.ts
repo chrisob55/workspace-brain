@@ -390,4 +390,37 @@ describe('architectural extractor registry', () => {
     );
     expect(commented.relationships).toEqual([]);
   });
+
+  it('publishes the first authored sentence under an ADR Decision heading', () => {
+    const result = extractKnowledgeCandidates(
+      inputs(
+        'root/project/docs/ADR-003-authority.md',
+        [
+          '# ADR-003: Authority',
+          '',
+          '## Context',
+          '',
+          'This is context, not a decision summary.',
+          '',
+          '## Decision',
+          '',
+          'Source repositories remain authoritative. Later sentences are not included.',
+        ].join('\n'),
+      ),
+    );
+    const decision = result.entities.find(
+      (entity) => entity.type === 'architectural-decision',
+    );
+
+    expect(decision?.provenance).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          knowledgeExtractorVersion: 2,
+          facts: {
+            decisionSummary: 'Source repositories remain authoritative.',
+          },
+        }),
+      ]),
+    );
+  });
 });

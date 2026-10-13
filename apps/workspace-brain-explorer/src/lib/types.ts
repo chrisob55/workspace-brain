@@ -79,6 +79,7 @@ export interface ProvenanceItem {
   processorId: string;
   processorVersion: number;
   sourceId: string;
+  facts?: Record<string, string>;
 }
 
 export interface KnowledgeEntity {
