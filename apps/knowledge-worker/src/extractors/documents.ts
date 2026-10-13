@@ -100,7 +100,7 @@ export const markdownReferenceExtractor: KnowledgeExtractor = {
 
 export const adrExtractor: KnowledgeExtractor = {
   id: 'architectural-decisions',
-  version: 1,
+  version: 2,
   supports: (inputs) => markdown(inputs),
   extract(inputs) {
     const output = new CandidateBuilder(this.id, this.version);
@@ -119,6 +119,24 @@ export const adrExtractor: KnowledgeExtractor = {
     for (const input of inputs) {
       if (input.evidence.truncated || input.evidence.kind === 'code-block')
         continue;
+      const decisionSummary =
+        isAdr &&
+        input.evidence.locator.kind === 'markdown-lines' &&
+        input.evidence.locator.headingPath?.some(
+          (heading) => heading.trim().toLowerCase() === 'decision',
+        ) &&
+        ['paragraph', 'list-item'].includes(input.evidence.kind)
+          ? firstSentence(input.evidence.excerpt)
+          : undefined;
+      if (decisionSummary) {
+        documentEntity(
+          output,
+          input,
+          undefined,
+          { facts: { decisionSummary } },
+          decisionId,
+        );
+      }
       const metadata = input.evidence.key.startsWith('markdown-metadata:')
         ? /^(?:[-*]\s+)?(?:\*\*)?(Status|Supersedes|Superseded[- ]by|Related decisions|References|ADR-ID):(?:\*\*)?\s*(.+)$/i.exec(
             input.evidence.excerpt,
@@ -214,3 +232,14 @@ export const adrExtractor: KnowledgeExtractor = {
     return output.result();
   },
 };
+
+function firstSentence(text: string): string {
+  const normalized = text
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/[`*_~]/g, '')
+    .replace(/^\s*(?:[-*+]|\d+[.)])\s+/, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const sentence = normalized.match(/^.*?[.!?](?=\s|$)/)?.[0] ?? normalized;
+  return sentence.slice(0, 4096);
+}

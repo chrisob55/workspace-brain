@@ -8,6 +8,7 @@ import type { KnowledgeEntity, KnowledgeRelationship } from './types';
 export interface Decision {
   entity: KnowledgeEntity;
   title: string | undefined;
+  summary: string | undefined;
   repository: string;
   referencedBy: KnowledgeRelationship[];
 }
@@ -36,12 +37,18 @@ export function decisionTitle(entity: KnowledgeEntity): string | undefined {
   return undefined;
 }
 
+export function decisionSummary(entity: KnowledgeEntity): string | undefined {
+  return entity.provenance.find((item) => item.facts?.decisionSummary)?.facts
+    ?.decisionSummary;
+}
+
 export function collectDecisions(graph: KnowledgeGraph): Decision[] {
   return graph.entities
     .filter((entity) => entity.type === 'architectural-decision')
     .map((entity) => ({
       entity,
       title: decisionTitle(entity),
+      summary: decisionSummary(entity),
       repository: repositoryOfEntity(entity),
       referencedBy: (graph.relationshipsByEntity.get(entity.id) ?? []).filter(
         (rel) => rel.type === 'REFERENCES' && rel.targetEntityId === entity.id,

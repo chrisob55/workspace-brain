@@ -1,7 +1,12 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
-import { collectDecisions, decisionTitle, filterDecisions } from './decisions';
+import {
+  collectDecisions,
+  decisionSummary,
+  decisionTitle,
+  filterDecisions,
+} from './decisions';
 import { buildKnowledgeGraph } from './knowledge-graph';
 import type {
   KnowledgeEntity,
@@ -57,6 +62,19 @@ describe('decision browser', () => {
       headingPath: ['ADR-001: Local-first AI'],
     };
     expect(decisionTitle(entity)).toBe('Local-first AI');
+  });
+
+  it('uses an authored decision summary when the publication includes one', () => {
+    const entity = entityWithPaths([
+      'root/repo/ADR-001-workspace-brain-product-boundary.md',
+    ]);
+    entity.provenance[0]!.facts = {
+      decisionSummary: 'Workspace Brain produces Knowledge Models.',
+    };
+    expect(decisionSummary(entity)).toBe(
+      'Workspace Brain produces Knowledge Models.',
+    );
+    expect(decisionSummary(example.entity)).toBeUndefined();
   });
 
   it('shows all repositories by default and distinguishes duplicate ADR numbers', () => {

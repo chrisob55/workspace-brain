@@ -25,11 +25,14 @@ export package. If the API is unreachable it falls back to the bundled
 5. OpenAPI Visualiser — operations exposed by each API contract.
 6. Architecture Decisions — search ADRs by number, descriptive title or source
    path across repositories, with an explicitly labelled repository filter.
-   Selecting a record shows its references and source evidence beside the list
-   on desktop, or scrolls the details into view on smaller screens. Titles use
-   recorded source headings or readable ADR filenames where available; missing
-   titles are identified rather than invented. An optional graph shows documents
-   linking to the selected ADR, not inferred dependencies between decisions.
+   Each record shows the first authored sentence under its `Decision` heading
+   when the publication includes it; older publications identify missing
+   summaries rather than inventing them. Selecting a record shows its summary,
+   references and source evidence beside the list on desktop, or scrolls the
+   details into view on smaller screens. Titles use recorded source headings or
+   readable ADR filenames where available; missing titles are identified rather
+   than invented. An optional graph shows documents linking to the selected
+   ADR, not inferred dependencies between decisions.
 7. Parser Ecosystem — current and planned parser packs feeding one model.
 8. Behavioural Flow Vision — proposed ADR-027 direction; flow modelling is not
    implemented and is distinguished from current structural knowledge.
