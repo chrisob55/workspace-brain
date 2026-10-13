@@ -4,7 +4,7 @@
 - **API base URL:** `http://localhost:3000`
 - **Latest publication:** `01M4QYH0Z0MGCPXYKW74P40XPJ` (version 664)
 - **Assessment:** **PASS with material semantic-depth warnings**
-**Overall score:** **7/10**
+  **Overall score:** **7/10**
 
 > Large list and export responses are represented below by compact JSON excerpts and
 > measured aggregates rather than copied wholesale. The latest publication export
@@ -95,12 +95,21 @@ curl -s http://localhost:3000/api/v1/repositories?limit=100 | jq
 ```json
 {
   "count": 19,
-  "repositoryTypes": [{"type": "git", "count": 19}],
+  "repositoryTypes": [{ "type": "git", "count": 19 }],
   "examples": [
-    {"path": "01M48WSQDV4P0XDVFRE72RFVXP/workspace-brain", "repositoryType": "git"},
-    {"path": "01M48WSQDV4P0XDVFRE72RFVXP/ai-os", "repositoryType": "git"},
-    {"path": "01M48WSQDV4P0XDVFRE72RFVXP/ai-os/workspace/mobile-help-to-save", "repositoryType": "git"},
-    {"path": "01M48WSQDV4P0XDVFRE72RFVXP/agent-access-control", "repositoryType": "git"}
+    {
+      "path": "01M48WSQDV4P0XDVFRE72RFVXP/workspace-brain",
+      "repositoryType": "git"
+    },
+    { "path": "01M48WSQDV4P0XDVFRE72RFVXP/ai-os", "repositoryType": "git" },
+    {
+      "path": "01M48WSQDV4P0XDVFRE72RFVXP/ai-os/workspace/mobile-help-to-save",
+      "repositoryType": "git"
+    },
+    {
+      "path": "01M48WSQDV4P0XDVFRE72RFVXP/agent-access-control",
+      "repositoryType": "git"
+    }
   ],
   "nextCursor": null
 }
@@ -130,14 +139,16 @@ curl -s http://localhost:3000/api/v1/knowledge/models | jq
 
 ```json
 {
-  "items": [{
-    "id": "01M48WSQE5H93RMEQPZ8PF3FSB",
-    "workspaceId": "01M48WSQE03Z6TXRBM3SEVAWR7",
-    "name": "Local Workspace Knowledge Model",
-    "schemaVersion": 2,
-    "latestPublicationVersion": 664,
-    "createdAt": "2026-10-06T15:20:01.221Z"
-  }],
+  "items": [
+    {
+      "id": "01M48WSQE5H93RMEQPZ8PF3FSB",
+      "workspaceId": "01M48WSQE03Z6TXRBM3SEVAWR7",
+      "name": "Local Workspace Knowledge Model",
+      "schemaVersion": 2,
+      "latestPublicationVersion": 664,
+      "createdAt": "2026-10-06T15:20:01.221Z"
+    }
+  ],
   "nextCursor": null
 }
 ```
@@ -160,16 +171,16 @@ curl -s http://localhost:3000/api/v1/knowledge/entities?limit=100 | jq
 - First-page types: `api` 1, `container` 1, `module` 62, `package` 36.
 - The latest publication export provides the broader inventory (463 entities):
 
-| Entity type | Count |
-|---|---:|
-| api | 11 |
-| container | 1 |
-| module | 90 |
-| repository | 19 |
-| operation | 82 |
-| document | 139 |
-| architectural-decision | 39 |
-| package | 82 |
+| Entity type            | Count |
+| ---------------------- | ----: |
+| api                    |    11 |
+| container              |     1 |
+| module                 |    90 |
+| repository             |    19 |
+| operation              |    82 |
+| document               |   139 |
+| architectural-decision |    39 |
+| package                |    82 |
 
 - The first page's top 20 names (alphabetically, including distinct entities
   sharing a name) are primarily module/package artifacts, such as
@@ -223,9 +234,14 @@ curl -s http://localhost:3000/api/v1/knowledge/entities?limit=100 | jq
     "sourceEvidenceIds": ["01M4FT7RNWT3K6HYZFEPT3D7HB"]
   },
   "latestPublicationEntityCounts": {
-    "api": 11, "architectural-decision": 39, "container": 1,
-    "document": 139, "module": 90, "operation": 82,
-    "package": 82, "repository": 19
+    "api": 11,
+    "architectural-decision": 39,
+    "container": 1,
+    "document": 139,
+    "module": 90,
+    "operation": 82,
+    "package": 82,
+    "repository": 19
   }
 }
 ```
@@ -247,17 +263,17 @@ Retrying at `limit=100` returned 100 records and a next cursor. The latest
 publication export was used for complete relationship counts.
 
 | Relationship type | Count |
-|---|---:|
-| DEPENDS_ON | 377 |
-| USES | 0 |
-| EXPOSES | 82 |
-| CONSUMES | 0 |
-| IMPLEMENTS | 0 |
-| REFERENCES | 100 |
-| DOCUMENTS | 0 |
-| CONTAINS | 78 |
-| BELONGS_TO | 0 |
-| CLASSIFIED_AS | 0 |
+| ----------------- | ----: |
+| DEPENDS_ON        |   377 |
+| USES              |     0 |
+| EXPOSES           |    82 |
+| CONSUMES          |     0 |
+| IMPLEMENTS        |     0 |
+| REFERENCES        |   100 |
+| DOCUMENTS         |     0 |
+| CONTAINS          |    78 |
+| BELONGS_TO        |     0 |
+| CLASSIFIED_AS     |     0 |
 
 **Findings**
 
@@ -278,15 +294,15 @@ publication export was used for complete relationship counts.
 {
   "relationshipCount": 637,
   "relationshipTypes": [
-    {"type": "CONTAINS", "count": 78},
-    {"type": "DEPENDS_ON", "count": 377},
-    {"type": "EXPOSES", "count": 82},
-    {"type": "REFERENCES", "count": 100}
+    { "type": "CONTAINS", "count": 78 },
+    { "type": "DEPENDS_ON", "count": 377 },
+    { "type": "EXPOSES", "count": 82 },
+    { "type": "REFERENCES", "count": 100 }
   ],
   "example": {
     "type": "EXPOSES",
-    "source": {"name": "Workspace Brain API", "type": "api"},
-    "target": {"name": "listDocumentEvidence", "type": "operation"}
+    "source": { "name": "Workspace Brain API", "type": "api" },
+    "target": { "name": "listDocumentEvidence", "type": "operation" }
   }
 }
 ```
@@ -323,17 +339,29 @@ curl -s "http://localhost:3000/api/v1/search/entities?query=eacd" | jq
   "agent": {
     "count": 33,
     "sample": [
-      {"type": "api", "name": "Agent Client Enrolments API", "relationshipCount": 0},
-      {"type": "api", "name": "Agent Authorisation", "relationshipCount": 6},
-      {"type": "api", "name": "Agent Client Relationships API", "relationshipCount": 22},
-      {"type": "operation", "name": "terminateAgent", "relationshipCount": 1}
+      {
+        "type": "api",
+        "name": "Agent Client Enrolments API",
+        "relationshipCount": 0
+      },
+      { "type": "api", "name": "Agent Authorisation", "relationshipCount": 6 },
+      {
+        "type": "api",
+        "name": "Agent Client Relationships API",
+        "relationshipCount": 22
+      },
+      { "type": "operation", "name": "terminateAgent", "relationshipCount": 1 }
     ]
   },
   "enrolment": {
     "count": 3,
-    "names": ["Agent Client Enrolments API", "agent-client-enrolments", "Agent Client Enrolments"]
+    "names": [
+      "Agent Client Enrolments API",
+      "agent-client-enrolments",
+      "Agent Client Enrolments"
+    ]
   },
-  "eacd": {"count": 0, "items": [], "nextCursor": null}
+  "eacd": { "count": 0, "items": [], "nextCursor": null }
 }
 ```
 
@@ -462,21 +490,23 @@ curl -s "http://localhost:3000/api/v1/knowledge/entities/$ENTITY_ID" | jq
     "01M4QYEAKGNHH6GH5NAWNXN16M",
     "01M4QYEAKGY88TFWTZMC1PANKM"
   ],
-  "provenance": [{
-    "evidenceId": "01M4QYEAKF6NNNFXZTN84S20PV",
-    "documentVersionId": "01M4QYEAFXWEAT6MHESXF51KYC",
-    "documentId": "01M4QY86NQ5B4QFV40FHPETZGJ",
-    "sourceId": "01M48WSQDT3RQNS93F0A97ZRQG",
-    "documentPath": "01M48WSQDV4P0XDVFRE72RFVXP/agent-client-relationships/openapi.yaml",
-    "contentFingerprint": "c621c7ef11502cd74ad65183ba0d0bd98c80895287c4f3827d0c30896f3033db",
-    "locator": {"kind": "yaml-lines", "lineStart": 3, "lineEnd": 3},
-    "processorId": "yaml",
-    "processorVersion": 3,
-    "extractionRuleId": "yaml-scalar-values",
-    "extractionRuleVersion": 1,
-    "knowledgeExtractorId": "openapi-operations",
-    "knowledgeExtractorVersion": 1
-  }]
+  "provenance": [
+    {
+      "evidenceId": "01M4QYEAKF6NNNFXZTN84S20PV",
+      "documentVersionId": "01M4QYEAFXWEAT6MHESXF51KYC",
+      "documentId": "01M4QY86NQ5B4QFV40FHPETZGJ",
+      "sourceId": "01M48WSQDT3RQNS93F0A97ZRQG",
+      "documentPath": "01M48WSQDV4P0XDVFRE72RFVXP/agent-client-relationships/openapi.yaml",
+      "contentFingerprint": "c621c7ef11502cd74ad65183ba0d0bd98c80895287c4f3827d0c30896f3033db",
+      "locator": { "kind": "yaml-lines", "lineStart": 3, "lineEnd": 3 },
+      "processorId": "yaml",
+      "processorVersion": 3,
+      "extractionRuleId": "yaml-scalar-values",
+      "extractionRuleVersion": 1,
+      "knowledgeExtractorId": "openapi-operations",
+      "knowledgeExtractorVersion": 1
+    }
+  ]
 }
 ```
 
