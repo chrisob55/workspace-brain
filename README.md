@@ -158,6 +158,7 @@ freshness remains outside document-based currency.
 | `apps/workspace-brain-api/`      | HTTP API and catalogue-facing operations            |
 | `apps/ingestion-worker/`         | Read-only filesystem scanning and discovery         |
 | `apps/workspace-brain-explorer/` | Visual product showcase of published knowledge      |
+| `apps/workspace-brain-mcp/`      | Read-only MCP server over the HTTP API              |
 | `packages/`                      | Domain, configuration, and catalogue contracts      |
 | `infrastructure/`                | DuckDB, filesystem, and NATS adapters               |
 | `config/`                        | Example Workspace Brain configuration               |
