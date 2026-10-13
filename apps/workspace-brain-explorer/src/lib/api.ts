@@ -89,6 +89,10 @@ export const api = {
     return total;
   },
 
+  /** Arbitrary read used by the "Run request" buttons in the documentation. */
+  request: (path: string, signal?: AbortSignal) =>
+    getJson<unknown>(path, signal),
+
   snapshot: async (signal?: AbortSignal) => {
     const response = await fetch(SNAPSHOT_URL, signal ? { signal } : {});
     if (!response.ok)

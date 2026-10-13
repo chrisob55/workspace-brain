@@ -5,6 +5,7 @@ import {
   Compass,
   Cpu,
   GitCompareArrows,
+  GraduationCap,
   Landmark,
   Network,
   Puzzle,
@@ -26,6 +27,7 @@ import { ExplainWhyScreen } from './screens/explain-why-screen';
 import { FutureScreen } from './screens/future-screen';
 import { GlossaryScreen } from './screens/glossary-screen';
 import { GraphExplorerScreen } from './screens/graph-explorer-screen';
+import { HowItWorksScreen } from './screens/how-it-works-screen';
 import { OpenApiScreen } from './screens/openapi-screen';
 import { OverviewScreen } from './screens/overview-screen';
 import { ParserEcosystemScreen } from './screens/parser-ecosystem-screen';
@@ -47,6 +49,13 @@ export const SCREENS: ScreenDefinition[] = [
     question: 'What is Workspace Brain?',
     icon: Sparkles,
     component: OverviewScreen,
+  },
+  {
+    id: 'how-it-works',
+    title: 'How Workspace Brain Works',
+    question: 'How does it all work, end to end?',
+    icon: GraduationCap,
+    component: HowItWorksScreen,
   },
   {
     id: 'architecture-map',
