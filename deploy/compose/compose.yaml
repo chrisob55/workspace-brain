@@ -3,6 +3,8 @@ services:
     build:
       context: ../..
       dockerfile: deploy/compose/Dockerfile
+      args:
+        TURBO_BUILD_ARGS: ${TURBO_BUILD_ARGS:-}
     command: ['node', 'apps/workspace-brain-api/dist/main.js']
     environment:
       CATALOGUE_PATH: /var/lib/workspace-brain/catalogue.duckdb
@@ -35,10 +37,119 @@ services:
       retries: 5
       start_period: 10s
 
+  # LibreChat starts the MCP server itself over stdio, so the server is baked
+  # into the LibreChat image (librechat/Dockerfile) at /app/mcp/workspace-brain.
+  librechat:
+    image: workspace-brain-librechat:local
+    build:
+      context: ../..
+      dockerfile: deploy/compose/librechat/Dockerfile
+    profiles: [librechat]
+    # Fail fast, with a clear message, if the secrets were not provided.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        missing=""
+        for v in CREDS_KEY CREDS_IV JWT_SECRET JWT_REFRESH_SECRET; do
+          [ -n "$$(printenv $$v)" ] || missing="$$missing $$v"
+        done
+        if [ -n "$$missing" ]; then
+          echo "LibreChat secrets missing:$$missing. Run: pnpm librechat:env" >&2
+          exit 1
+        fi
+        exec docker-entrypoint.sh "$$@"
+      - --
+    command: ['npm', 'run', 'backend']
+    ports:
+      - '127.0.0.1:${LIBRECHAT_PORT:-3080}:3080'
+    environment:
+      HOST: 0.0.0.0
+      PORT: 3080
+      MONGO_URI: mongodb://librechat-mongo:27017/LibreChat
+      DOMAIN_CLIENT: http://localhost:${LIBRECHAT_PORT:-3080}
+      DOMAIN_SERVER: http://localhost:${LIBRECHAT_PORT:-3080}
+      CREDS_KEY: ${LIBRECHAT_CREDS_KEY:-}
+      CREDS_IV: ${LIBRECHAT_CREDS_IV:-}
+      JWT_SECRET: ${LIBRECHAT_JWT_SECRET:-}
+      JWT_REFRESH_SECRET: ${LIBRECHAT_JWT_REFRESH_SECRET:-}
+      ALLOW_REGISTRATION: 'true'
+      SEARCH: 'false'
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-user_provided}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-user_provided}
+    volumes:
+      - ./librechat/librechat.yaml:/app/librechat.yaml:ro
+      - librechat-uploads:/app/uploads
+      - librechat-logs:/app/logs
+    networks:
+      - librechat
+      - api-host
+    depends_on:
+      librechat-mongo:
+        condition: service_healthy
+      workspace-brain-api:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3080/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+    restart: unless-stopped
+
+  librechat-mongo:
+    image: mongo:7.0
+    profiles: [librechat]
+    command: ['mongod', '--noauth', '--bind_ip_all']
+    volumes:
+      - librechat-mongo-data:/data/db
+    networks:
+      - librechat
+    healthcheck:
+      test:
+        ['CMD', 'mongosh', '--quiet', '--eval', "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    restart: unless-stopped
+
+  # Runs the MCP smoke test inside the LibreChat image, launching the server
+  # exactly as librechat.yaml does. Opt in with --profile test.
+  workspace-brain-mcp-smoke:
+    image: workspace-brain-librechat:local
+    build:
+      context: ../..
+      dockerfile: deploy/compose/librechat/Dockerfile
+    profiles: [test]
+    entrypoint:
+      [
+        'node',
+        '/app/mcp/workspace-brain/dist/smoke/cli.js',
+        '--librechat-config',
+        '/app/librechat.yaml',
+      ]
+    command: ['--scenario', 'happy']
+    volumes:
+      - ./librechat/librechat.yaml:/app/librechat.yaml:ro
+    networks:
+      - api-host
+    depends_on:
+      workspace-brain-api:
+        condition: service_healthy
+
   ingestion-worker:
     build:
       context: ../..
       dockerfile: deploy/compose/Dockerfile
+      args:
+        TURBO_BUILD_ARGS: ${TURBO_BUILD_ARGS:-}
     command: ['node', 'apps/ingestion-worker/dist/main.js']
     environment:
       LOG_LEVEL: info
@@ -59,6 +170,8 @@ services:
     build:
       context: ../..
       dockerfile: deploy/compose/Dockerfile
+      args:
+        TURBO_BUILD_ARGS: ${TURBO_BUILD_ARGS:-}
     command: ['node', 'apps/knowledge-worker/dist/main.js']
     environment:
       LOG_LEVEL: info
@@ -109,9 +222,14 @@ networks:
   backend:
     internal: true
   api-host:
+  librechat:
+    internal: true
 
 volumes:
   catalogue-data:
   nats-data:
   qdrant-data:
   ollama-data:
+  librechat-uploads:
+  librechat-logs:
+  librechat-mongo-data:

@@ -94,6 +94,16 @@ To run the API and ingestion worker with Docker Compose:
 docker compose -f deploy/compose/compose.yaml up --build
 ```
 
+To also run LibreChat with the Workspace Brain MCP server pre-wired (opt-in
+`librechat` profile, served on `http://localhost:3080`, not port 3000):
+
+```sh
+pnpm librechat:up
+```
+
+See [docs/librechat-compose.md](docs/librechat-compose.md) for setup, tests and
+troubleshooting.
+
 By default, Compose mounts `./sources` read-only into the ingestion worker.
 Place a test workspace there or set `WORKSPACE_SOURCES_PATH` to another
 directory. The API is available at `http://localhost:3000`; its health and
