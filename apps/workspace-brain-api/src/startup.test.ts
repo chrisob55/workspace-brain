@@ -421,6 +421,97 @@ describe('API startup orchestration', () => {
     ]);
   });
 
+  it('restarts with changed source configuration after child rows have been persisted', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'workspace-brain-startup-'));
+    temporaryDirectories.push(directory);
+    let configuration = await loadConfiguration();
+    let catalogue:
+      Awaited<ReturnType<typeof createDuckDbCatalogue>> | undefined;
+    let http: FastifyInstance | undefined;
+    const dependencies = {
+      async openCatalogue() {
+        catalogue = await createDuckDbCatalogue(
+          join(directory, 'catalogue.duckdb'),
+          migrationsDirectory,
+        );
+        return catalogue;
+      },
+      async loadConfiguration() {
+        return configuration;
+      },
+      connectBus: createHarness().dependencies.connectBus,
+      createServer(openedCatalogue: StartupCatalogue) {
+        http = createApiServer(openedCatalogue, { logger: false });
+        return http;
+      },
+      logger: recordingLogger(),
+      host: '127.0.0.1',
+      port: 0,
+    };
+    let api = await startWorkspaceBrainApi(dependencies);
+
+    try {
+      const source = (await catalogue!.listSources({ limit: 10 })).items[0]!;
+      await catalogue!.persistScan(
+        source.id,
+        [],
+        [
+          {
+            path: 'README.md',
+            filename: 'README.md',
+            extension: '.md',
+            sizeBytes: 12,
+            modifiedAt: '2026-10-01T11:00:00.000Z',
+            fingerprint: 'a'.repeat(64),
+            discoveryMethod: 'filesystem',
+          },
+        ],
+        '2026-10-01T12:00:00.000Z',
+        'startup-registration-scan',
+        100,
+      );
+      const documents = await catalogue!.listDocuments({ limit: 10 });
+      await api.close();
+
+      configuration = {
+        ...configuration,
+        sources: configuration.sources.map((configuredSource) => ({
+          ...configuredSource,
+          name: `${configuredSource.name} updated`,
+          defaults: {
+            ...configuredSource.defaults,
+            max_file_size_mb: configuredSource.defaults.max_file_size_mb + 1,
+          },
+        })),
+      };
+
+      for (let restart = 0; restart < 2; restart += 1) {
+        api = await startWorkspaceBrainApi(dependencies);
+        expect(
+          (await http!.inject({ method: 'GET', url: '/ready' })).statusCode,
+        ).toBe(200);
+        expect(await catalogue!.getSource(source.id)).toEqual({
+          ...source,
+          name: configuration.sources[0]!.name,
+          maxFileSizeBytes:
+            configuration.sources[0]!.defaults.max_file_size_mb * 1024 * 1024,
+        });
+        expect(await catalogue!.listDocuments({ limit: 10 })).toEqual(
+          documents,
+        );
+        expect(
+          (await catalogue!.listSourcesForDiscovery({ limit: 10 })).items[0]
+            ?.maxFileSizeBytes,
+        ).toBe(
+          configuration.sources[0]!.defaults.max_file_size_mb * 1024 * 1024,
+        );
+        await api.close();
+      }
+    } finally {
+      await api.close();
+    }
+  });
+
   it('serves authoritative and pending search routes from a real catalogue after reconciliation fails', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'workspace-brain-startup-'));
     temporaryDirectories.push(directory);

@@ -104,6 +104,60 @@ pnpm librechat:up
 See [docs/librechat-compose.md](docs/librechat-compose.md) for setup, tests and
 troubleshooting.
 
+### Make shortcuts: backend and Explorer separately
+
+From the repository root, run `make help` for all commands. Docker Compose is
+required for the backend; the Explorer runs locally with the Node.js/pnpm
+dependencies installed above.
+
+```sh
+# Rebuild without Docker layer or Turbo task caches, then recreate containers.
+make rebuild-backend
+
+# Or rebuild/start just a selected service group and its required dependencies.
+make rebuild-api
+make rebuild-workers
+make rebuild-ingestion-worker
+make rebuild-knowledge-worker
+
+# In a separate terminal: Explorer dev server at http://localhost:5173.
+make start-explorer
+
+# Optional LibreChat-enabled stack at http://localhost:3080.
+make start-librechat
+```
+
+`make start-librechat` delegates to `pnpm librechat:up`: it generates missing
+secrets without replacing existing values, builds with normal caching, and
+starts the entire LibreChat-enabled Compose stack (including backend services,
+Mongo, Qdrant and Ollama). It waits for services to become running/healthy and
+preserves data volumes. Unlike the backend `start-*` targets, this command can
+build images; it is not a cache-free rebuild.
+
+`rebuild-*` backend commands use `--no-cache --pull`, disable local and remote
+Turbo build caches, and wait for services to become running/healthy. They do not
+delete volumes or reset the catalogue. Worker commands also bring up their
+required API/NATS/worker dependencies. The core backend excludes LibreChat,
+Qdrant and Ollama; the Explorer is never started by a backend target.
+
+For quick starts using existing images, use `make start-backend`,
+`make start-api`, `make start-workers`, `make start-ingestion-worker`, or
+`make start-knowledge-worker`. These commands deliberately do not build; use a
+`rebuild-*` target first if an image is missing or code has changed.
+
+`make start-explorer` refreshes Vite's dependency optimization cache. For a fresh
+production build instead, use `make build-explorer`, or `make rebuild-explorer`
+to build and serve the preview at `http://localhost:4173`. Both build commands
+disable Turbo caching. Stop either Explorer server with Ctrl-C. The Explorer
+proxies to `http://localhost:3000` by default; set `WORKSPACE_BRAIN_API_URL` to
+override that destination.
+
+Use `make status`, `make logs`, and `make stop-backend` for container operations.
+The stop command preserves volumes and leaves optional services alone. On
+low-memory Docker hosts, use
+`make rebuild-backend TURBO_BUILD_ARGS=--concurrency=1`. Cache-free builds still
+use the locked dependency versions; they do not upgrade dependencies.
+
 #### Rebuild and run everything
 
 Full clean rebuild of the backend, LibreChat and the explorer dev server.

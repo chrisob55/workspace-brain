@@ -1548,6 +1548,110 @@ describe('DuckDB catalogue migrations', () => {
     verificationInstance.closeSync();
   });
 
+  it('updates registered source metadata with dependants and preserves identity across reopen', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'workspace-brain-'));
+    temporaryDirectories.push(directory);
+    const databasePath = join(directory, 'catalogue.duckdb');
+    let catalogue = await createDuckDbCatalogue(
+      databasePath,
+      migrationsDirectory,
+    );
+    const sourceConfig = {
+      configId: 'referenced-source',
+      name: 'Original source',
+      rootPaths: [join(directory, 'projects')],
+      excludeDirs: ['.git'],
+      includeExtensions: ['.md'],
+      maxFileSizeBytes: 1024,
+    };
+    const workspaces = [
+      {
+        configId: 'referenced-workspace',
+        name: 'Workspace',
+        sourceConfigIds: [sourceConfig.configId],
+        include: ['**'],
+        exclude: [],
+      },
+    ];
+
+    try {
+      await catalogue.registerConfiguration([sourceConfig], workspaces);
+      const source = (await catalogue.listSources({ limit: 10 })).items[0]!;
+      await catalogue.persistScan(
+        source.id,
+        [
+          {
+            path: 'repo',
+            repositoryType: 'git',
+            fingerprint: 'a'.repeat(64),
+            discoveryMethod: 'filesystem',
+          },
+        ],
+        [
+          {
+            path: 'repo/README.md',
+            filename: 'README.md',
+            extension: '.md',
+            sizeBytes: 12,
+            modifiedAt: '2026-10-01T11:00:00.000Z',
+            fingerprint: 'b'.repeat(64),
+            discoveryMethod: 'filesystem',
+          },
+        ],
+        '2026-10-01T12:00:00.000Z',
+        'referenced-source-scan',
+        100,
+      );
+      const repositories = await catalogue.listRepositories({ limit: 10 });
+      const documents = await catalogue.listDocuments({ limit: 10 });
+      const pending = await catalogue.listPendingDiscoveryEvents(100);
+      const updatedConfig = {
+        ...sourceConfig,
+        name: 'Updated source',
+        includeExtensions: ['.md', '.scala'],
+        maxFileSizeBytes: 2048,
+      };
+
+      await catalogue.registerConfiguration([updatedConfig], workspaces);
+      expect(await catalogue.getSource(source.id)).toEqual({
+        ...source,
+        name: updatedConfig.name,
+        includeExtensions: updatedConfig.includeExtensions,
+        maxFileSizeBytes: updatedConfig.maxFileSizeBytes,
+      });
+      expect(
+        (await catalogue.listSourcesForDiscovery({ limit: 10 })).items[0],
+      ).toMatchObject({
+        sourceId: source.id,
+        roots: source.roots,
+        includeExtensions: updatedConfig.includeExtensions,
+        maxFileSizeBytes: updatedConfig.maxFileSizeBytes,
+      });
+
+      await catalogue.close();
+      catalogue = await createDuckDbCatalogue(
+        databasePath,
+        migrationsDirectory,
+      );
+      await catalogue.registerConfiguration([updatedConfig], workspaces);
+      expect((await catalogue.listSources({ limit: 10 })).items).toEqual([
+        {
+          ...source,
+          name: updatedConfig.name,
+          includeExtensions: updatedConfig.includeExtensions,
+          maxFileSizeBytes: updatedConfig.maxFileSizeBytes,
+        },
+      ]);
+      expect(await catalogue.listRepositories({ limit: 10 })).toEqual(
+        repositories,
+      );
+      expect(await catalogue.listDocuments({ limit: 10 })).toEqual(documents);
+      expect(await catalogue.listPendingDiscoveryEvents(100)).toEqual(pending);
+    } finally {
+      await catalogue.close();
+    }
+  });
+
   it('registers source roots and workspaces, then persists filterable discovery metadata', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'workspace-brain-'));
     temporaryDirectories.push(directory);

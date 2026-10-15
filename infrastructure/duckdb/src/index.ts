@@ -634,12 +634,12 @@ export async function createDuckDbCatalogue(
           );
         } else if (
           existingRow.name !== source.name ||
-          existingRow.config_id !== source.configId ||
           existingRow.config_json !== config
         ) {
+          // Updating indexed config_id makes DuckDB replace a referenced parent row.
           await connection.run(
-            'UPDATE sources SET name = $1, config_json = $2, config_id = $3 WHERE id = $4',
-            [source.name, config, source.configId, id],
+            'UPDATE sources SET name = $1, config_json = $2 WHERE id = $3',
+            [source.name, config, id],
           );
         }
       }
