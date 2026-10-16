@@ -4154,6 +4154,14 @@
           "relationshipId": { "type": "string", "format": "ulid" },
           "sourceEntityId": { "type": "string", "format": "ulid" },
           "targetEntityId": { "type": "string", "format": "ulid" },
+          "sourceDisplayName": {
+            "type": "string",
+            "description": "Published name of the source entity, resolved at publication time."
+          },
+          "targetDisplayName": {
+            "type": "string",
+            "description": "Published name of the target entity, resolved at publication time."
+          },
           "publicationId": { "type": "string", "format": "ulid" }
         }
       },
@@ -4234,6 +4242,10 @@
           },
           "stepEntityKey": { "type": "string" },
           "stepEntityId": { "type": "string", "format": "ulid" },
+          "subject": {
+            "description": "Published entity this step acts on (route operation, controller, service, connector or API). Absent when no published entity is bound or in older publications.",
+            "allOf": [{ "$ref": "#/components/schemas/JourneyEntityReference" }]
+          },
           "entityReferences": {
             "type": "array",
             "items": { "$ref": "#/components/schemas/JourneyEntityReference" }
@@ -4303,6 +4315,14 @@
           },
           "to": {
             "type": "string"
+          },
+          "fromSubject": {
+            "description": "Published subject of the step identified by from.",
+            "allOf": [{ "$ref": "#/components/schemas/JourneyEntityReference" }]
+          },
+          "toSubject": {
+            "description": "Published subject of the step identified by to.",
+            "allOf": [{ "$ref": "#/components/schemas/JourneyEntityReference" }]
           },
           "evidenceRef": {
             "type": "string"

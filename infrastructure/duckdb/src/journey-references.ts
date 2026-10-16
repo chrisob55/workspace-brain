@@ -47,6 +47,7 @@ const modelSchema = z
         .object({
           id: z.string(),
           stepEntityKey: z.string(),
+          entityKey: z.string().optional(),
           entityReferences: z.array(entityReferenceSchema),
           provenance: z.array(provenanceReferenceSchema),
         })
@@ -117,6 +118,8 @@ export function resolveJourneyReferences(
       displayName: entity.name,
     };
   };
+  const publishedEntity = (key: string) =>
+    entities.get(key) ?? (key === candidate.key ? candidate : undefined);
   const relationshipReference = (
     reference: z.infer<typeof relationshipReferenceSchema>,
   ) => {
@@ -127,18 +130,31 @@ export function resolveJourneyReferences(
       relationship && entityIds.get(relationship.sourceEntityKey);
     const targetEntityId =
       relationship && entityIds.get(relationship.targetEntityKey);
+    const sourceEntity =
+      relationship && publishedEntity(relationship.sourceEntityKey);
+    const targetEntity =
+      relationship && publishedEntity(relationship.targetEntityKey);
     if (
       !relationship ||
       !relationshipId ||
       !sourceEntityId ||
       !targetEntityId ||
+      !sourceEntity ||
+      !targetEntity ||
       relationship.type !== reference.type
     ) {
       throw new CatalogueIntegrityError(
         `Journey ${candidate.key} references an unavailable relationship ${reference.relationshipKey}`,
       );
     }
-    return { ...presentation, relationshipId, sourceEntityId, targetEntityId };
+    return {
+      ...presentation,
+      relationshipId,
+      sourceEntityId,
+      targetEntityId,
+      sourceDisplayName: sourceEntity.name,
+      targetDisplayName: targetEntity.name,
+    };
   };
   const provenanceByEvidence = new Map<string, KnowledgeProvenance>(
     candidate.provenance.map((item) => [item.evidenceId, item]),
@@ -177,6 +193,39 @@ export function resolveJourneyReferences(
       documentEntityId,
     };
   };
+  const stepSubject = (step: (typeof parsed.data.steps)[number]) => {
+    if (step.entityKey === undefined) return undefined;
+    const reference = step.entityReferences.find(
+      (item) => item.entityKey === step.entityKey,
+    );
+    if (!reference)
+      throw new CatalogueIntegrityError(
+        `Journey ${candidate.key} step ${step.id} has a subject outside its references`,
+      );
+    return entityReference(reference);
+  };
+  const steps = parsed.data.steps.map((step) => {
+    const stepEntityId = entityIds.get(step.stepEntityKey);
+    if (!stepEntityId || entities.get(step.stepEntityKey)?.type !== 'operation')
+      throw new CatalogueIntegrityError(
+        `Journey ${candidate.key} has an unavailable step ${step.stepEntityKey}`,
+      );
+    const subject = stepSubject(step);
+    return {
+      ...step,
+      stepEntityKey: undefined,
+      entityKey: undefined,
+      stepEntityId,
+      ...(subject ? { subject } : {}),
+      entityReferences: step.entityReferences.map(entityReference),
+      provenance: step.provenance.map(provenanceReference),
+    };
+  });
+  const subjectsByStepId = new Map(
+    steps.flatMap((step) =>
+      step.subject ? [[step.id, step.subject] as const] : [],
+    ),
+  );
   const model = {
     ...parsed.data,
     entityReferences: parsed.data.entityReferences.map(entityReference),
@@ -184,32 +233,21 @@ export function resolveJourneyReferences(
       relationshipReference,
     ),
     provenance: parsed.data.provenance.map(provenanceReference),
-    steps: parsed.data.steps.map((step) => {
-      const stepEntityId = entityIds.get(step.stepEntityKey);
-      if (
-        !stepEntityId ||
-        entities.get(step.stepEntityKey)?.type !== 'operation'
-      )
-        throw new CatalogueIntegrityError(
-          `Journey ${candidate.key} has an unavailable step ${step.stepEntityKey}`,
-        );
+    steps,
+    transitions: parsed.data.transitions.map((transition) => {
+      const fromSubject = subjectsByStepId.get(transition.from);
+      const toSubject = subjectsByStepId.get(transition.to);
       return {
-        ...step,
-        stepEntityKey: undefined,
-        entityKey: undefined,
-        stepEntityId,
-        entityReferences: step.entityReferences.map(entityReference),
-        provenance: step.provenance.map(provenanceReference),
+        ...transition,
+        ...(fromSubject ? { fromSubject } : {}),
+        ...(toSubject ? { toSubject } : {}),
+        entityReferences: transition.entityReferences.map(entityReference),
+        relationshipReferences: transition.relationshipReferences.map(
+          relationshipReference,
+        ),
+        provenance: transition.provenance.map(provenanceReference),
       };
     }),
-    transitions: parsed.data.transitions.map((transition) => ({
-      ...transition,
-      entityReferences: transition.entityReferences.map(entityReference),
-      relationshipReferences: transition.relationshipReferences.map(
-        relationshipReference,
-      ),
-      provenance: transition.provenance.map(provenanceReference),
-    })),
   };
   const serialize = (value: typeof model, partial: boolean) => ({
     ...candidate,

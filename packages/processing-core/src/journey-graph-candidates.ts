@@ -194,6 +194,7 @@ export function linkJourneyGraphCandidates(
           'STEP_SOURCE_EVIDENCE',
         );
       }
+      let consumedApiKeys = new Set<string>();
       if (step.type === 'HttpClientCallStep') {
         const calls = candidates.relationships.filter(
           (relationship) =>
@@ -205,6 +206,7 @@ export function linkJourneyGraphCandidates(
               evidenceIds.includes(id),
             ),
         );
+        consumedApiKeys = new Set(calls.map((call) => call.targetEntityKey));
         for (const call of calls) {
           const api = entities.get(call.targetEntityKey);
           if (!api || api.type !== 'api')
@@ -268,8 +270,16 @@ export function linkJourneyGraphCandidates(
           }
         }
       }
+      // An HTTP call step's subject is its consumed API only when the
+      // published binding evidence names exactly one.
+      const [consumedApiKey] = consumedApiKeys;
       return {
         ...step,
+        ...(step.entityKey === undefined &&
+        consumedApiKeys.size === 1 &&
+        consumedApiKey
+          ? { entityKey: consumedApiKey }
+          : {}),
         stepEntityKey,
         entityReferences: [...stepReferences.values()].sort((a, b) =>
           ordinal(a.entityKey, b.entityKey),

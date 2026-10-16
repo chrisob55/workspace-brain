@@ -246,6 +246,8 @@ const journeyRelationshipReferenceSchema = z
     relationshipId: sourceIdSchema.optional(),
     sourceEntityId: sourceIdSchema.optional(),
     targetEntityId: sourceIdSchema.optional(),
+    sourceDisplayName: z.string().optional(),
+    targetDisplayName: z.string().optional(),
     publicationId: sourceIdSchema.optional(),
   })
   .strict()
@@ -263,6 +265,7 @@ const journeyStepBaseSchema = {
   entityKey: z.string().optional(),
   stepEntityKey: z.string().optional(),
   stepEntityId: sourceIdSchema.optional(),
+  subject: journeyEntityReferenceSchema.optional(),
   entityReferences: z.array(journeyEntityReferenceSchema).optional(),
   evidenceRef: z.string().optional(),
   evidenceBasis: z.enum(['proven', 'derived', 'unresolved']),
@@ -372,6 +375,8 @@ const journeySchema = z
           ]),
           from: z.string().min(1),
           to: z.string().min(1),
+          fromSubject: journeyEntityReferenceSchema.optional(),
+          toSubject: journeyEntityReferenceSchema.optional(),
           evidenceRef: z.string().optional(),
           order: z.enum(['entry', 'source-order', 'conditional', 'grouped']),
           provenance: z.array(journeyProvenanceReferenceSchema),
@@ -1809,6 +1814,7 @@ function publishedJourneyResponse(published: {
       provenance: parsed.data.provenance.map(pinReference),
       steps: parsed.data.steps.map((step) => ({
         ...step,
+        ...(step.subject ? { subject: pinReference(step.subject) } : {}),
         ...(step.entityReferences
           ? {
               entityReferences: step.entityReferences.map(pinReference),
@@ -1818,6 +1824,12 @@ function publishedJourneyResponse(published: {
       })),
       transitions: parsed.data.transitions.map((transition) => ({
         ...transition,
+        ...(transition.fromSubject
+          ? { fromSubject: pinReference(transition.fromSubject) }
+          : {}),
+        ...(transition.toSubject
+          ? { toSubject: pinReference(transition.toSubject) }
+          : {}),
         ...(transition.entityReferences
           ? {
               entityReferences: transition.entityReferences.map(pinReference),

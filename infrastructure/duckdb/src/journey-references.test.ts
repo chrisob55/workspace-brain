@@ -231,6 +231,65 @@ describe('published Journey reference resolution', () => {
     expect(context.resolve(other)).toBe(other);
   });
 
+  it('resolves step, transition and relationship endpoints to published display names', () => {
+    const context = fixture();
+    const json = context.resolve().provenance[0]?.facts?.journeyJson ?? '';
+    const model = JSON.parse(json) as {
+      steps: { subject?: unknown; stepEntityId: string }[];
+      transitions: { fromSubject?: unknown; toSubject?: unknown }[];
+      relationshipReferences: unknown[];
+    };
+    const subject = {
+      role: 'service',
+      label: 'Service',
+      entityId: 'published-target',
+      entityType: 'module',
+      displayName: 'target',
+    };
+    expect(model.steps[0]).toMatchObject({
+      stepEntityId: 'published-step',
+      subject,
+    });
+    expect(model.transitions[0]).toMatchObject({
+      fromSubject: subject,
+      toSubject: subject,
+    });
+    expect(model.relationshipReferences[0]).toEqual({
+      type: 'USES',
+      relationshipId: 'published-uses',
+      sourceEntityId: 'published-step',
+      targetEntityId: 'published-target',
+      sourceDisplayName: 'step',
+      targetDisplayName: 'target',
+    });
+  });
+
+  it('omits subjects for steps without a published subject and rejects subjects outside step references', () => {
+    const context = fixture();
+    const withModel = (steps: unknown[]) => ({
+      ...context.candidate,
+      provenance: context.candidate.provenance.map((item) => ({
+        ...item,
+        facts: { journeyJson: JSON.stringify({ ...context.model, steps }) },
+      })),
+    });
+    const unbound = { ...context.model.steps[0]!, entityKey: undefined };
+    const json =
+      context.resolve(withModel([unbound])).provenance[0]?.facts?.journeyJson ??
+      '';
+    const model = JSON.parse(json) as {
+      steps: Record<string, unknown>[];
+      transitions: Record<string, unknown>[];
+    };
+    expect(model.steps[0]).not.toHaveProperty('subject');
+    expect(model.transitions[0]).not.toHaveProperty('fromSubject');
+    expect(() =>
+      context.resolve(
+        withModel([{ ...context.model.steps[0]!, entityKey: 'document-x' }]),
+      ),
+    ).toThrow(/subject outside its references/);
+  });
+
   it('bounds UTF-8 publication size with an evidenced boundary and graph omissions', () => {
     const context = fixture();
     const steps = Array.from({ length: 40 }, (_, index) => {

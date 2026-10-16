@@ -28,7 +28,7 @@
     "librechat:status": "bash scripts/librechat.sh status",
     "librechat:verify": "bash scripts/librechat.sh verify",
     "validate:hmrc-scala-play": "node scripts/validate-hmrc-scala-play.mjs",
-    "reprocess:architecture": "pnpm --filter @workspace-brain/knowledge-worker exec node dist/reprocess.js",
+    "reprocess:architecture": "make reprocess-architecture",
     "typecheck": "turbo run typecheck"
   },
   "devDependencies": {

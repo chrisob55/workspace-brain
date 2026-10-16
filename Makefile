@@ -9,7 +9,7 @@ TURBO_BUILD_ARGS ?=
 	start-knowledge-worker rebuild-backend rebuild-api rebuild-workers \
 	rebuild-ingestion-worker rebuild-knowledge-worker start-explorer \
 	build-explorer rebuild-explorer build-librechat rebuild-librechat \
-	start-librechat stop-librechat status logs stop-backend
+	start-librechat stop-librechat status logs stop-backend reprocess-architecture
 
 help:
 	@printf '%s\n' \
@@ -37,6 +37,8 @@ help:
 		'  make stop-librechat           Stop LibreChat and Mongo; keep data volumes' \
 		'' \
 		'Operations:' \
+		'  make reprocess-architecture   Submit reprocessing inside the running knowledge worker' \
+		'                               Optional: SOURCE_ID=<catalogue-source-id>' \
 		'  make status                  Show backend container status' \
 		'  make logs                    Follow API and worker logs (Ctrl-C to exit)' \
 		'  make stop-backend            Stop backend containers; retain all data volumes' \
@@ -89,3 +91,10 @@ logs:
 
 stop-backend:
 	$(COMPOSE) stop workspace-brain-api ingestion-worker knowledge-worker nats
+
+reprocess-architecture:
+	$(COMPOSE) exec -T \
+		-e API_URL=http://workspace-brain-api:3000 \
+		-e NATS_SERVERS=nats://nats:4222 \
+		$(if $(SOURCE_ID),-e SOURCE_ID) \
+		knowledge-worker node apps/knowledge-worker/dist/reprocess.js

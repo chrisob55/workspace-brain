@@ -6,9 +6,17 @@ administration tool — every visual reads **published** knowledge.
 
 ## Run
 
+For the backend startup order and rebuild/restart decisions, use the
+[local runtime guide](../../docs/local-development.md). Explorer is a separate
+local process, not part of the backend or LibreChat container images.
+
 ```sh
-pnpm --filter @workspace-brain/workspace-brain-explorer dev   # http://localhost:5173
+make start-explorer   # from the repository root; http://localhost:5173
 ```
+
+UI edits normally hot reload. Stop/restart the dev server after changing its
+configuration; for production preview, stop the old server and run
+`make rebuild-explorer` (http://localhost:4173).
 
 The dev and preview servers proxy `/api` to the Workspace Brain API
 (`WORKSPACE_BRAIN_API_URL`, default `http://localhost:3000`). The explorer loads
