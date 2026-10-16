@@ -526,6 +526,7 @@
                 "container",
                 "api",
                 "module",
+                "journey",
                 "repository",
                 "architectural-decision",
                 "document",
@@ -1295,6 +1296,7 @@
                 "container",
                 "api",
                 "module",
+                "journey",
                 "repository",
                 "architectural-decision",
                 "document",
@@ -1357,6 +1359,150 @@
           },
           "400": {
             "description": "Invalid filters, search text or pagination parameters",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/search/journeys": {
+      "get": {
+        "operationId": "searchPublishedJourneys",
+        "tags": ["Published Knowledge"],
+        "description": "Searches deterministic, source-level Journey candidates from immutable publications. A result is not a runtime trace.",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            }
+          },
+          {
+            "name": "publicationId",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "ulid"
+            }
+          },
+          {
+            "name": "query",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          },
+          {
+            "name": "service",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "description": "Case-insensitive substring search over the represented service text."
+          },
+          {
+            "name": "api",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "description": "Case-insensitive substring search for this API-name text; does not establish downstream binding or runtime use."
+          },
+          {
+            "name": "connector",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "description": "Case-insensitive substring search for this connector-name text."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Published Journeys ordered by their Journey entity ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JourneySearchResults"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid Journey search request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/knowledge/publications/{publicationId}/journeys/{journeyId}": {
+      "get": {
+        "operationId": "getPublishedJourney",
+        "tags": ["Published Knowledge"],
+        "description": "Retrieves one Journey by deterministic Journey identity from a concrete immutable publication.",
+        "parameters": [
+          {
+            "name": "publicationId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "ulid"
+            }
+          },
+          {
+            "name": "journeyId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Published Journey with source evidence, completeness and unresolved boundaries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishedJourney"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Journey was not found in the specified publication",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -2724,6 +2870,7 @@
               "container",
               "api",
               "module",
+              "journey",
               "repository",
               "architectural-decision",
               "document",
@@ -3235,6 +3382,7 @@
               "container",
               "api",
               "module",
+              "journey",
               "repository",
               "architectural-decision",
               "document",
@@ -3532,6 +3680,7 @@
               "container",
               "api",
               "module",
+              "journey",
               "repository",
               "architectural-decision",
               "document",
@@ -3808,6 +3957,397 @@
           },
           "nextCursor": {
             "type": ["string", "null"]
+          }
+        }
+      },
+      "JourneySearchResults": {
+        "type": "object",
+        "required": ["items", "nextCursor"],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublishedJourney"
+            }
+          },
+          "nextCursor": {
+            "type": ["string", "null"]
+          }
+        }
+      },
+      "PublishedJourney": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "publicationId",
+          "journeyEntityId",
+          "journeyId",
+          "sourceEvidenceIds",
+          "journey"
+        ],
+        "properties": {
+          "publicationId": {
+            "type": "string",
+            "format": "ulid"
+          },
+          "journeyEntityId": {
+            "type": "string",
+            "format": "ulid"
+          },
+          "journeyId": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "sourceEvidenceIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "ulid"
+            }
+          },
+          "journey": {
+            "$ref": "#/components/schemas/Journey"
+          }
+        }
+      },
+      "Journey": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "name",
+          "sourceServices",
+          "confidence",
+          "completeness",
+          "provenance",
+          "steps",
+          "transitions",
+          "entityReferences",
+          "relationshipReferences",
+          "unresolvedBoundaries"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "sourceServices": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "confidence": {
+            "type": "string",
+            "enum": ["proven", "derived"]
+          },
+          "completeness": {
+            "type": "string",
+            "enum": ["complete", "partial", "unresolved"]
+          },
+          "provenance": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/JourneyProvenanceReference"
+            }
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/JourneyStep"
+            }
+          },
+          "transitions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/JourneyTransition"
+            }
+          },
+          "entityReferences": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/JourneyEntityReference"
+            }
+          },
+          "relationshipReferences": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/JourneyRelationshipReference"
+            }
+          },
+          "unresolvedBoundaries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/JourneyDiagnostic"
+            }
+          },
+          "diagnostics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/JourneyDiagnostic"
+            }
+          }
+        }
+      },
+      "KnowledgeEntityType": {
+        "type": "string",
+        "enum": [
+          "package",
+          "container",
+          "api",
+          "module",
+          "journey",
+          "repository",
+          "architectural-decision",
+          "document",
+          "operation"
+        ]
+      },
+      "JourneyEntityReference": {
+        "type": "object",
+        "description": "Resolved references use entityId and publicationId for follow-on reads. New snapshots omit candidate keys. Old immutable publications may contain candidate-only references.",
+        "required": ["role", "label"],
+        "anyOf": [
+          { "required": ["entityId", "entityType", "displayName"] },
+          { "required": ["entityKey"] }
+        ],
+        "properties": {
+          "entityKey": { "type": "string" },
+          "role": {
+            "type": "string",
+            "enum": [
+              "operation",
+              "controller",
+              "service",
+              "connector",
+              "component",
+              "api",
+              "document",
+              "step"
+            ]
+          },
+          "label": { "type": "string" },
+          "entityId": { "type": "string", "format": "ulid" },
+          "entityType": { "$ref": "#/components/schemas/KnowledgeEntityType" },
+          "displayName": { "type": "string" },
+          "publicationId": { "type": "string", "format": "ulid" }
+        }
+      },
+      "JourneyRelationshipReference": {
+        "type": "object",
+        "required": ["type"],
+        "anyOf": [
+          {
+            "required": ["relationshipId", "sourceEntityId", "targetEntityId"]
+          },
+          { "required": ["relationshipKey"] }
+        ],
+        "properties": {
+          "relationshipKey": { "type": "string" },
+          "type": { "$ref": "#/components/schemas/KnowledgeRelationshipType" },
+          "relationshipId": { "type": "string", "format": "ulid" },
+          "sourceEntityId": { "type": "string", "format": "ulid" },
+          "targetEntityId": { "type": "string", "format": "ulid" },
+          "publicationId": { "type": "string", "format": "ulid" }
+        }
+      },
+      "JourneyProvenanceReference": {
+        "type": "object",
+        "required": ["id", "kind", "label"],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "evidence",
+              "source-file",
+              "publication",
+              "service",
+              "api",
+              "connector",
+              "relationship"
+            ]
+          },
+          "label": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "documentPath": {
+            "type": "string"
+          },
+          "documentId": { "type": "string", "format": "ulid" },
+          "documentVersionId": { "type": "string", "format": "ulid" },
+          "documentEntityId": { "type": "string", "format": "ulid" },
+          "publicationId": { "type": "string", "format": "ulid" }
+        }
+      },
+      "JourneyStep": {
+        "type": "object",
+        "required": ["id", "type", "evidenceBasis", "order", "provenance"],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "HttpRouteStep",
+              "ControllerStep",
+              "ServiceStep",
+              "ComponentStep",
+              "ConnectorStep",
+              "HttpClientCallStep",
+              "ApiCallStep",
+              "UnresolvedCallStep",
+              "PersistenceStep"
+            ]
+          },
+          "evidenceBasis": {
+            "type": "string",
+            "enum": ["proven", "derived", "unresolved"]
+          },
+          "order": {
+            "type": "string",
+            "enum": ["entry", "source-order", "conditional", "grouped"]
+          },
+          "provenance": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/JourneyProvenanceReference"
+            }
+          },
+          "service": {
+            "type": "string"
+          },
+          "entityKey": {
+            "type": "string"
+          },
+          "stepEntityKey": { "type": "string" },
+          "stepEntityId": { "type": "string", "format": "ulid" },
+          "entityReferences": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/JourneyEntityReference" }
+          },
+          "evidenceRef": {
+            "type": "string"
+          },
+          "branchContext": {
+            "type": "string"
+          },
+          "asyncGroup": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string"
+          },
+          "route": {
+            "type": "string"
+          },
+          "controller": {
+            "type": "string"
+          },
+          "component": {
+            "type": "string"
+          },
+          "connector": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          },
+          "targetExpression": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      },
+      "JourneyTransition": {
+        "type": "object",
+        "required": [
+          "id",
+          "type",
+          "from",
+          "to",
+          "order",
+          "provenance",
+          "certainty"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "RouteDispatch",
+              "MethodInvocation",
+              "ConnectorInvocation",
+              "HttpRequest",
+              "PersistenceOperation"
+            ]
+          },
+          "from": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          },
+          "evidenceRef": {
+            "type": "string"
+          },
+          "order": {
+            "type": "string",
+            "enum": ["entry", "source-order", "conditional", "grouped"]
+          },
+          "provenance": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/JourneyProvenanceReference"
+            }
+          },
+          "certainty": {
+            "type": "string",
+            "enum": ["proven", "derived", "unresolved"]
+          },
+          "entityReferences": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/JourneyEntityReference" }
+          },
+          "relationshipReferences": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/JourneyRelationshipReference"
+            }
+          }
+        }
+      },
+      "JourneyDiagnostic": {
+        "type": "object",
+        "required": ["key", "reason", "target"],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          },
+          "evidenceRef": {
+            "type": "string"
           }
         }
       },

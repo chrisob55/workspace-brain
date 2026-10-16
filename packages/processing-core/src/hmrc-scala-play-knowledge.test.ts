@@ -3,6 +3,7 @@ import {
   createDocumentVersionId,
   createEvidenceId,
   createSourceId,
+  type Journey,
   type KnowledgeInputEvidence,
 } from '@workspace-brain/domain';
 import { describe, expect, it } from 'vitest';
@@ -95,6 +96,114 @@ function inputs(
 }
 
 describe('HMRC publication parser pack', () => {
+  it('reports conflicting provider appName declarations without publishing a guessed provider', () => {
+    const result = extractHmrcScalaPlayKnowledge(
+      inputs({
+        ...fixtures,
+        'conf/application.conf':
+          'appName = "provider-one"\nappName = "provider-two"\n',
+      }),
+    );
+    expect(
+      result.diagnostics?.some(
+        (item) => item.reason === 'provider-appName-declaration-ambiguous',
+      ),
+    ).toBe(true);
+    expect(
+      result.entities.some((entity) =>
+        entity.provenance.some(
+          (item) => item.facts?.role === 'declared-service',
+        ),
+      ),
+    ).toBe(false);
+  });
+  it('resolves direct Scala 3 configuration members and multiline HTTP receivers without promoting nested values', () => {
+    const evidence = inputs({
+      ...fixtures,
+      'app/config/AppConfig.scala': `package config
+class AppConfig(servicesConfig: ServicesConfig):
+  val citizenDetailsBaseUrl: String = baseUrl("citizen-details")
+  if true then
+    val citizenDetailsBaseUrl: String = baseUrl("wrong-service")
+  private def baseUrl(key: String) = servicesConfig.baseUrl(key)
+`,
+      'app/connectors/CitizenDetailsConnector.scala': fixtures[
+        'app/connectors/CitizenDetailsConnector.scala'
+      ].replace('http.get', 'http\n    .get'),
+    });
+    const result = extractHmrcScalaPlayKnowledge(evidence);
+    const api = result.entities.find(
+      (entity) => entity.type === 'api' && entity.name === 'citizen-details',
+    );
+    expect(api).toBeDefined();
+    expect(
+      result.relationships.some(
+        (edge) => edge.type === 'CONSUMES' && edge.targetEntityKey === api?.key,
+      ),
+    ).toBe(true);
+    expect(
+      result.entities.some(
+        (entity) => entity.type === 'api' && entity.name === 'wrong-service',
+      ),
+    ).toBe(false);
+  });
+  it('resolves a uniquely declared baseUrl wrapper by its actual parameter, not a hard-coded name', () => {
+    const result = extractHmrcScalaPlayKnowledge(
+      inputs({
+        ...fixtures,
+        'app/config/AppConfig.scala': fixtures[
+          'app/config/AppConfig.scala'
+        ].replaceAll('serviceName', 'key'),
+      }),
+    );
+    const binding = result.relationships.find(
+      (relationship) =>
+        relationship.type === 'CONSUMES' &&
+        relationship.provenance.some(
+          (item) => item.facts?.relationship === 'HTTP',
+        ),
+    );
+    expect(binding).toBeDefined();
+    expect(
+      binding?.provenance.some(
+        (item) =>
+          item.locator.kind === 'scala-symbol' &&
+          item.locator.signature === 'def baseUrl(key: String) =',
+      ),
+    ).toBe(true);
+  });
+  it('keeps same-component calls as steps without referencing prohibited self relationships', () => {
+    const result = extractHmrcScalaPlayKnowledge(
+      inputs({
+        ...fixtures,
+        'app/services/SubscriptionService.scala': fixtures[
+          'app/services/SubscriptionService.scala'
+        ].replace(
+          'def get() = connector.get()',
+          'def get() = store()\n  def store() = connector.get()',
+        ),
+      }),
+    );
+    const entity = result.entities.find((item) => item.type === 'journey')!;
+    const serialized = entity.provenance.find((item) => item.facts?.journeyJson)
+      ?.facts?.journeyJson;
+    const journey = JSON.parse(serialized!) as Journey;
+    expect(
+      journey.steps.filter((step) => step.type === 'ServiceStep').length,
+    ).toBeGreaterThan(1);
+    expect(
+      result.relationships.every(
+        (item) => item.sourceEntityKey !== item.targetEntityKey,
+      ),
+    ).toBe(true);
+    const keys = new Set(result.relationships.map((item) => item.key));
+    expect(
+      journey.relationshipReferences.every(
+        (item) =>
+          item.relationshipKey !== undefined && keys.has(item.relationshipKey),
+      ),
+    ).toBe(true);
+  });
   it('publishes the complete declared route-to-downstream graph with supported vocabulary and immutable evidence', () => {
     const evidence = inputs();
     const result = extractHmrcScalaPlayKnowledge(evidence);

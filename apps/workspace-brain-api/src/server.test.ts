@@ -93,6 +93,103 @@ const projectedRelationship = {
   sourceEvidenceIds: [createEvidenceId()],
   publishedAt: publication.publishedAt,
 };
+const journeyId = 'f'.repeat(64);
+const journeyEntityId = createKnowledgeEntityId();
+const journeyEvidenceId = createEvidenceId();
+const journeyModel = {
+  id: journeyId,
+  name: 'GET /subscriptions/:id (static candidate)',
+  description: 'Deterministic source-level candidate; not a runtime trace.',
+  sourceServices: ['controllers.SubscriptionController'],
+  confidence: 'derived',
+  completeness: 'partial',
+  provenance: [
+    {
+      id: journeyEvidenceId,
+      kind: 'evidence',
+      label: 'SubscriptionController.scala',
+      source: 'root/projects/SubscriptionController.scala',
+      documentPath: 'root/projects/SubscriptionController.scala',
+    },
+  ],
+  steps: [
+    {
+      id: 'route-0',
+      type: 'HttpRouteStep',
+      method: 'GET',
+      route: '/subscriptions/:id',
+      evidenceBasis: 'proven',
+      order: 'entry',
+      provenance: [
+        {
+          id: journeyEvidenceId,
+          kind: 'evidence',
+          label: 'route declaration',
+        },
+      ],
+    },
+    {
+      id: 'call-1',
+      type: 'UnresolvedCallStep',
+      targetExpression: 'invitationService.accept(id)',
+      reason: 'The call target could not be resolved from static evidence.',
+      evidenceBasis: 'unresolved',
+      order: 'source-order',
+      provenance: [
+        {
+          id: journeyEvidenceId,
+          kind: 'evidence',
+          label: 'controller call',
+        },
+      ],
+    },
+  ],
+  transitions: [
+    {
+      id: 'transition-0',
+      type: 'RouteDispatch',
+      from: 'route-0',
+      to: 'call-1',
+      order: 'source-order',
+      provenance: [
+        {
+          id: journeyEvidenceId,
+          kind: 'evidence',
+          label: 'route and handler source',
+        },
+      ],
+      certainty: 'derived',
+    },
+  ],
+  entityReferences: [
+    {
+      entityKey: 'module:controllers.SubscriptionController',
+      role: 'controller',
+      label: 'controllers.SubscriptionController',
+    },
+  ],
+  relationshipReferences: [],
+  unresolvedBoundaries: [
+    {
+      key: 'call-1',
+      reason: 'The call target could not be resolved from static evidence.',
+      target: 'invitationService.accept(id)',
+      evidenceRef: journeyEvidenceId,
+    },
+  ],
+  diagnostics: [],
+};
+const projectedJourney = {
+  entityId: journeyEntityId,
+  modelId: knowledgeModel.id,
+  publicationId: publication.id,
+  type: 'journey' as const,
+  name: journeyModel.name,
+  lifecycleStatus: 'observed' as const,
+  sourceEvidenceIds: [journeyEvidenceId],
+  relationshipCount: 1,
+  publishedAt: publication.publishedAt,
+};
 const projectionStatistics = {
   publication,
   projectionStatus: 'built' as const,
@@ -217,6 +314,25 @@ const publishedEntity = {
   entityVersionId,
   versionNumber: 2,
   entity: publishedEntityObject,
+};
+const publishedJourneyEntity = {
+  ...publishedEntity,
+  entity: {
+    ...publishedEntityObject,
+    id: journeyEntityId,
+    type: 'journey' as const,
+    name: journeyModel.name,
+    sourceEvidenceIds: [journeyEvidenceId],
+    provenance: [
+      {
+        ...entityProvenance,
+        facts: {
+          journeyId,
+          journeyJson: JSON.stringify(journeyModel),
+        },
+      },
+    ],
+  },
 };
 const publishedRelationship = {
   publicationId: publication.id,
@@ -987,6 +1103,214 @@ describe('Workspace Brain API routes', () => {
       field: 'text',
     });
     expect(textSearch.statusCode).toBe(200);
+    await server.close();
+  });
+
+  it('searches and retrieves validated Journeys from pinned publications', async () => {
+    const base = createCatalogue();
+    const searchRequests: SearchEntityRequest[] = [];
+    const catalogue = {
+      ...base,
+      async searchProjectedEntities(request: SearchEntityRequest) {
+        searchRequests.push(request);
+        return { items: [projectedJourney] };
+      },
+      async getPublishedEntity(publicationId: string, entityId: string) {
+        return publicationId === publication.id && entityId === journeyEntityId
+          ? publishedJourneyEntity
+          : undefined;
+      },
+    };
+    const server = createApiServer(catalogue, { logger: false });
+
+    const search = await server.inject(
+      `/api/v1/search/journeys?publicationId=${publication.id}&service=controllers.SubscriptionController&limit=5`,
+    );
+    const retrieve = await server.inject(
+      `/api/v1/knowledge/publications/${publication.id}/journeys/${journeyId}`,
+    );
+    const conflictingFilters = await server.inject(
+      `/api/v1/search/journeys?query=subscription&service=controllers.SubscriptionController`,
+    );
+    const invalid = await server.inject(
+      `/api/v1/knowledge/publications/${publication.id}/journeys/not-a-journey-id`,
+    );
+
+    expect(search.statusCode).toBe(200);
+    expect(search.json()).toEqual({
+      items: [
+        {
+          publicationId: publication.id,
+          journeyEntityId,
+          journeyId,
+          sourceEvidenceIds: [journeyEvidenceId],
+          journey: journeyModel,
+        },
+      ],
+      nextCursor: null,
+    });
+    expect(searchRequests[0]).toEqual({
+      publicationId: publication.id,
+      type: 'journey',
+      text: {
+        query: 'controllers.SubscriptionController',
+        match: 'contains',
+        field: 'text',
+      },
+      limit: 6,
+    });
+    expect(searchRequests[1]).toEqual({
+      publicationId: publication.id,
+      type: 'journey',
+      text: { query: journeyId, match: 'contains', field: 'text' },
+      limit: 100,
+    });
+    expect(retrieve.statusCode).toBe(200);
+    expect(retrieve.json<{ journey: typeof journeyModel }>().journey).toEqual(
+      journeyModel,
+    );
+    expect(conflictingFilters.statusCode).toBe(400);
+    expect(invalid.statusCode).toBe(400);
+    await server.close();
+
+    const emptyCatalogue = {
+      ...createCatalogue(),
+      async searchProjectedEntities() {
+        return { items: [] };
+      },
+    };
+    const emptyServer = createApiServer(emptyCatalogue, { logger: false });
+    const notFound = await emptyServer.inject(
+      `/api/v1/knowledge/publications/${publication.id}/journeys/${journeyId}`,
+    );
+    expect(notFound.statusCode).toBe(404);
+    await emptyServer.close();
+
+    const malformedEntity = {
+      ...publishedJourneyEntity,
+      entity: {
+        ...publishedJourneyEntity.entity,
+        provenance: [
+          {
+            ...publishedJourneyEntity.entity.provenance[0]!,
+            facts: { journeyId, journeyJson: '{' },
+          },
+        ],
+      },
+    };
+    const malformedCatalogue = {
+      ...createCatalogue(),
+      async searchProjectedEntities() {
+        return { items: [projectedJourney] };
+      },
+      async getPublishedEntity() {
+        return malformedEntity;
+      },
+    };
+    const malformedServer = createApiServer(malformedCatalogue, {
+      logger: false,
+    });
+    const malformed = await malformedServer.inject(
+      `/api/v1/knowledge/publications/${publication.id}/journeys/${journeyId}`,
+    );
+    expect(malformed.statusCode).toBe(500);
+    expect(malformed.headers['content-type']).toContain(
+      'application/problem+json',
+    );
+    await malformedServer.close();
+  });
+
+  it('pins resolved Journey, step, transition and evidence references to the requested publication', async () => {
+    const entity = publishedEntityObject;
+    const relationship = publishedRelationshipObject;
+    const reference = {
+      entityKey: 'module:controllers.SubscriptionController',
+      role: 'controller',
+      label: 'candidate label',
+      entityId: entity.id,
+      entityType: entity.type,
+      displayName: entity.name,
+    };
+    const relationshipReference = {
+      relationshipKey: 'USES:journey->controller',
+      type: 'USES',
+      relationshipId: relationship.id,
+      sourceEntityId: journeyEntityId,
+      targetEntityId: entity.id,
+    };
+    const provenance = journeyModel.provenance.map((item) => ({
+      ...item,
+      documentEntityId: entity.id,
+      documentId: createDocumentId(),
+      documentVersionId: createDocumentVersionId(),
+    }));
+    const resolved = {
+      ...journeyModel,
+      entityReferences: [reference],
+      relationshipReferences: [relationshipReference],
+      provenance,
+      steps: journeyModel.steps.map((step) => ({
+        ...step,
+        stepEntityId: entity.id,
+        entityReferences: [reference],
+        provenance,
+      })),
+      transitions: journeyModel.transitions.map((transition) => ({
+        ...transition,
+        entityReferences: [reference],
+        relationshipReferences: [relationshipReference],
+        provenance,
+      })),
+    };
+    const server = createApiServer(
+      {
+        ...createCatalogue(),
+        async searchProjectedEntities() {
+          return { items: [projectedJourney] };
+        },
+        async getPublishedEntity() {
+          return {
+            ...publishedJourneyEntity,
+            entity: {
+              ...publishedJourneyEntity.entity,
+              provenance: publishedJourneyEntity.entity.provenance.map(
+                (item) => ({
+                  ...item,
+                  facts: {
+                    ...item.facts,
+                    journeyJson: JSON.stringify(resolved),
+                  },
+                }),
+              ),
+            },
+          };
+        },
+      },
+      { logger: false },
+    );
+    const response = await server.inject(
+      `/api/v1/knowledge/publications/${publication.id}/journeys/${journeyId}`,
+    );
+    expect(response.statusCode).toBe(200);
+    const model = response.json<{ journey: typeof resolved }>().journey;
+    for (const references of [
+      model.entityReferences,
+      model.relationshipReferences,
+      model.provenance,
+      ...model.steps.map((step) => step.entityReferences),
+      ...model.steps.map((step) => step.provenance),
+      ...model.transitions.map((transition) => transition.entityReferences),
+      ...model.transitions.map(
+        (transition) => transition.relationshipReferences,
+      ),
+      ...model.transitions.map((transition) => transition.provenance),
+    ]) {
+      expect(references).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ publicationId: publication.id }),
+        ]),
+      );
+    }
     await server.close();
   });
 

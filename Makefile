@@ -1,13 +1,15 @@
 .DEFAULT_GOAL := help
 
 COMPOSE := docker compose -f deploy/compose/compose.yaml
+LIBRECHAT_COMPOSE := $(COMPOSE) --profile librechat
 PNPM ?= pnpm
 TURBO_BUILD_ARGS ?=
 
 .PHONY: help start-backend start-api start-workers start-ingestion-worker \
 	start-knowledge-worker rebuild-backend rebuild-api rebuild-workers \
 	rebuild-ingestion-worker rebuild-knowledge-worker start-explorer \
-	build-explorer rebuild-explorer start-librechat status logs stop-backend
+	build-explorer rebuild-explorer build-librechat rebuild-librechat \
+	start-librechat stop-librechat status logs stop-backend
 
 help:
 	@printf '%s\n' \
@@ -28,15 +30,18 @@ help:
 		'  make build-explorer           Build Explorer with Turbo caching disabled' \
 		'  make rebuild-explorer         Fresh build, then serve production preview (4173)' \
 		'' \
-		'LibreChat (optional Docker Compose profile):' \
-		'  make start-librechat          Set up secrets, build and start the LibreChat-enabled stack (3080)' \
+		'LibreChat (optional; separate image and runtime commands):' \
+		'  make build-librechat          Build only the LibreChat image' \
+		'  make rebuild-librechat        Fresh-build and recreate LibreChat only' \
+		'  make start-librechat          Start LibreChat with its required services (3080)' \
+		'  make stop-librechat           Stop LibreChat and Mongo; keep data volumes' \
 		'' \
 		'Operations:' \
 		'  make status                  Show backend container status' \
 		'  make logs                    Follow API and worker logs (Ctrl-C to exit)' \
 		'  make stop-backend            Stop backend containers; retain all data volumes' \
 		'' \
-		'Rebuilds bypass Docker and Turbo caches and recreate containers.' \
+		'Backend rebuilds bypass Docker and Turbo caches; LibreChat rebuild bypasses Docker cache.' \
 		'Optional: make rebuild-backend TURBO_BUILD_ARGS=--concurrency=1'
 
 start-backend rebuild-backend: SERVICES = workspace-brain-api ingestion-worker knowledge-worker nats
@@ -62,7 +67,19 @@ rebuild-explorer: build-explorer
 	$(PNPM) --filter @workspace-brain/workspace-brain-explorer preview
 
 start-librechat:
-	$(PNPM) librechat:up
+	$(PNPM) librechat:env
+	$(LIBRECHAT_COMPOSE) up -d --no-build --wait librechat
+
+build-librechat:
+	$(LIBRECHAT_COMPOSE) build librechat
+
+rebuild-librechat:
+	$(PNPM) librechat:env
+	$(LIBRECHAT_COMPOSE) build --no-cache --pull librechat
+	$(LIBRECHAT_COMPOSE) up -d --no-build --force-recreate --wait librechat
+
+stop-librechat:
+	$(LIBRECHAT_COMPOSE) stop librechat librechat-mongo
 
 status:
 	$(COMPOSE) ps

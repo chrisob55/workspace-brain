@@ -7,6 +7,7 @@ import type {
 import type { WorkspaceBrainConfig } from '@workspace-brain/configuration';
 import {
   discoveryEventSubject,
+  type DiscoverySource,
   type KnowledgeInputEvidence,
 } from '@workspace-brain/domain';
 import type { NatsDiscoveryBus } from '@workspace-brain/nats';
@@ -74,26 +75,81 @@ const knowledgeEvidenceRequestSchema = z
   .object({
     documentVersionId: z.string().regex(/^[0-7][0-9A-HJKMNP-TV-Z]{25}$/),
     offset: z.number().int().nonnegative(),
+    separateContext: z.boolean().optional(),
+    contextOnly: z.boolean().optional(),
   })
   .strict();
+
+function createExtractionContextPage(
+  context: NonNullable<KnowledgeInputEvidence['extractionContext']>,
+  offset: number,
+) {
+  const entries = [
+    ...context.repositories.map((repository) => ({ repository })),
+    ...context.documents.map((document) => ({ document })),
+  ];
+  const items: (typeof entries)[number][] = [];
+  while (
+    offset + items.length < entries.length &&
+    items.length < maximumKnowledgeEvidencePageItems
+  ) {
+    const nextItems = [...items, entries[offset + items.length]!];
+    if (
+      Buffer.byteLength(
+        JSON.stringify({
+          items: nextItems,
+          nextOffset: offset + nextItems.length,
+        }),
+        'utf8',
+      ) > maximumKnowledgeEvidenceResponseBytes
+    ) {
+      if (items.length === 0) {
+        throw new Error(
+          `Extraction context item at offset ${offset} exceeds the NATS response size limit`,
+        );
+      }
+      break;
+    }
+    items.push(entries[offset + items.length]!);
+  }
+  const nextOffset = offset + items.length;
+  return {
+    items,
+    nextOffset: nextOffset < entries.length ? nextOffset : null,
+  };
+}
 
 function createKnowledgeEvidencePage(
   evidence: readonly KnowledgeInputEvidence[],
   offset: number,
+  separateContext = false,
 ): {
   readonly items: readonly KnowledgeInputEvidence[];
   readonly nextOffset: number | null;
+  readonly hasExtractionContext?: boolean;
 } {
+  const hasExtractionContext = evidence.some(
+    (input) => input.extractionContext !== undefined,
+  );
+  const pageEvidence = separateContext
+    ? evidence.map((input) => ({
+        evidence: input.evidence,
+        documentVersion: input.documentVersion,
+        document: input.document,
+        provenance: input.provenance,
+      }))
+    : evidence;
   const items: KnowledgeInputEvidence[] = [];
   while (
     offset + items.length < evidence.length &&
     items.length < maximumKnowledgeEvidencePageItems
   ) {
-    const nextItems = [...items, evidence[offset + items.length]!];
+    const nextItems = [...items, pageEvidence[offset + items.length]!];
     const nextOffset = offset + nextItems.length;
     const candidate = {
       items: nextItems,
       nextOffset: nextOffset < evidence.length ? nextOffset : null,
+      ...(separateContext ? { hasExtractionContext } : {}),
     };
     if (
       Buffer.byteLength(JSON.stringify(candidate), 'utf8') >
@@ -106,13 +162,14 @@ function createKnowledgeEvidencePage(
       }
       break;
     }
-    items.push(evidence[offset + items.length]!);
+    items.push(pageEvidence[offset + items.length]!);
   }
 
   const nextOffset = offset + items.length;
   return {
     items,
     nextOffset: nextOffset < evidence.length ? nextOffset : null,
+    ...(separateContext ? { hasExtractionContext } : {}),
   };
 }
 
@@ -170,6 +227,21 @@ export async function startWorkspaceBrainApi<
       registration.sources,
       registration.workspaces,
     );
+    // Configuration changes require a restart. Snapshot it before event
+    // consumers can queue long publication writes ahead of worker discovery.
+    const discoverySources: DiscoverySource[] = [];
+    let afterId: string | undefined;
+    while (true) {
+      const page = await catalogue.listSourcesForDiscovery({
+        ...(afterId === undefined ? {} : { afterId }),
+        limit: 100,
+      });
+      discoverySources.push(...page.items);
+      if (page.items.length < 100) {
+        break;
+      }
+      afterId = page.items.at(-1)!.sourceId;
+    }
 
     bus = await dependencies.connectBus();
     const discovery = createDiscoveryService(
@@ -181,12 +253,15 @@ export async function startWorkspaceBrainApi<
       'workspace.catalogue.discovery.sources',
       async (body) => {
         const request = sourcePageSchema.parse(body);
-        return catalogue.listSourcesForDiscovery({
-          ...(request.afterId === undefined
-            ? {}
-            : { afterId: request.afterId }),
-          limit: request.limit,
-        });
+        return {
+          items: discoverySources
+            .filter(
+              (source) =>
+                request.afterId === undefined ||
+                source.sourceId > request.afterId,
+            )
+            .slice(0, request.limit),
+        };
       },
     );
     bus.subscribeRequests(
@@ -196,7 +271,20 @@ export async function startWorkspaceBrainApi<
         const evidence = await catalogue.listKnowledgeInputEvidence(
           request.documentVersionId,
         );
-        return createKnowledgeEvidencePage(evidence, request.offset);
+        if (request.contextOnly === true) {
+          const context = evidence.find(
+            (input) => input.extractionContext !== undefined,
+          )?.extractionContext;
+          if (context === undefined) {
+            throw new Error('Requested document has no extraction context');
+          }
+          return createExtractionContextPage(context, request.offset);
+        }
+        return createKnowledgeEvidencePage(
+          evidence,
+          request.offset,
+          request.separateContext,
+        );
       },
     );
     for (const [subject, durableName] of apiDurableSubscriptions) {

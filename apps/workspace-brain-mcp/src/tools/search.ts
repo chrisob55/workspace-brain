@@ -24,6 +24,7 @@ export const ENTITY_TYPES = [
   'container',
   'api',
   'module',
+  'journey',
   'repository',
   'architectural-decision',
   'document',

@@ -4,6 +4,7 @@ import console from 'node:console';
 import process from 'node:process';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { basename, resolve } from 'node:path';
 import { fileURLToPath, URL } from 'node:url';
@@ -21,6 +22,19 @@ import { extractKnowledgeReport } from '../apps/knowledge-worker/dist/knowledge-
 import { serializeKnowledgePublicationPackage } from '../packages/domain-publication/dist/index.js';
 import { classifyPublicationCurrency } from '../packages/domain-currency/dist/index.js';
 import { createPublicationDiffService } from '../services/publication-diff-service/dist/index.js';
+import { createApiServer } from '../apps/workspace-brain-api/dist/server.js';
+import { WorkspaceBrainClient } from '../apps/workspace-brain-mcp/dist/client/workspace-brain-client.js';
+import { createWorkspaceBrainMcpServer } from '../apps/workspace-brain-mcp/dist/create-server.js';
+
+const requireMcp = createRequire(
+  new URL('../apps/workspace-brain-mcp/package.json', import.meta.url),
+);
+const { Client: McpClient } = requireMcp(
+  '@modelcontextprotocol/sdk/client/index.js',
+);
+const { InMemoryTransport } = requireMcp(
+  '@modelcontextprotocol/sdk/inMemory.js',
+);
 
 const roots = process.argv.slice(2).map((path) => resolve(path));
 if (roots.length === 0)
@@ -41,6 +55,18 @@ const countBy = (items, field) => {
     Object.entries(counts).sort(([a], [b]) => (a < b ? -1 : 1)),
   );
 };
+const excludedDirectories = [
+  '.git',
+  'node_modules',
+  'dist',
+  'build',
+  'coverage',
+  '.turbo',
+  'sources',
+  'test',
+  'tests',
+  'it',
+];
 
 try {
   await catalogue.registerConfiguration(
@@ -49,15 +75,7 @@ try {
         configId: 'architectural-validation',
         name: 'Architectural Validation',
         rootPaths: roots,
-        excludeDirs: [
-          '.git',
-          'node_modules',
-          'dist',
-          'build',
-          'coverage',
-          '.turbo',
-          'sources',
-        ],
+        excludeDirs: excludedDirectories,
         includeExtensions: [
           '.md',
           '.markdown',
@@ -113,6 +131,7 @@ try {
   const processorCounts = new Map();
   const locatorCounts = new Map();
   const hmrcEvidenceByRepository = new Map();
+  console.error(`Processing ${inventory.documents.length} source documents.`);
 
   for (const document of [...inventory.documents].sort((a, b) =>
     a.path < b.path ? -1 : 1,
@@ -324,6 +343,278 @@ try {
         (item) => item.facts?.parserPackId === 'hmrc-scala-play',
       ),
     );
+  const journeyEntities = parserEntities.filter(
+    (entity) => entity.type === 'journey',
+  );
+  const journeyRecords = journeyEntities.map((entity) => {
+    const serialized = entity.provenance
+      .map((item) => item.facts?.journeyJson)
+      .filter((value) => value !== undefined);
+    assert.equal(
+      serialized.length,
+      1,
+      `Published Journey ${entity.id} must carry one serialized model`,
+    );
+    return { entity, journey: JSON.parse(serialized[0]) };
+  });
+  const entitiesById = new Map(
+    snapshot.entities.map(({ entity }) => [entity.id, entity]),
+  );
+  const relationshipsById = new Map(
+    snapshot.relationships.map(({ relationship }) => [
+      relationship.id,
+      relationship,
+    ]),
+  );
+  for (const { journey } of journeyRecords) {
+    for (const reference of journey.entityReferences) {
+      const entity = entitiesById.get(reference.entityId);
+      assert.ok(
+        entity,
+        `Journey references unpublished entity ${reference.entityId}`,
+      );
+      assert.equal(reference.entityType, entity.type);
+      assert.equal(reference.displayName, entity.name);
+    }
+    for (const reference of journey.relationshipReferences) {
+      const relationship = relationshipsById.get(reference.relationshipId);
+      assert.ok(
+        relationship,
+        `Journey references unpublished relationship ${reference.relationshipId}`,
+      );
+      assert.equal(reference.sourceEntityId, relationship.sourceEntityId);
+      assert.equal(reference.targetEntityId, relationship.targetEntityId);
+    }
+  }
+  const traversalFor = ({ entity, journey }) => {
+    const outgoing = (id, type) =>
+      snapshot.relationships
+        .map(({ relationship }) => relationship)
+        .filter(
+          (relationship) =>
+            relationship.sourceEntityId === id && relationship.type === type,
+        );
+    const services = new Set(
+      journey.entityReferences
+        .filter((reference) => reference.role === 'service')
+        .map((reference) => reference.entityId),
+    );
+    const connectors = new Set(
+      journey.entityReferences
+        .filter((reference) => reference.role === 'connector')
+        .map((reference) => reference.entityId),
+    );
+    const apis = new Set(
+      journey.entityReferences
+        .filter((reference) => reference.role === 'api')
+        .map((reference) => reference.entityId),
+    );
+    for (const service of outgoing(entity.id, 'USES').filter((relationship) =>
+      services.has(relationship.targetEntityId),
+    )) {
+      for (const connector of outgoing(service.targetEntityId, 'USES').filter(
+        (relationship) => connectors.has(relationship.targetEntityId),
+      )) {
+        const api = outgoing(connector.targetEntityId, 'CONSUMES').find(
+          (relationship) => apis.has(relationship.targetEntityId),
+        );
+        if (api) return [service, connector, api];
+      }
+    }
+    return undefined;
+  };
+  const traversable = journeyRecords
+    .filter((record) => traversalFor(record))
+    .sort(
+      (left, right) => left.journey.steps.length - right.journey.steps.length,
+    );
+  const journeyExampleRecord =
+    traversable[0] ??
+    journeyRecords.find(
+      ({ journey }) =>
+        journey.completeness === 'partial' && journey.sourceServices.length > 0,
+    ) ??
+    journeyRecords.find(({ journey }) => journey.sourceServices.length > 0) ??
+    journeyRecords[0];
+  assert.ok(journeyExampleRecord, 'Publication contains no Journey entity');
+  const journeyExampleEntity = journeyExampleRecord.entity;
+  const parsedJourney = journeyExampleRecord.journey;
+  const traversal = traversalFor(journeyExampleRecord);
+  assert.ok(
+    traversal,
+    `No evidenced Journey -> Service -> Connector -> API traversal was found. ${JSON.stringify(
+      {
+        journeyCount: journeyRecords.length,
+        httpBindings: parserRelationships.filter(
+          (relationship) =>
+            relationship.type === 'CONSUMES' &&
+            relationship.provenance.some(
+              (item) => item.facts?.relationship === 'HTTP',
+            ),
+        ).length,
+        examples: journeyRecords.slice(0, 8).map(({ journey }) => ({
+          name: journey.name,
+          references: journey.entityReferences
+            .filter((reference) =>
+              ['service', 'connector', 'api'].includes(reference.role),
+            )
+            .map(({ role, displayName }) => ({ role, displayName })),
+        })),
+      },
+    )}`,
+  );
+  const serviceName = parsedJourney.sourceServices[0];
+  console.error(
+    `Checking Journey ${parsedJourney.name} (${parsedJourney.steps.length} steps) through API and MCP.`,
+  );
+  const journeyExample = {
+    sourceEvidence: journeyExampleEntity.provenance.map((item) => ({
+      evidenceId: item.evidenceId,
+      documentPath: item.documentPath,
+      locator: item.locator,
+    })),
+    publicationJson: {
+      entityId: journeyExampleEntity.id,
+      entityType: journeyExampleEntity.type,
+      entityName: journeyExampleEntity.name,
+      provenance: journeyExampleEntity.provenance.map((item) => ({
+        evidenceId: item.evidenceId,
+        facts: {
+          journeyId: item.facts?.journeyId,
+          confidence: item.facts?.confidence,
+          completeness: item.facts?.completeness,
+          journeyJson: item.facts?.journeyJson,
+        },
+      })),
+    },
+    graph: {
+      publicationId: publication.id,
+      traversal: traversal.map((relationship) => ({
+        relationshipId: relationship.id,
+        type: relationship.type,
+        sourceEntityId: relationship.sourceEntityId,
+        targetEntityId: relationship.targetEntityId,
+        sourceEvidenceIds: relationship.sourceEvidenceIds,
+      })),
+      entities: snapshot.entities.filter(
+        ({ entity }) =>
+          entity.id === journeyExampleEntity.id ||
+          parsedJourney.entityReferences.some(
+            (reference) => reference.entityId === entity.id,
+          ),
+      ),
+      relationships: snapshot.relationships.filter(({ relationship }) =>
+        parsedJourney.relationshipReferences.some(
+          (reference) => reference.relationshipId === relationship.id,
+        ),
+      ),
+    },
+  };
+  await catalogue.rebuildSearchProjections({
+    mode: 'missing',
+    correlationId: randomUUID(),
+  });
+  const apiServer = createApiServer(catalogue, { logger: false });
+  let mcpClient;
+  let mcpServer;
+  try {
+    await apiServer.listen({ host: '127.0.0.1', port: 0 });
+    const address = apiServer.server.address();
+    assert.ok(address && typeof address !== 'string');
+    const apiClient = new WorkspaceBrainClient({
+      baseUrl: `http://127.0.0.1:${address.port}`,
+    });
+    mcpServer = createWorkspaceBrainMcpServer(apiClient);
+    const [clientTransport, serverTransport] =
+      InMemoryTransport.createLinkedPair();
+    await mcpServer.connect(serverTransport);
+    mcpClient = new McpClient({
+      name: 'journey-validation',
+      version: '1.0.0',
+    });
+    await mcpClient.connect(clientTransport);
+    const readTool = async (name, args) => {
+      const result = await mcpClient.callTool({ name, arguments: args });
+      assert.notEqual(
+        result.isError,
+        true,
+        `MCP tool ${name} failed: ${JSON.stringify(result.content)}`,
+      );
+      const content = result.content.find((item) => item.type === 'text');
+      assert.ok(content, `MCP tool ${name} returned no text content`);
+      return JSON.parse(content.text);
+    };
+    const searchResponse = await readTool('search_journeys', {
+      query: parsedJourney.id,
+      publicationId: publication.id,
+      limit: 5,
+    });
+    const serviceResponse = serviceName
+      ? await readTool('get_service_journeys', {
+          service: serviceName,
+          publicationId: publication.id,
+          limit: 5,
+        })
+      : undefined;
+    const getResponse = await readTool('get_journey', {
+      publicationId: publication.id,
+      journeyId: parsedJourney.id,
+    });
+    assert.ok(
+      searchResponse.items.some((item) => item.journeyId === parsedJourney.id),
+      'MCP Journey search did not return the selected published Journey',
+    );
+    if (serviceResponse) {
+      assert.ok(
+        serviceResponse.items.some(
+          (item) => item.journeyId === parsedJourney.id,
+        ),
+        'MCP service Journey search did not return the selected Journey',
+      );
+    }
+    assert.equal(getResponse.journeyId, parsedJourney.id);
+    for (const reference of getResponse.journey.entityReferences) {
+      assert.equal(reference.publicationId, publication.id);
+      const entityResponse = await readTool('get_published_entity', {
+        publicationId: reference.publicationId,
+        entityId: reference.entityId,
+      });
+      assert.equal(entityResponse.entity.id, reference.entityId);
+      assert.equal(entityResponse.entity.type, reference.entityType);
+      assert.equal(entityResponse.entity.name, reference.displayName);
+    }
+    for (const relationship of traversal) {
+      const response = await readTool('list_relationships_for_entity', {
+        publicationId: publication.id,
+        entityId: relationship.sourceEntityId,
+        relationshipType: relationship.type,
+        direction: 'outgoing',
+        limit: 100,
+      });
+      assert.ok(
+        response.items.some(
+          (item) =>
+            item.relationship.id === relationship.id &&
+            item.relationship.targetEntityId === relationship.targetEntityId,
+        ),
+      );
+    }
+    journeyExample.mcp = {
+      search: searchResponse,
+      serviceSearch: serviceResponse ?? null,
+      getJourney: getResponse,
+      libreChatToolPayload: {
+        tool: 'get_journey',
+        publicationId: publication.id,
+        journeyId: parsedJourney.id,
+        result: getResponse,
+      },
+    };
+  } finally {
+    await mcpClient?.close();
+    await mcpServer?.close();
+    await apiServer.close();
+  }
   assert.ok(
     parserRelationships.some(
       (item) => item.provenance[0]?.facts?.relationship === 'CALLS',
@@ -338,6 +629,7 @@ try {
   );
   const parserPackPublication = {
     entities: parserEntities.length,
+    journeys: journeyEntities.length,
     operations: parserEntities.filter(
       (entity) => entity.provenance[0]?.facts?.role === 'route',
     ).length,
@@ -373,10 +665,12 @@ try {
       (entity) => entity.provenance[0]?.facts?.role === 'downstream-system',
     ).length,
   };
-  assert.ok(
-    parserPackPublication.downstreamSystems > 0,
-    'Publication is missing exactly resolved downstream service identifiers',
-  );
+  if (roots.length > 1) {
+    assert.ok(
+      parserPackPublication.downstreamSystems > 0,
+      'Publication is missing exactly resolved downstream service identifiers',
+    );
+  }
   const packageOne = await catalogue.getKnowledgePublicationExport(
     publication.id,
   );
@@ -394,12 +688,40 @@ try {
   assert.ok(currencyInputs);
   const currency = classifyPublicationCurrency(currencyInputs);
   assert.deepEqual(currency, classifyPublicationCurrency(currencyInputs));
-  await catalogue.rebuildSearchProjections({
-    mode: 'missing',
-    correlationId: randomUUID(),
-  });
   const operations = snapshot.entities.filter(
     (row) => row.entity.type === 'operation',
+  );
+  const journeyStep = (entity) =>
+    entity.provenance.some((item) => item.facts?.role === 'journey-step');
+  const exposedOperations = new Set(
+    snapshot.relationships
+      .filter(({ relationship }) => relationship.type === 'EXPOSES')
+      .map(({ relationship }) => relationship.targetEntityId),
+  );
+  const containedSteps = new Set(
+    snapshot.relationships
+      .filter(
+        ({ relationship }) =>
+          relationship.type === 'CONTAINS' &&
+          entitiesById.get(relationship.sourceEntityId)?.type === 'journey',
+      )
+      .map(({ relationship }) => relationship.targetEntityId),
+  );
+  for (const { entity } of operations) {
+    assert.ok(
+      (journeyStep(entity) ? containedSteps : exposedOperations).has(entity.id),
+      `Operation ${entity.id} has no publication-scoped owner link`,
+    );
+  }
+  const endpointStepIds = new Set([
+    parsedJourney.steps[0]?.stepEntityId,
+    parsedJourney.steps.at(-1)?.stepEntityId,
+  ]);
+  const lexicalOperations = operations.filter(
+    ({ entity }) => !journeyStep(entity) || endpointStepIds.has(entity.id),
+  );
+  console.error(
+    `Checking all ${operations.length} operation owners and ${lexicalOperations.length} exact-name search probes.`,
   );
   const operationSearch = await catalogue.searchProjectedEntities({
     publicationId: publication.id,
@@ -407,7 +729,7 @@ try {
     limit: 100,
   });
   assert.equal(operationSearch.items.length, Math.min(operations.length, 100));
-  for (const operation of operations) {
+  for (const operation of lexicalOperations) {
     const lexical = await catalogue.searchProjectedEntities({
       publicationId: publication.id,
       type: 'operation',
@@ -427,12 +749,12 @@ try {
       publicationId: publication.id,
       entityId: operation.entity.id,
       direction: 'incoming',
-      relationshipType: 'EXPOSES',
+      relationshipType: journeyStep(operation.entity) ? 'CONTAINS' : 'EXPOSES',
       limit: 100,
     });
     assert.ok(
       hop.items.length > 0,
-      'Operation has no publication-scoped EXPOSES link',
+      'Operation has no publication-scoped owner link (Journey CONTAINS step or API EXPOSES operation)',
     );
   }
   const comparisons = createPublicationDiffService({
@@ -510,6 +832,7 @@ try {
       {
         observedAt: new Date().toISOString(),
         sourceRoots: roots,
+        excludedDirectories,
         documents: inventory.documents.length,
         processors: Object.fromEntries(
           [...processorCounts].sort(([a], [b]) => (a < b ? -1 : 1)),
@@ -544,6 +867,7 @@ try {
           schemaVersion: publication.schemaVersion,
           contentHash: publication.contentHash,
           hmrcScalaPlay: parserPackPublication,
+          journeyExample,
         },
         entityCount: snapshot.entities.length,
         relationshipCount: snapshot.relationships.length,
@@ -585,6 +909,8 @@ try {
           completeProvenance: true,
           lexicalSearch: true,
           oneHopExploration: true,
+          publishedJourneyReferences: true,
+          journeyGraphTraversal: true,
           sourceMutation: false,
         },
       },

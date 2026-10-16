@@ -55,6 +55,13 @@ export class CandidateBuilder {
       KnowledgeProvenance,
       'repositoryBoundary' | 'resolvedDocument' | 'facts'
     > = {},
+    extraForInput?: (
+      input: KnowledgeInputEvidence,
+      index: number,
+    ) => Pick<
+      KnowledgeProvenance,
+      'repositoryBoundary' | 'resolvedDocument' | 'facts'
+    >,
   ): string {
     const first = inputs[0];
     if (first === undefined || !name.trim()) {
@@ -76,7 +83,16 @@ export class CandidateBuilder {
           identityScope: scope,
           name: name.trim(),
           sourceEvidenceIds: inputs.map((input) => input.evidence.id),
-          provenance: inputs.map((input) => this.provenance(input, extra)),
+          provenance: inputs.map((input, index) => {
+            const inputExtra = extraForInput?.(input, index);
+            return this.provenance(input, {
+              ...extra,
+              ...inputExtra,
+              ...(extra.facts || inputExtra?.facts
+                ? { facts: { ...extra.facts, ...inputExtra?.facts } }
+                : {}),
+            });
+          }),
           lifecycleStatus: 'observed',
         },
       ],

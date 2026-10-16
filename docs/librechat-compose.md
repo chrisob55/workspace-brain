@@ -52,14 +52,24 @@ LIBRECHAT_IMAGE` in the Dockerfile). MongoDB is `mongo:7.0`.
 ## Start and stop
 
 ```sh
-pnpm librechat:up       # creates secrets if needed, builds, starts, waits for health
+make rebuild-backend    # build backend image(s) separately when needed
+make rebuild-librechat  # build only LibreChat/MCP image; recreate LibreChat
+make start-librechat    # start from existing images; wait for health
 pnpm librechat:status   # docker compose ps
-pnpm librechat:down     # stops containers, keeps volumes
+make stop-librechat     # stop LibreChat and Mongo only; keep volumes
 ```
 
-`pnpm librechat:up` runs
-`docker compose -f deploy/compose/compose.yaml --profile librechat up -d --build --wait`.
-To ingest your own sources set `WORKSPACE_SOURCES_PATH` (see the main README).
+`make build-librechat` builds only the LibreChat image. `make rebuild-librechat`
+bypasses Docker cache for that image and recreates the LibreChat service without
+rebuilding the API, workers, Explorer, Qdrant or Ollama. Starting LibreChat
+requires the backend images to exist; run `make rebuild-backend` separately
+when they are missing or stale. The start commands create missing development
+secrets without replacing existing values. `pnpm librechat:up` is also a
+start-only convenience command and does not build images.
+
+LibreChat startup brings up only its required Compose dependencies: the API,
+NATS and MongoDB. To ingest your own sources, start the ingestion worker
+separately and set `WORKSPACE_SOURCES_PATH` (see the main README).
 
 ## Automated verification
 
@@ -114,20 +124,20 @@ do not drive a model, because that needs a paid provider key.
 
 ## Troubleshooting
 
-| Symptom                         | Check / fix                                                                                                                                                                                            |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| MCP entry point not found       | `docker compose ... exec librechat ls /app/mcp/workspace-brain/dist/server.js`. Rebuild: `docker compose ... build librechat`.                                                                         |
-| MCP dependencies missing        | The smoke test reports `FAIL [process-start]` with `Cannot find package`. Rebuild the image without cache: `docker compose ... build --no-cache librechat`.                                            |
-| API hostname cannot be resolved | Logs show `ENOTFOUND`. `librechat` must be on the `api-host` network and `workspace-brain-api` running (`pnpm librechat:status`).                                                                      |
-| API readiness fails             | `curl -s localhost:3000/ready`; check `docker compose ... logs workspace-brain-api`. LibreChat waits for the API healthcheck.                                                                          |
-| MCP initialisation timeout      | The smoke test reports `FAIL [initialisation]`. Read the stderr it prints; check `initTimeout` in `librechat.yaml` and container memory.                                                               |
-| `tools/list` returns no tools   | Smoke reports `FAIL [tool-discovery]`; the server build is broken. Rebuild the image and rerun `pnpm test:mcp:compose`.                                                                                |
-| A tool call fails               | Smoke reports `FAIL [tool-invocation]` with the MCP error envelope (`error.kind`, `status`); an `http` kind means the API rejected the call, `connection` means it was unreachable.                    |
-| MongoDB unhealthy               | `docker compose ... logs librechat-mongo`. If the volume is corrupted, remove it (see below).                                                                                                          |
-| Port 3080 in use                | Set `LIBRECHAT_PORT=3081` in `deploy/compose/.env` and rerun `pnpm librechat:up`.                                                                                                                      |
-| Model provider key absent       | LibreChat starts, but chat fails. Add a key to `.env` or the UI. The automated tests do not need one.                                                                                                  |
-| Stale MCP code                  | The MCP server is baked into the image. After changing `apps/workspace-brain-mcp`, run `pnpm librechat:up` (rebuilds and recreates `librechat`). A plain `docker compose restart` keeps the old image. |
-| Image build exits 137           | Out of memory; see Prerequisites.                                                                                                                                                                      |
+| Symptom                         | Check / fix                                                                                                                                                                         |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| MCP entry point not found       | `docker compose ... exec librechat ls /app/mcp/workspace-brain/dist/server.js`. Rebuild and recreate with `make rebuild-librechat`.                                                 |
+| MCP dependencies missing        | The smoke test reports `FAIL [process-start]` with `Cannot find package`. Rebuild the image without cache with `make rebuild-librechat`.                                            |
+| API hostname cannot be resolved | Logs show `ENOTFOUND`. `librechat` must be on the `api-host` network and `workspace-brain-api` running (`pnpm librechat:status`).                                                   |
+| API readiness fails             | `curl -s localhost:3000/ready`; check `docker compose ... logs workspace-brain-api`. Compose gates on `/health`; API migrations finish before it starts listening.                  |
+| MCP initialisation timeout      | The smoke test reports `FAIL [initialisation]`. Read the stderr it prints; check `initTimeout` in `librechat.yaml` and container memory.                                            |
+| `tools/list` returns no tools   | Smoke reports `FAIL [tool-discovery]`; the server build is broken. Rebuild with `make rebuild-librechat` and rerun `pnpm test:mcp:compose`.                                         |
+| A tool call fails               | Smoke reports `FAIL [tool-invocation]` with the MCP error envelope (`error.kind`, `status`); an `http` kind means the API rejected the call, `connection` means it was unreachable. |
+| MongoDB unhealthy               | `docker compose ... logs librechat-mongo`. If the volume is corrupted, remove it (see below).                                                                                       |
+| Port 3080 in use                | Set `LIBRECHAT_PORT=3081` in `deploy/compose/.env` and rerun `pnpm librechat:up`.                                                                                                   |
+| Model provider key absent       | LibreChat starts, but chat fails. Add a key to `.env` or the UI. The automated tests do not need one.                                                                               |
+| Stale MCP code                  | The MCP server is baked into the image. After changing `apps/workspace-brain-mcp`, run `make rebuild-librechat`. A plain `docker compose restart` keeps the old image.              |
+| Image build exits 137           | Out of memory; see Prerequisites.                                                                                                                                                   |
 
 ### When volumes must be recreated
 

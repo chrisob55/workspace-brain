@@ -420,6 +420,7 @@ describe('OpenAPI contract', () => {
     for (const [path, pathItem] of Object.entries(document.paths)) {
       const expectedTag =
         path.startsWith('/api/v1/knowledge/publications') ||
+        path === '/api/v1/search/journeys' ||
         path === '/api/v1/knowledge/models/{modelId}/publications/latest' ||
         path.startsWith('/api/v1/knowledge/diffs/')
           ? 'Published Knowledge'
@@ -464,6 +465,20 @@ describe('OpenAPI contract', () => {
           'query',
           'match',
           'field',
+        ],
+      ],
+      [
+        '/api/v1/search/journeys',
+        'searchPublishedJourneys',
+        'JourneySearchResults',
+        [
+          'cursor',
+          'limit',
+          'publicationId',
+          'query',
+          'service',
+          'api',
+          'connector',
         ],
       ],
       [

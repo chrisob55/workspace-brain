@@ -423,6 +423,26 @@ describe('architectural publication integration', () => {
         ),
       );
       expect(after).toEqual(before);
+      await connection.run(
+        await readFile(join(migrations, '017-journey-entities.sql'), 'utf8'),
+      );
+      const afterJourneyMigration = await Promise.all(
+        tables.map(async (table) =>
+          (
+            await connection.runAndReadAll(`SELECT * FROM ${table}`)
+          ).getRowObjectsJson(),
+        ),
+      );
+      expect(afterJourneyMigration).toEqual(before);
+      await connection.run(
+        "INSERT INTO knowledge_entities VALUES ('journey', 'model', 'journey-key', 'journey', 'GET /subscriptions (static candidate)', '[]', '[]', 'observed', 'journey-version', '2026-10-08', '2026-10-08')",
+      );
+      const journeyType = await connection.runAndReadAll(
+        "SELECT entity_type FROM knowledge_entities WHERE id = 'journey'",
+      );
+      expect(journeyType.getRowObjectsJson()).toEqual([
+        { entity_type: 'journey' },
+      ]);
     } finally {
       connection.closeSync();
       instance.closeSync();

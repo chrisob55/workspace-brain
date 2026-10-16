@@ -98,13 +98,20 @@ To also run LibreChat with the Workspace Brain MCP server pre-wired (opt-in
 `librechat` profile, served on `http://localhost:3080`, not port 3000):
 
 ```sh
-pnpm librechat:up
+make rebuild-backend
+make rebuild-librechat
 ```
+
+`make rebuild-backend` and `make rebuild-librechat` build separate images;
+the latter rebuilds only LibreChat, which contains the MCP server. Use
+`make start-librechat` to start it later with its required Compose services.
+The Explorer is separate again: `make start-explorer` runs its local Vite
+development server without starting or rebuilding Docker services.
 
 See [docs/librechat-compose.md](docs/librechat-compose.md) for setup, tests and
 troubleshooting.
 
-### Make shortcuts: backend and Explorer separately
+### Make shortcuts: backend, Explorer, and LibreChat separately
 
 From the repository root, run `make help` for all commands. Docker Compose is
 required for the backend; the Explorer runs locally with the Node.js/pnpm
@@ -114,25 +121,29 @@ dependencies installed above.
 # Rebuild without Docker layer or Turbo task caches, then recreate containers.
 make rebuild-backend
 
-# Or rebuild/start just a selected service group and its required dependencies.
+# Backend-only selections; neither Explorer nor LibreChat is built here.
 make rebuild-api
 make rebuild-workers
 make rebuild-ingestion-worker
 make rebuild-knowledge-worker
 
+# Build/rebuild and start LibreChat separately from the backend.
+make build-librechat
+make rebuild-librechat
+make start-librechat
+
 # In a separate terminal: Explorer dev server at http://localhost:5173.
 make start-explorer
-
-# Optional LibreChat-enabled stack at http://localhost:3080.
-make start-librechat
 ```
 
-`make start-librechat` delegates to `pnpm librechat:up`: it generates missing
-secrets without replacing existing values, builds with normal caching, and
-starts the entire LibreChat-enabled Compose stack (including backend services,
-Mongo, Qdrant and Ollama). It waits for services to become running/healthy and
-preserves data volumes. Unlike the backend `start-*` targets, this command can
-build images; it is not a cache-free rebuild.
+`make build-librechat` builds only the LibreChat image, including its bundled
+MCP server. `make rebuild-librechat` bypasses Docker build cache for that image
+and recreates LibreChat; `make start-librechat` starts it without building.
+Both start commands generate missing LibreChat secrets without replacing
+existing values and wait for LibreChat and its required API, NATS and Mongo
+services. Build the backend separately first if its images are missing or
+stale. `make stop-librechat` stops LibreChat and Mongo while preserving their
+data volumes; it does not stop backend services.
 
 `rebuild-*` backend commands use `--no-cache --pull`, disable local and remote
 Turbo build caches, and wait for services to become running/healthy. They do not
@@ -140,7 +151,7 @@ delete volumes or reset the catalogue. Worker commands also bring up their
 required API/NATS/worker dependencies. The core backend excludes LibreChat,
 Qdrant and Ollama; the Explorer is never started by a backend target.
 
-For quick starts using existing images, use `make start-backend`,
+For quick starts using existing backend images, use `make start-backend`,
 `make start-api`, `make start-workers`, `make start-ingestion-worker`, or
 `make start-knowledge-worker`. These commands deliberately do not build; use a
 `rebuild-*` target first if an image is missing or code has changed.
@@ -158,34 +169,32 @@ low-memory Docker hosts, use
 `make rebuild-backend TURBO_BUILD_ARGS=--concurrency=1`. Cache-free builds still
 use the locked dependency versions; they do not upgrade dependencies.
 
+Docker build contexts exclude both compiled output and TypeScript incremental
+state (`*.tsbuildinfo`). Copying incremental state without its output can make
+`tsc` report success without emitting declarations, causing dependent packages
+to fail with TS7016. A cache-free Docker build alone does not prevent this:
+the incremental state must also be excluded from the copied source tree.
+
 #### Rebuild and run everything
 
-Full clean rebuild of the backend, LibreChat and the explorer dev server.
-Run it from the repository root; the first command only needs to run once (it
-creates the git-ignored `deploy/compose/.env` with generated secrets and never
-overwrites existing values):
+To cleanly rebuild and run all three independently managed parts, run the
+following from the repository root. The LibreChat targets create the
+git-ignored `deploy/compose/.env` with development secrets as needed and never
+overwrite existing values:
 
 ```sh
-pnpm librechat:env
-
-COMPOSE="docker compose -f deploy/compose/compose.yaml --profile librechat"
-$COMPOSE build --no-cache workspace-brain-api ingestion-worker knowledge-worker librechat
-$COMPOSE up -d --force-recreate --wait \
-  workspace-brain-api ingestion-worker knowledge-worker librechat-mongo librechat
-
-pnpm install
-pnpm --filter @workspace-brain/workspace-brain-explorer dev
+make rebuild-backend
+make rebuild-librechat
+make start-explorer
 ```
 
 - API: `http://localhost:3000`; LibreChat: `http://localhost:3080`.
-- `librechat` is rebuilt too because it bundles the MCP server; a plain
-  restart would keep the old MCP code.
-- Omit `--profile librechat`, `librechat-mongo` and `librechat` for the
-  backend only. Drop `--no-cache` for faster incremental rebuilds.
+- The backend rebuild does not include LibreChat, Explorer, Qdrant or Ollama.
+- `make rebuild-librechat` rebuilds only LibreChat and its bundled MCP server.
 - Add `TURBO_BUILD_ARGS=--concurrency=1` before the build command on
   low-memory Docker VMs (for example 2 GB Colima).
-- Stop with `docker compose -f deploy/compose/compose.yaml --profile librechat down`
-  (volumes are kept; add `-v` to wipe them).
+- Stop the independent parts with `make stop-backend`, `make stop-librechat`,
+  and Ctrl-C for the Explorer dev server; these preserve data volumes.
 - Verify the LibreChat/MCP wiring with `pnpm librechat:verify`.
 
 By default, Compose mounts `./sources` read-only into the ingestion worker.
@@ -205,6 +214,14 @@ by itself create a new publication. Routine `/health` and `/ready` requests
 are omitted from request logs; readiness failures are still logged. Use
 `docker compose -f deploy/compose/compose.yaml logs -f ingestion-worker knowledge-worker workspace-brain-api`
 to follow the pipeline.
+
+The ingestion worker retrieves its configured sources over NATS with a
+5-second request timeout. The API snapshots registered source configuration
+before starting event consumers, so these requests do not wait behind long
+publication writes or reprocessing backlogs. Configuration changes require
+`make rebuild-api`; the snapshot refreshes on each API startup. Explorer
+catalogue queries and `/ready` still wait for catalogue operations and can be
+slow during large reprocessing runs; `/health` checks process liveness only.
 
 To run the end-to-end Compose discovery smoke test:
 

@@ -11,6 +11,13 @@ export const RELATIONSHIP_TYPES: RelationshipType[] = [
   'CONTAINS',
   'EXPOSES',
   'REFERENCES',
+  'BELONGS_TO',
+  'DOCUMENTS',
+  'USES',
+  'IMPLEMENTS',
+  'CONSUMES',
+  'CLASSIFIED_AS',
+  'DERIVED_FROM',
 ];
 
 export interface PublicationMeta {

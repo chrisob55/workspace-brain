@@ -187,6 +187,7 @@ export const knowledgeEntityTypes = [
   'container',
   'api',
   'module',
+  'journey',
   'repository',
   'architectural-decision',
   'document',
@@ -314,6 +315,198 @@ export type KnowledgeRelationship = {
   readonly currentVersionId: RelationshipVersionId;
   readonly createdAt: string;
   readonly updatedAt: string;
+};
+
+export type JourneyConfidence = 'proven' | 'derived';
+export type JourneyCompleteness = 'complete' | 'partial' | 'unresolved';
+export type JourneyEvidenceBasis = 'proven' | 'derived' | 'unresolved';
+export type JourneyStepOrder =
+  'entry' | 'source-order' | 'conditional' | 'grouped';
+
+export type ProvenanceReference = {
+  readonly id: string;
+  readonly kind:
+    | 'evidence'
+    | 'source-file'
+    | 'publication'
+    | 'service'
+    | 'api'
+    | 'connector'
+    | 'relationship';
+  readonly label: string;
+  readonly source?: string;
+  readonly documentPath?: string;
+  readonly documentId?: string;
+  readonly documentVersionId?: string;
+  readonly documentEntityId?: string;
+  readonly publicationId?: string;
+};
+
+export type JourneyStepType =
+  | 'HttpRouteStep'
+  | 'ControllerStep'
+  | 'ServiceStep'
+  | 'ComponentStep'
+  | 'ConnectorStep'
+  | 'HttpClientCallStep'
+  | 'ApiCallStep'
+  | 'UnresolvedCallStep'
+  | 'PersistenceStep';
+
+export type JourneyStepBase = {
+  readonly id: string;
+  readonly type: JourneyStepType;
+  readonly service?: string;
+  readonly entityKey?: string;
+  readonly stepEntityKey?: string;
+  readonly stepEntityId?: string;
+  readonly entityReferences?: readonly JourneyEntityReference[];
+  readonly evidenceRef?: string;
+  readonly evidenceBasis: JourneyEvidenceBasis;
+  readonly order: JourneyStepOrder;
+  readonly branchContext?: string;
+  readonly asyncGroup?: string;
+  readonly provenance: readonly ProvenanceReference[];
+};
+
+export type HttpRouteStep = JourneyStepBase & {
+  readonly type: 'HttpRouteStep';
+  readonly method: string;
+  readonly route: string;
+};
+
+export type ControllerStep = JourneyStepBase & {
+  readonly type: 'ControllerStep';
+  readonly controller: string;
+};
+
+export type ServiceStep = JourneyStepBase & {
+  readonly type: 'ServiceStep';
+  readonly service: string;
+};
+
+export type ComponentStep = JourneyStepBase & {
+  readonly type: 'ComponentStep';
+  readonly component: string;
+};
+
+export type ConnectorStep = JourneyStepBase & {
+  readonly type: 'ConnectorStep';
+  readonly connector: string;
+  readonly service: string;
+};
+
+export type HttpClientCallStep = JourneyStepBase & {
+  readonly type: 'HttpClientCallStep';
+  readonly targetExpression: string;
+  readonly method: string;
+};
+
+export type ApiCallStep = JourneyStepBase & {
+  readonly type: 'ApiCallStep';
+  readonly target: string;
+  readonly method?: string;
+};
+
+export type UnresolvedCallStep = JourneyStepBase & {
+  readonly type: 'UnresolvedCallStep';
+  readonly targetExpression: string;
+  readonly reason: string;
+};
+
+export type PersistenceStep = JourneyStepBase & {
+  readonly type: 'PersistenceStep';
+  readonly target: string;
+};
+
+export type JourneyStep =
+  | HttpRouteStep
+  | ControllerStep
+  | ServiceStep
+  | ComponentStep
+  | ConnectorStep
+  | HttpClientCallStep
+  | ApiCallStep
+  | UnresolvedCallStep
+  | PersistenceStep;
+
+export type JourneyTransitionType =
+  | 'RouteDispatch'
+  | 'MethodInvocation'
+  | 'ConnectorInvocation'
+  | 'HttpRequest'
+  | 'PersistenceOperation';
+
+export type JourneyTransition = {
+  readonly id: string;
+  readonly type: JourneyTransitionType;
+  readonly from: string;
+  readonly to: string;
+  readonly evidenceRef?: string;
+  readonly order: JourneyStepOrder;
+  readonly provenance: readonly ProvenanceReference[];
+  readonly certainty: JourneyEvidenceBasis;
+  readonly entityReferences?: readonly JourneyEntityReference[];
+  readonly relationshipReferences?: readonly JourneyRelationshipReference[];
+};
+
+export type JourneyDiagnostic = {
+  readonly key: string;
+  readonly reason: string;
+  readonly target: string;
+  readonly evidenceRef?: string;
+};
+
+export type JourneyEntityReference = {
+  readonly entityKey?: string;
+  readonly role:
+    | 'operation'
+    | 'controller'
+    | 'service'
+    | 'connector'
+    | 'component'
+    | 'api'
+    | 'document'
+    | 'step';
+  readonly label: string;
+  readonly entityId?: string;
+  readonly entityType?: KnowledgeEntityType;
+  readonly displayName?: string;
+  readonly publicationId?: string;
+};
+
+export type JourneyRelationshipReference = {
+  readonly relationshipKey?: string;
+  readonly type: KnowledgeRelationshipType;
+  readonly relationshipId?: string;
+  readonly sourceEntityId?: string;
+  readonly targetEntityId?: string;
+  readonly publicationId?: string;
+};
+
+export type JourneyCandidateEntityReference = JourneyEntityReference & {
+  readonly entityKey: string;
+};
+
+export type JourneyCandidateRelationshipReference =
+  JourneyRelationshipReference & {
+    readonly relationshipKey: string;
+  };
+
+export type Journey = {
+  readonly id: string;
+  readonly name: string;
+  readonly description?: string;
+  readonly sourceServices: readonly string[];
+  readonly confidence: JourneyConfidence;
+  readonly completeness: JourneyCompleteness;
+  readonly provenance: readonly ProvenanceReference[];
+  readonly steps: readonly JourneyStep[];
+  readonly transitions: readonly JourneyTransition[];
+  readonly entityReferences: readonly JourneyEntityReference[];
+  readonly relationshipReferences: readonly JourneyRelationshipReference[];
+  readonly unresolvedBoundaries: readonly JourneyDiagnostic[];
+  readonly diagnostics?: readonly JourneyDiagnostic[];
 };
 
 export type EntityVersion = {

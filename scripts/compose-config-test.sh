@@ -22,11 +22,21 @@ printf 'PASS: plain startup excludes LibreChat, Mongo and the smoke service\n'
 full=$(docker compose -f "$file" --profile librechat config --format json)
 node - "$full" <<'JS'
 const config = JSON.parse(process.argv[2]);
-const { librechat, 'librechat-mongo': mongo } = config.services;
+const {
+  'workspace-brain-api': api,
+  librechat,
+  'librechat-mongo': mongo,
+} = config.services;
 const fail = (message) => {
   console.error(`FAIL: ${message}`);
   process.exit(1);
 };
+if (!api.healthcheck.test.join(' ').includes('/health')) {
+  fail('API healthcheck must use the lightweight liveness endpoint');
+}
+if (api.healthcheck.test.join(' ').includes('/ready')) {
+  fail('API healthcheck must not run the database-backed readiness probe');
+}
 if (mongo.ports?.length) fail('MongoDB publishes a host port');
 if (Object.keys(mongo.networks ?? {}).join() !== 'librechat') {
   fail('MongoDB must only join the internal librechat network');

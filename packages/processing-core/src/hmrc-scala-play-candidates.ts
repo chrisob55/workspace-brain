@@ -8,6 +8,7 @@ const parserPackVersion = 2;
 const routeExtractorId = 'hmrc-play-route-facts';
 const componentExtractorId = 'hmrc-scala-components';
 const pathExtractorId = 'hmrc-candidate-static-paths';
+const maxStaticPathSteps = 256;
 
 export type HmrcCandidateProvenance = {
   readonly sourceId: string;
@@ -54,8 +55,9 @@ export type HmrcComponentCandidate = {
   readonly key: string;
   readonly repositoryPath: string;
   readonly symbolName: string;
+  readonly packageName: string;
   readonly symbolKind: 'class' | 'object' | 'trait';
-  readonly role: 'controller' | 'component';
+  readonly role: 'controller' | 'service' | 'connector' | 'component';
   readonly extendsType?: string;
   readonly evidence: HmrcCandidateProvenance;
 };
@@ -105,6 +107,11 @@ export type HmrcCandidateStaticPath = {
   readonly routeCandidateKey: string;
   readonly steps: readonly HmrcStaticPathStep[];
   readonly diagnostics: readonly string[];
+  readonly traversalBoundary?: {
+    readonly reason: string;
+    readonly target: string;
+    readonly evidence: HmrcCandidateProvenance;
+  };
 };
 
 export type HmrcScalaPlayAnalysis = {
@@ -420,6 +427,7 @@ export function analyzeHmrcScalaPlayRepository(
       key: componentKey(fact),
       repositoryPath,
       symbolName: fact.symbolName,
+      packageName: fact.packageName,
       symbolKind: fact.symbolKind,
       role,
       ...(fact.extendsType === undefined
@@ -689,6 +697,53 @@ export function analyzeHmrcScalaPlayRepository(
     );
   }
   const routes = [...routesByKey.values()];
+  const routeOwners = new Set(
+    routes.flatMap((route) =>
+      route.resolvedHandlerMethod
+        ? [
+            route.resolvedHandlerMethod.slice(
+              0,
+              route.resolvedHandlerMethod.lastIndexOf('.'),
+            ),
+          ]
+        : [],
+    ),
+  );
+  const httpOwners = new Set(
+    httpInteractions.map((interaction) =>
+      interaction.enclosingMethod.slice(
+        0,
+        interaction.enclosingMethod.lastIndexOf('.'),
+      ),
+    ),
+  );
+  const serviceOwners = new Set(
+    dependencies.flatMap((dependency) => {
+      const source = components.find(
+        (component) => component.key === dependency.sourceComponentKey,
+      );
+      const target = components.find(
+        (component) => component.key === dependency.targetComponentKey,
+      );
+      return source &&
+        target &&
+        routeOwners.has(source.symbolName) &&
+        target.packageName.split('.').includes('services')
+        ? [target.symbolName]
+        : [];
+    }),
+  );
+  const classifiedComponents = components.map((component) => ({
+    ...component,
+    role:
+      routeOwners.has(component.symbolName) || component.role === 'controller'
+        ? ('controller' as const)
+        : httpOwners.has(component.symbolName)
+          ? ('connector' as const)
+          : serviceOwners.has(component.symbolName)
+            ? ('service' as const)
+            : ('component' as const),
+  }));
 
   const pathCandidates: HmrcCandidateStaticPath[] = [];
   for (const route of routes) {
@@ -746,10 +801,21 @@ export function analyzeHmrcScalaPlayRepository(
       },
     ];
     const pathDiagnostics: string[] = [];
+    let traversalBoundary: HmrcCandidateStaticPath['traversalBoundary'];
+    let stepLimitReached = false;
     const visited = new Set<string>();
     const visit = (method: MethodFact, depth: number) => {
-      if (depth >= 8 || visited.has(method.symbolName)) {
-        pathDiagnostics.push(`traversal-stopped:${method.symbolName}`);
+      if (stepLimitReached) return;
+      if (depth >= 8) {
+        pathDiagnostics.push(
+          `traversal-stopped-depth-limit:${method.symbolName}`,
+        );
+        return;
+      }
+      if (visited.has(method.symbolName)) {
+        pathDiagnostics.push(
+          `traversal-stopped-repeated-method:${method.symbolName}`,
+        );
         return;
       }
       visited.add(method.symbolName);
@@ -764,6 +830,7 @@ export function analyzeHmrcScalaPlayRepository(
             : 0,
       );
       for (const entry of methodCalls) {
+        if (stepLimitReached) return;
         const locator = entry.call.input.evidence.locator;
         const evidence = provenance(
           repositoryPath,
@@ -771,6 +838,17 @@ export function analyzeHmrcScalaPlayRepository(
           pathExtractorId,
           entry.target ? 'Derived' : 'Proven',
         );
+        if (steps.length >= maxStaticPathSteps) {
+          const reason = 'traversal-stopped-step-limit';
+          pathDiagnostics.push(`${reason}:${entry.call.targetText}`);
+          traversalBoundary = {
+            reason,
+            target: entry.call.targetText,
+            evidence,
+          };
+          stepLimitReached = true;
+          return;
+        }
         if (entry.target) {
           steps.push({
             kind: 'call',
@@ -810,7 +888,6 @@ export function analyzeHmrcScalaPlayRepository(
           throw new Error('Call evidence changed during candidate analysis');
         }
       }
-      visited.delete(method.symbolName);
     };
     visit(handlerMethod, 0);
     pathCandidates.push({
@@ -820,6 +897,7 @@ export function analyzeHmrcScalaPlayRepository(
       routeCandidateKey: route.key,
       steps,
       diagnostics: [...new Set(pathDiagnostics)].sort(),
+      ...(traversalBoundary ? { traversalBoundary } : {}),
     });
   }
 
@@ -831,7 +909,7 @@ export function analyzeHmrcScalaPlayRepository(
     );
   return {
     routes: sortByKey(routes),
-    components: sortByKey(components),
+    components: sortByKey(classifiedComponents),
     dependencies: sortByKey(dependencies),
     calls: sortByKey(callCandidates),
     httpInteractions: sortByKey(httpInteractions),

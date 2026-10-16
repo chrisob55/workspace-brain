@@ -49,6 +49,7 @@ import {
 } from '@workspace-brain/domain';
 import { z } from 'zod';
 import { extractHmrcScalaPlayKnowledge } from '@workspace-brain/processing-core';
+import { resolveJourneyReferences } from './journey-references.js';
 import {
   getExtractionContext,
   repositoryBoundarySchema,
@@ -153,6 +154,19 @@ const locatorSchema = z.union([
     })
     .strict(),
 ]);
+const provenanceFactsSchema = z
+  .record(z.string().min(1).max(128), z.string().max(850_000))
+  .superRefine((facts, context) => {
+    for (const [key, value] of Object.entries(facts)) {
+      if (key !== 'journeyJson' && value.length > 4096) {
+        context.addIssue({
+          code: 'custom',
+          path: [key],
+          message: 'Knowledge provenance facts are limited to 4096 characters.',
+        });
+      }
+    }
+  });
 const provenanceSchema = z
   .object({
     evidenceId: idSchema,
@@ -170,9 +184,7 @@ const provenanceSchema = z
     knowledgeExtractorVersion: z.number().int().positive(),
     repositoryBoundary: repositoryBoundarySchema.optional(),
     resolvedDocument: extractionDocumentSchema.optional(),
-    facts: z
-      .record(z.string().min(1).max(128), z.string().max(4096))
-      .optional(),
+    facts: provenanceFactsSchema.optional(),
   })
   .strict();
 const entityCandidateSchema = z
@@ -1748,17 +1760,96 @@ async function reconcileKnowledgeModel(
   );
   const desiredEntities = aggregateEntityCandidates(contributions);
   for (const candidate of parserCandidates.entities) {
-    if (desiredEntities.has(candidate.key))
+    const previous = desiredEntities.get(candidate.key);
+    if (previous && candidate.type !== 'document')
       throw new CatalogueIntegrityError(
         'Parser pack entity identity conflicts with document extraction',
       );
-    desiredEntities.set(candidate.key, candidate);
+    desiredEntities.set(
+      candidate.key,
+      previous
+        ? {
+            ...candidate,
+            sourceEvidenceIds: sortedUnique([
+              ...previous.sourceEvidenceIds,
+              ...candidate.sourceEvidenceIds,
+            ]),
+            provenance: mergeProvenance(
+              previous.provenance,
+              candidate.provenance,
+            ),
+          }
+        : candidate,
+    );
   }
   const existingEntities = await loadModelEntities(connection, model.id);
   const entitiesByKey = new Map(
     existingEntities.map((item) => [item.entityKey, item.entity]),
   );
-  const entityIdsByKey = new Map<string, string>();
+  const entityIdsByKey = new Map(
+    [...desiredEntities.keys()]
+      .filter((key) => entitiesByKey.get(key)?.lifecycleStatus !== 'rejected')
+      .map((key) => [
+        key,
+        entitiesByKey.get(key)?.id ?? createKnowledgeEntityId(),
+      ]),
+  );
+  const desiredRelationships = aggregateRelationshipCandidates(contributions);
+  for (const candidate of parserCandidates.relationships) {
+    if (desiredRelationships.has(candidate.key))
+      throw new CatalogueIntegrityError(
+        'Parser pack relationship identity conflicts with document extraction',
+      );
+    desiredRelationships.set(candidate.key, candidate);
+  }
+  const existingRelationships = await loadModelRelationships(
+    connection,
+    model.id,
+  );
+  const relationshipsByKey = new Map(
+    existingRelationships.map((item) => [
+      item.relationshipKey,
+      item.relationship,
+    ]),
+  );
+  const relationshipIdsByKey = new Map(
+    [...desiredRelationships.keys()]
+      .filter(
+        (key) => relationshipsByKey.get(key)?.lifecycleStatus !== 'rejected',
+      )
+      .map((key) => [
+        key,
+        relationshipsByKey.get(key)?.id ?? createKnowledgeRelationshipId(),
+      ]),
+  );
+  const omittedStepKeys = new Set<string>();
+  for (const [key, candidate] of desiredEntities) {
+    if (candidate.type !== 'journey') continue;
+    const resolved = resolveJourneyReferences(
+      candidate,
+      desiredEntities,
+      entityIdsByKey,
+      desiredRelationships,
+      relationshipIdsByKey,
+    );
+    desiredEntities.set(key, resolved.candidate);
+    for (const stepKey of resolved.omittedStepKeys) {
+      omittedStepKeys.add(stepKey);
+    }
+  }
+  for (const key of omittedStepKeys) {
+    desiredEntities.delete(key);
+    entityIdsByKey.delete(key);
+  }
+  for (const [key, relationship] of desiredRelationships) {
+    if (
+      omittedStepKeys.has(relationship.sourceEntityKey) ||
+      omittedStepKeys.has(relationship.targetEntityKey)
+    ) {
+      desiredRelationships.delete(key);
+      relationshipIdsByKey.delete(key);
+    }
+  }
   let changed = false;
 
   for (const candidate of desiredEntities.values()) {
@@ -1769,6 +1860,7 @@ async function reconcileKnowledgeModel(
       candidate,
       existing,
       occurredAt,
+      entityIdsByKey.get(candidate.key),
     );
     if (result.entity.lifecycleStatus !== 'rejected') {
       entityIdsByKey.set(candidate.key, result.entity.id);
@@ -1816,24 +1908,6 @@ async function reconcileKnowledgeModel(
     }
   }
 
-  const desiredRelationships = aggregateRelationshipCandidates(contributions);
-  for (const candidate of parserCandidates.relationships) {
-    if (desiredRelationships.has(candidate.key))
-      throw new CatalogueIntegrityError(
-        'Parser pack relationship identity conflicts with document extraction',
-      );
-    desiredRelationships.set(candidate.key, candidate);
-  }
-  const existingRelationships = await loadModelRelationships(
-    connection,
-    model.id,
-  );
-  const relationshipsByKey = new Map(
-    existingRelationships.map((item) => [
-      item.relationshipKey,
-      item.relationship,
-    ]),
-  );
   const activeRelationshipKeys = new Set<string>();
   for (const candidate of desiredRelationships.values()) {
     const sourceEntityId = entityIdsByKey.get(candidate.sourceEntityKey);
@@ -1853,6 +1927,7 @@ async function reconcileKnowledgeModel(
       targetEntityId,
       existing,
       occurredAt,
+      relationshipIdsByKey.get(candidate.key),
     );
     if (result.changed) {
       changed = true;
@@ -1946,6 +2021,7 @@ async function upsertEntity(
   candidate: KnowledgeEntityCandidate,
   existing: KnowledgeEntity | undefined,
   occurredAt: string,
+  allocatedId?: string,
 ): Promise<{ readonly entity: KnowledgeEntity; readonly changed: boolean }> {
   const sourceEvidenceIds = sortedUnique(candidate.sourceEvidenceIds);
   const provenance = mergeProvenance([], candidate.provenance);
@@ -1963,7 +2039,11 @@ async function upsertEntity(
   ) {
     return { entity: existing, changed: false };
   }
-  const entityId = existing?.id ?? createKnowledgeEntityId();
+  const entityId =
+    existing?.id ??
+    (allocatedId
+      ? parseKnowledgeEntityId(allocatedId)
+      : createKnowledgeEntityId());
   const entityVersionId = createEntityVersionId();
   const entity: KnowledgeEntity = {
     id: entityId,
@@ -2036,6 +2116,7 @@ async function upsertRelationship(
   targetEntityId: string,
   existing: KnowledgeRelationship | undefined,
   occurredAt: string,
+  allocatedId?: string,
 ): Promise<{
   readonly relationship: KnowledgeRelationship;
   readonly changed: boolean;
@@ -2059,7 +2140,11 @@ async function upsertRelationship(
   ) {
     return { relationship: existing, changed: false };
   }
-  const relationshipId = existing?.id ?? createKnowledgeRelationshipId();
+  const relationshipId =
+    existing?.id ??
+    (allocatedId
+      ? parseKnowledgeRelationshipId(allocatedId)
+      : createKnowledgeRelationshipId());
   const relationshipVersionId = createRelationshipVersionId();
   const relationship: KnowledgeRelationship = {
     id: relationshipId,

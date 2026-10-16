@@ -1,11 +1,16 @@
 import type {
+  Journey,
+  JourneyCandidateRelationshipReference,
   KnowledgeInputEvidence,
   KnowledgeProvenance,
 } from '@workspace-brain/domain';
+import { createKnowledgeEntityKey } from '@workspace-brain/domain';
 import {
   analyzeHmrcScalaPlayRepository,
   type HmrcCandidateProvenance,
 } from './hmrc-scala-play-candidates.js';
+import { generateJourneysFromStaticPaths } from './journey-generator.js';
+import { linkJourneyGraphCandidates } from './journey-graph-candidates.js';
 import {
   CandidateBuilder,
   owningRepository,
@@ -26,7 +31,17 @@ const ownerOfMethod = (method: string) =>
 export function extractHmrcScalaPlayKnowledge(
   inputs: readonly KnowledgeInputEvidence[],
 ): ExtractorResult {
-  const output = new CandidateBuilder(extractorId, 1);
+  const output = new CandidateBuilder(extractorId, 2);
+  const journeys = new Map<string, Journey>();
+  const providers = new Map<
+    string,
+    { key: string; inputs: KnowledgeInputEvidence[] }[]
+  >();
+  const downstreams: {
+    key: string;
+    name: string;
+    inputs: KnowledgeInputEvidence[];
+  }[] = [];
   const repositories = new Map<string, KnowledgeInputEvidence[]>();
   for (const input of inputs) {
     const repository = owningRepository(input);
@@ -83,42 +98,61 @@ export function extractHmrcScalaPlayKnowledge(
       repositoryBoundary: repository,
       facts: { ...facts, repositoryPath: repository.path, ...details },
     });
-    const components = new Map<string, string>();
-    const bySymbol = new Map<string, string>();
-    const routeOwners = new Set(
-      analysis.routes.flatMap((route) =>
-        route.resolvedHandlerMethod
-          ? [ownerOfMethod(route.resolvedHandlerMethod)]
+    const declarations = group.filter((input) => {
+      const locator = input.evidence.locator;
+      return (
+        input.document.path === `${repository.path}/conf/application.conf` &&
+        locator.kind === 'hocon-key' &&
+        locator.key === 'appName' &&
+        (locator.valueKind === 'string' || locator.valueKind === 'unquoted') &&
+        /^[a-z][a-z0-9-]*$/.test(locator.literalValue ?? '')
+      );
+    });
+    const serviceNames = new Set(
+      declarations.flatMap((input) =>
+        input.evidence.locator.kind === 'hocon-key'
+          ? [input.evidence.locator.literalValue]
           : [],
       ),
     );
-    const httpOwners = new Set(
-      analysis.httpInteractions.map((http) =>
-        ownerOfMethod(http.enclosingMethod),
-      ),
-    );
-    const serviceOwners = new Set(
-      analysis.dependencies.flatMap((dependency) => {
-        const source = analysis.components.find(
-          (component) => component.key === dependency.sourceComponentKey,
+    let declaredServiceKey: string | undefined;
+    if (serviceNames.size === 1) {
+      const name = declarations[0]?.evidence.locator;
+      if (name?.kind === 'hocon-key' && name.literalValue) {
+        const key = output.entity(
+          'api',
+          name.literalValue,
+          repository.path,
+          declarations,
+          extra({
+            role: 'declared-service',
+            serviceIdentifier: name.literalValue,
+          }),
         );
-        const target = analysis.components.find(
-          (component) => component.key === dependency.targetComponentKey,
+        declaredServiceKey = key;
+        const matches = providers.get(name.literalValue) ?? [];
+        matches.push({ key, inputs: declarations });
+        providers.set(name.literalValue, matches);
+      }
+    } else if (serviceNames.size > 1) {
+      for (const declaration of declarations) {
+        output.diagnose(
+          declaration,
+          'unresolved',
+          'provider-appName-declaration-ambiguous',
+          [...serviceNames].sort().join(', '),
         );
-        return source && target && routeOwners.has(source.symbolName)
-          ? [target.symbolName]
-          : [];
-      }),
-    );
+      }
+    }
+    const components = new Map<string, string>();
+    const bySymbol = new Map<string, string>();
+    const componentRoles = new Map<
+      string,
+      'controller' | 'service' | 'connector' | 'component'
+    >();
     for (const component of analysis.components) {
-      const role =
-        routeOwners.has(component.symbolName) || component.role === 'controller'
-          ? 'controller'
-          : httpOwners.has(component.symbolName)
-            ? 'connector'
-            : serviceOwners.has(component.symbolName)
-              ? 'service'
-              : 'component';
+      const role = component.role;
+      componentRoles.set(component.symbolName, role);
       const key = output.entity(
         'module',
         component.symbolName,
@@ -129,6 +163,10 @@ export function extractHmrcScalaPlayKnowledge(
       components.set(component.key, key);
       bySymbol.set(component.symbolName, key);
     }
+    const relationshipKeysByRoute = new Map<
+      string,
+      JourneyCandidateRelationshipReference[]
+    >();
     for (const dependency of analysis.dependencies) {
       const source = components.get(dependency.sourceComponentKey);
       const target = components.get(dependency.targetComponentKey);
@@ -156,7 +194,7 @@ export function extractHmrcScalaPlayKnowledge(
           components.get(dependency.sourceComponentKey) === source &&
           components.get(dependency.targetComponentKey) === target,
       );
-      if (source && target)
+      if (source && target) {
         output.relationship(
           'USES',
           source,
@@ -170,7 +208,9 @@ export function extractHmrcScalaPlayKnowledge(
           ],
           extra({ relationship: 'CALLS' }),
         );
+      }
     }
+    const operationEntityKeysByRoute = new Map<string, string>();
     for (const route of analysis.routes) {
       if (route.routeSet !== 'app') continue;
       const diagnostics = analysis.diagnostics.filter((item) =>
@@ -194,6 +234,19 @@ export function extractHmrcScalaPlayKnowledge(
           ),
         }),
       );
+      operationEntityKeysByRoute.set(route.key, routeKey);
+      if (declaredServiceKey) {
+        output.relationship(
+          'EXPOSES',
+          declaredServiceKey,
+          routeKey,
+          [...declarations, ...support(route.evidence)],
+          extra({
+            relationship: 'DECLARED_SERVICE_ROUTE',
+            exposure: 'declared-route-only',
+          }),
+        );
+      }
       const controller = route.resolvedHandlerMethod
         ? bySymbol.get(ownerOfMethod(route.resolvedHandlerMethod))
         : undefined;
@@ -205,6 +258,12 @@ export function extractHmrcScalaPlayKnowledge(
             input.evidence.locator.symbolName === route.resolvedHandlerMethod,
         );
         const evidence = [...support(route.evidence), ...handler];
+        const references = relationshipKeysByRoute.get(route.key) ?? [];
+        references.push({
+          relationshipKey: `USES:${routeKey}->${controller}`,
+          type: 'USES',
+        });
+        relationshipKeysByRoute.set(route.key, references);
         output.relationship(
           'USES',
           routeKey,
@@ -223,6 +282,151 @@ export function extractHmrcScalaPlayKnowledge(
           }),
         );
       }
+    }
+    for (const staticPath of analysis.staticPaths) {
+      const route = analysis.routes.find(
+        (candidate) => candidate.key === staticPath.routeCandidateKey,
+      );
+      const operationEntityKey = operationEntityKeysByRoute.get(
+        staticPath.routeCandidateKey,
+      );
+      if (!route || !operationEntityKey) continue;
+      const pathMethods = new Set(
+        staticPath.steps
+          .filter((step) => step.kind === 'method' || step.kind === 'call')
+          .map((step) => step.target),
+      );
+      const relationshipReferences = [
+        ...(relationshipKeysByRoute.get(route.key) ?? []),
+        ...analysis.calls.flatMap((call) => {
+          if (
+            !call.resolvedTargetMethod ||
+            !pathMethods.has(call.enclosingMethod) ||
+            !pathMethods.has(call.resolvedTargetMethod)
+          ) {
+            return [];
+          }
+          const source = bySymbol.get(ownerOfMethod(call.enclosingMethod));
+          const target = bySymbol.get(ownerOfMethod(call.resolvedTargetMethod));
+          return source && target && source !== target
+            ? [
+                {
+                  relationshipKey: `USES:${source}->${target}`,
+                  type: 'USES' as const,
+                },
+              ]
+            : [];
+        }),
+      ];
+      const entityKeysByComponent = new Map(bySymbol);
+      const journey = generateJourneysFromStaticPaths([staticPath], {
+        componentRoles,
+        entityKeysByComponent,
+        operationEntityKey,
+        relationshipReferences,
+        stableIdentityScope: `${first.document.sourceId}:${repository.path}`,
+      })[0];
+      if (!journey) {
+        throw new Error(
+          `Journey generation returned no path for ${staticPath.key}`,
+        );
+      }
+      const journeyEvidenceById = new Map<string, KnowledgeInputEvidence>();
+      for (const step of staticPath.steps) {
+        const input = support([step.evidence])[0];
+        if (!input) {
+          throw new Error(
+            `Journey ${staticPath.key} references unavailable evidence`,
+          );
+        }
+        journeyEvidenceById.set(step.evidence.evidenceId, input);
+      }
+      if (staticPath.traversalBoundary) {
+        const input = support([staticPath.traversalBoundary.evidence])[0];
+        if (!input)
+          throw new Error(
+            `Journey ${staticPath.key} has missing traversal evidence`,
+          );
+        journeyEvidenceById.set(input.evidence.id, input);
+      }
+      const journeyEvidence = [...journeyEvidenceById.values()];
+      if (journeyEvidence.length === 0) {
+        throw new Error(`Journey ${journey.id} has no supporting evidence`);
+      }
+      const sourceId = journeyEvidence[0]?.document.sourceId;
+      if (!sourceId) {
+        throw new Error(`Journey ${journey.id} has no source identity`);
+      }
+      const journeyScope = `${repository.path}/journey/${journey.id}`;
+      const journeyEntityKey = createKnowledgeEntityKey(
+        'journey',
+        sourceId,
+        journeyScope,
+        journey.name,
+      );
+      const journeyRelationshipReferences: JourneyCandidateRelationshipReference[] =
+        [];
+      for (const reference of journey.entityReferences) {
+        if (!reference.entityKey)
+          throw new Error(
+            `Journey ${journey.id} has an invalid candidate entity reference`,
+          );
+        const relationshipKey = `USES:${journeyEntityKey}->${reference.entityKey}`;
+        journeyRelationshipReferences.push({
+          relationshipKey,
+          type: 'USES',
+        });
+      }
+      const publishedJourney: Journey = {
+        ...journey,
+        relationshipReferences: [
+          ...new Map(
+            [
+              ...journey.relationshipReferences,
+              ...journeyRelationshipReferences,
+            ].map((reference) => {
+              if (!reference.relationshipKey)
+                throw new Error(
+                  `Journey ${journey.id} has an invalid candidate relationship reference`,
+                );
+              return [
+                reference.relationshipKey,
+                { ...reference, relationshipKey: reference.relationshipKey },
+              ] as const;
+            }),
+          ).values(),
+        ].sort((left, right) =>
+          left.relationshipKey < right.relationshipKey
+            ? -1
+            : left.relationshipKey > right.relationshipKey
+              ? 1
+              : 0,
+        ),
+      };
+      const journeyKey = output.entity(
+        'journey',
+        journey.name,
+        journeyScope,
+        journeyEvidence,
+        extra({
+          role: 'static-journey',
+          journeyId: journey.id,
+          confidence: journey.confidence,
+          completeness: journey.completeness,
+        }),
+        (_input, index) =>
+          index === 0
+            ? {
+                facts: {
+                  journeyJson: JSON.stringify(publishedJourney),
+                },
+              }
+            : {},
+      );
+      if (journeyKey !== journeyEntityKey) {
+        throw new Error(`Journey identity mismatch for ${journey.id}`);
+      }
+      journeys.set(journeyKey, publishedJourney);
     }
 
     const values = new Map<string, KnowledgeInputEvidence[]>();
@@ -314,21 +518,45 @@ export function extractHmrcScalaPlayKnowledge(
           ? { name: lookup[2], evidence: [parameter] }
           : undefined;
       }
-      // HMRC AppConfig commonly delegates literal service names through this exact wrapper.
       const wrapped = /^baseUrl\("([a-z][a-z0-9-]*)"\)$/.exec(expression);
       if (wrapped?.[1]) {
+        const declarations = group.filter((input) => {
+          const locator = input.evidence.locator;
+          return (
+            locator.kind === 'scala-symbol' &&
+            locator.symbolKind === 'method' &&
+            locator.symbolName === `${owner}.baseUrl`
+          );
+        });
+        const declaration =
+          declarations.length === 1 ? declarations[0] : undefined;
+        const signature =
+          declaration?.evidence.locator.kind === 'scala-symbol'
+            ? declaration.evidence.locator.signature
+            : undefined;
+        const parameterName =
+          /^def\s+baseUrl\(\s*([A-Za-z_$][\w$]*)\s*:\s*String\s*\)\s*(?::\s*String\s*)?=$/.exec(
+            signature?.trim() ?? '',
+          )?.[1];
+        if (!parameterName) return undefined;
         const wrappers = group.filter(
           (input) =>
             input.evidence.locator.kind === 'scala-call-site' &&
             input.evidence.locator.enclosingSymbol === `${owner}.baseUrl` &&
-            /^[A-Za-z_$][\w$]*\.baseUrl\(serviceName\)$/.test(
-              input.evidence.excerpt.replace(/\s+/g, ''),
-            ),
+            input.evidence.locator.targetText ===
+              `${input.evidence.locator.receiver}.baseUrl` &&
+            input.evidence.excerpt.replace(/\s+/g, '') ===
+              `${input.evidence.locator.receiver}.baseUrl(${parameterName})`,
         );
         const wrapper = wrappers.length === 1 ? wrappers[0] : undefined;
         if (!wrapper || wrapper.evidence.locator.kind !== 'scala-call-site')
           return undefined;
         const receiver = wrapper.evidence.locator.receiver;
+        if (
+          receiver === parameterName ||
+          (receiver && values.has(`${owner}.baseUrl.${receiver}`))
+        )
+          return undefined;
         const parameter = group.find((input) => {
           const locator = input.evidence.locator;
           return (
@@ -341,8 +569,8 @@ export function extractHmrcScalaPlayKnowledge(
             )
           );
         });
-        return parameter
-          ? { name: wrapped[1], evidence: [wrapper, parameter] }
+        return parameter && declaration
+          ? { name: wrapped[1], evidence: [declaration, wrapper, parameter] }
           : undefined;
       }
       return undefined;
@@ -355,7 +583,7 @@ export function extractHmrcScalaPlayKnowledge(
       );
       if (!connector || !call) continue;
       const argument =
-        /^[\w$]+\.(?:get|post|put|patch|delete|head|options)(?:\[[^\]]+\])?\(\s*(?:url|s)"\$\{?([\w$]+(?:\.[\w$]+)?)\}?(?:\/[^"]*)?"\s*\)$/.exec(
+        /^[\w$]+\s*\.\s*(?:get|post|put|patch|delete|head|options)(?:\[[^\]]+\])?\(\s*(?:url|s)"\$\{?([\w$]+(?:\.[\w$]+)?)\}?(?:\/[^"]*)?"\s*\)$/.exec(
           call.evidence.excerpt,
         );
       const reference = argument?.[1];
@@ -421,6 +649,15 @@ export function extractHmrcScalaPlayKnowledge(
         [...support(http.evidence), ...resolved.evidence, ...configuration],
         extra({ relationship: 'HTTP', execution: 'static-call-site-only' }),
       );
+      downstreams.push({
+        key: api,
+        name: resolved.name,
+        inputs: [
+          ...support(http.evidence),
+          ...resolved.evidence,
+          ...configuration,
+        ],
+      });
     }
     for (const diagnostic of analysis.diagnostics) {
       const input = byEvidence.get(diagnostic.evidence.evidenceId);
@@ -433,7 +670,36 @@ export function extractHmrcScalaPlayKnowledge(
         );
     }
   }
-  const result = output.result();
+  for (const downstream of downstreams) {
+    const matches = providers.get(downstream.name) ?? [];
+    const provider = matches.length === 1 ? matches[0] : undefined;
+    if (provider && provider.key !== downstream.key) {
+      output.relationship(
+        'REFERENCES',
+        downstream.key,
+        provider.key,
+        [...downstream.inputs, ...provider.inputs],
+        {
+          facts: {
+            ...facts,
+            relationship: 'CONFIGURED_SERVICE_TARGET',
+            serviceIdentifier: downstream.name,
+            resolution: 'exact-unique-appName',
+          },
+        },
+      );
+    } else if (matches.length > 1) {
+      const input = downstream.inputs[0];
+      if (input)
+        output.diagnose(
+          input,
+          'unresolved',
+          'downstream-provider-declaration-ambiguous',
+          downstream.name,
+        );
+    }
+  }
+  const result = linkJourneyGraphCandidates(output.result(), journeys, inputs);
   const diagnosticsByDocument = new Map<string, Map<string, number>>();
   for (const diagnostic of result.diagnostics ?? []) {
     const reasons =

@@ -1,5 +1,15 @@
 export type RelationshipType =
-  'DEPENDS_ON' | 'CONTAINS' | 'EXPOSES' | 'REFERENCES';
+  | 'DEPENDS_ON'
+  | 'CONTAINS'
+  | 'EXPOSES'
+  | 'REFERENCES'
+  | 'BELONGS_TO'
+  | 'DOCUMENTS'
+  | 'USES'
+  | 'IMPLEMENTS'
+  | 'CONSUMES'
+  | 'CLASSIFIED_AS'
+  | 'DERIVED_FROM';
 
 export type EntityType =
   | 'repository'

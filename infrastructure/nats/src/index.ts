@@ -37,7 +37,11 @@ export type NatsDiscoveryBus = {
     handler: DiscoveryEventHandler,
   ): Promise<void>;
   subscribeRequests(subject: string, handler: RequestHandler): void;
-  request<T>(subject: string, payload: unknown): Promise<T>;
+  request<T>(
+    subject: string,
+    payload: unknown,
+    options?: { readonly timeoutMs: number },
+  ): Promise<T>;
   close(): Promise<void>;
 };
 
@@ -69,7 +73,7 @@ export async function connectNatsDiscoveryBus(
     async subscribe(subject, durableName, handler) {
       await ensureConsumer(connection, durableName, subject);
       const consumer = await js.consumers.get(streamName, durableName);
-      const messages = await consumer.consume();
+      const messages = await consumer.consume({ max_messages: 1 });
       subscriptions.push(messages);
       const task = consume(messages, handler, durableName, js, logger);
       consumerTasks.push(task);
@@ -92,11 +96,15 @@ export async function connectNatsDiscoveryBus(
       consumerTasks.push(task);
     },
 
-    async request<T>(subject: string, payload: unknown) {
+    async request<T>(
+      subject: string,
+      payload: unknown,
+      options?: { readonly timeoutMs: number },
+    ) {
       const response = await connection.request(
         subject,
         codec.encode(JSON.stringify(payload)),
-        { timeout: 5_000 },
+        { timeout: options?.timeoutMs ?? 5_000 },
       );
       return JSON.parse(codec.decode(response.data)) as T;
     },
@@ -122,6 +130,8 @@ async function consume(
   logger: Logger,
 ): Promise<void> {
   for await (const message of messages) {
+    const heartbeat = setInterval(() => message.working(), 10_000);
+    heartbeat.unref();
     try {
       const event = JSON.parse(codec.decode(message.data)) as DiscoveryEvent;
       await handler(event);
@@ -159,6 +169,8 @@ async function consume(
         );
         message.nak(1_000);
       }
+    } finally {
+      clearInterval(heartbeat);
     }
   }
 }
@@ -175,6 +187,7 @@ async function ensureConsumer(
       ack_policy: AckPolicy.Explicit,
       filter_subject: subject,
       max_deliver: -1,
+      max_ack_pending: 1,
     });
   } catch (createError) {
     try {
@@ -182,6 +195,7 @@ async function ensureConsumer(
       await manager.consumers.update(streamName, durableName, {
         filter_subject: subject,
         max_deliver: -1,
+        max_ack_pending: 1,
       });
     } catch (verifyError) {
       throw new AggregateError(

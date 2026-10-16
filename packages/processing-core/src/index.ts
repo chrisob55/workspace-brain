@@ -13,6 +13,21 @@ import {
 } from './hmrc-scala-play.js';
 
 export { analyzeHmrcScalaPlayRepository } from './hmrc-scala-play-candidates.js';
+export {
+  createJourneyFromStaticPath,
+  findJourneyById,
+  findJourneyByName,
+  findJourneysByService,
+  findJourneysUsingApi,
+  findJourneysUsingConnector,
+  generateJourneysFromStaticPaths,
+  JourneyGenerator,
+} from './journey-generator.js';
+export type {
+  JourneyComponentRole,
+  JourneyGenerationOptions,
+  JourneyGenerationResult,
+} from './journey-generator.js';
 export * from './knowledge-extractors.js';
 export { extractHmrcScalaPlayKnowledge } from './hmrc-scala-play-knowledge.js';
 export type {
@@ -133,7 +148,7 @@ export const documentProcessors: readonly DocumentProcessor[] = [
     extensionsFor('scala-source'),
     definitionFor('scala-source').extractionRuleId,
     normalizeScala,
-    2,
+    3,
   ),
   createProcessor(
     'play-routes',
