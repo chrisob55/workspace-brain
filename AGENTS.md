@@ -18,7 +18,7 @@ After every change, include a **Runtime action** section in the final response:
 - Distinguish **rebuild and recreate**, **recreate without rebuilding**, **restart
   only**, and **Explorer hot reload/rebuild**. Give exact commands from the
   repository root, preferring the [Makefile](Makefile) shortcuts documented in
-  the [README](README.md#make-shortcuts-backend-and-explorer-separately).
+  the [README](README.md#make-shortcuts-backend-explorer-and-librechat-separately).
 - Explain briefly why the action is needed. State whether it was actually
   performed and verified or is still required; do not imply that editing code
   updated a running container.
@@ -39,7 +39,7 @@ Consult [Compose](deploy/compose/compose.yaml), the
 | Shared packages used by multiple backend processes                               | Rebuild every affected consumer; use `make rebuild-workers` or `make rebuild-backend` when appropriate.                                                                                                                                                                                    |
 | Backend Dockerfile or backend build/dependency configuration                     | Rebuild affected backend images; use `make rebuild-backend` when all three are affected.                                                                                                                                                                                                   |
 | `config/workspace-brain.yaml`                                                    | `make rebuild-api`: this configuration is baked into the image, not bind-mounted.                                                                                                                                                                                                          |
-| MCP server code/dependencies or LibreChat Dockerfile                             | Rebuild LibreChat, which bundles the stdio MCP server: `docker compose -f deploy/compose/compose.yaml --profile librechat build --no-cache --pull librechat`, then `docker compose -f deploy/compose/compose.yaml --profile librechat up -d --no-build --force-recreate --wait librechat`. |
+| MCP server code/dependencies or LibreChat Dockerfile                             | `make rebuild-librechat`: rebuild and recreate LibreChat only. Build the backend separately if its API image is missing or stale.                                                                                                                                                          |
 | Bind-mounted `deploy/compose/librechat/librechat.yaml` contents only             | Restart LibreChat: `docker compose -f deploy/compose/compose.yaml --profile librechat restart librechat`. No image rebuild required.                                                                                                                                                       |
 | Compose environment, ports, commands, mounts, or values interpolated from `.env` | Recreate affected services: `docker compose -f deploy/compose/compose.yaml up -d --no-build --force-recreate --wait <services>` (add the relevant profile for optional services). Restart alone does not apply Compose changes. Rebuild too if image contents/build arguments changed.     |
 | Explorer UI code                                                                 | Keep it separate from backend deployment. An existing dev server normally hot reloads; otherwise `make start-explorer`. For production preview, stop the old preview and run `make rebuild-explorer`. No backend rebuild unless backend code also changed.                                 |
@@ -51,6 +51,9 @@ deploys code changes**. `make start-*` uses existing images and is not a rebuild
 The `make rebuild-*` backend targets bypass Docker/Turbo caches, rebuild required
 dependencies, and recreate selected services; mention any extra dependencies they
 bring up. Do not rebuild NATS, Qdrant, Ollama, or Mongo for application-only changes.
+The API container healthcheck uses `/health` for liveness; API startup applies
+migrations before opening the listener. Keep the database-backed `/ready` probe
+for readiness diagnostics rather than the container healthcheck.
 For image-tag changes to those services, pull and recreate the affected service.
 Restart-only is appropriate for unchanged image/environment/mount definitions
 when a process must reload bind-mounted content or recover transiently.

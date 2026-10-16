@@ -58,6 +58,56 @@ function createProcessingEvent(
 }
 
 describe('DuckDB catalogue migrations', () => {
+  it('registers HMRC processing definitions on previously migrated catalogues without replacing existing authority', async () => {
+    const instance = await DuckDBInstance.create(':memory:');
+    const connection = await instance.connect();
+    try {
+      await connection.run(
+        'CREATE TABLE accepted_processing_definitions (filename_match_kind VARCHAR NOT NULL, filename_match VARCHAR NOT NULL, processor_id VARCHAR NOT NULL, extraction_rule_id VARCHAR NOT NULL, PRIMARY KEY (filename_match_kind, filename_match))',
+      );
+      await connection.run(
+        "INSERT INTO accepted_processing_definitions VALUES ('suffix', '.md', 'markdown', 'markdown-blocks')",
+      );
+      const migration = await readFile(
+        resolve(
+          process.cwd(),
+          'infrastructure/duckdb/migrations/018-hmrc-processing-definitions.sql',
+        ),
+        'utf8',
+      );
+      await connection.run(migration);
+      await connection.run(migration);
+      const definitions = await connection.runAndReadAll(
+        'SELECT filename_match, processor_id, extraction_rule_id FROM accepted_processing_definitions ORDER BY filename_match',
+      );
+      expect(definitions.getRowObjectsJson()).toEqual([
+        {
+          filename_match: '.conf',
+          processor_id: 'hocon',
+          extraction_rule_id: 'hocon-key-values',
+        },
+        {
+          filename_match: '.md',
+          processor_id: 'markdown',
+          extraction_rule_id: 'markdown-blocks',
+        },
+        {
+          filename_match: '.routes',
+          processor_id: 'play-routes',
+          extraction_rule_id: 'play-route-declarations',
+        },
+        {
+          filename_match: '.scala',
+          processor_id: 'scala-source',
+          extraction_rule_id: 'scala-symbols-and-calls',
+        },
+      ]);
+    } finally {
+      connection.closeSync();
+      instance.closeSync();
+    }
+  });
+
   it('preserves relationship history while removing the DuckDB update blocker', async () => {
     const instance = await DuckDBInstance.create(':memory:');
     const connection = await instance.connect();

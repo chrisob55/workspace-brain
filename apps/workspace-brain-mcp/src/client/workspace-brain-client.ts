@@ -99,6 +99,32 @@ export class WorkspaceBrainClient {
     });
   }
 
+  searchJourneys(
+    params: {
+      readonly query?: string | undefined;
+      readonly publicationId?: string | undefined;
+      readonly service?: string | undefined;
+      readonly api?: string | undefined;
+      readonly connector?: string | undefined;
+    } & PageParams,
+  ): Promise<ApiResponse> {
+    return this.get('/api/v1/search/journeys', {
+      query: params.query,
+      publicationId: params.publicationId,
+      service: params.service,
+      api: params.api,
+      connector: params.connector,
+      limit: params.limit,
+      cursor: params.cursor,
+    });
+  }
+
+  getJourney(publicationId: string, journeyId: string): Promise<ApiResponse> {
+    return this.get(
+      `${publicationPath(publicationId)}/journeys/${segment('journeyId', journeyId)}`,
+    );
+  }
+
   searchRelationships(
     params: {
       readonly query: string;

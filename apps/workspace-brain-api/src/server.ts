@@ -174,6 +174,221 @@ const searchRelationshipQuerySchema = pageQuerySchema
     field: z.enum(['type', 'text']).optional(),
   })
   .strict();
+const journeySearchQuerySchema = pageQuerySchema
+  .extend({
+    publicationId: sourceIdSchema.optional(),
+    query: searchTextQuerySchema.optional(),
+    service: searchTextQuerySchema.optional(),
+    api: searchTextQuerySchema.optional(),
+    connector: searchTextQuerySchema.optional(),
+  })
+  .strict()
+  .refine(
+    ({ query, service, api, connector }) =>
+      [query, service, api, connector].filter((value) => value !== undefined)
+        .length <= 1,
+    'Specify only one of query, service, api, or connector.',
+  );
+const journeyIdSchema = z.string().regex(/^[a-f0-9]{64}$/);
+const journeyProvenanceReferenceSchema = z
+  .object({
+    id: z.string().min(1),
+    kind: z.enum([
+      'evidence',
+      'source-file',
+      'publication',
+      'service',
+      'api',
+      'connector',
+      'relationship',
+    ]),
+    label: z.string(),
+    source: z.string().optional(),
+    documentPath: z.string().optional(),
+    documentId: sourceIdSchema.optional(),
+    documentVersionId: sourceIdSchema.optional(),
+    documentEntityId: sourceIdSchema.optional(),
+    publicationId: sourceIdSchema.optional(),
+  })
+  .strict();
+const journeyEntityReferenceSchema = z
+  .object({
+    entityKey: z.string().min(1).optional(),
+    role: z.enum([
+      'operation',
+      'controller',
+      'service',
+      'connector',
+      'component',
+      'api',
+      'document',
+      'step',
+    ]),
+    label: z.string(),
+    entityId: sourceIdSchema.optional(),
+    entityType: z.enum(knowledgeEntityTypes).optional(),
+    displayName: z.string().optional(),
+    publicationId: sourceIdSchema.optional(),
+  })
+  .strict()
+  .refine(
+    (reference) =>
+      reference.entityId !== undefined
+        ? reference.entityType !== undefined &&
+          reference.displayName !== undefined
+        : reference.entityKey !== undefined,
+    'A Journey entity reference must have published identity and display data or a legacy candidate key.',
+  );
+const journeyRelationshipReferenceSchema = z
+  .object({
+    relationshipKey: z.string().min(1).optional(),
+    type: z.enum(knowledgeRelationshipTypes),
+    relationshipId: sourceIdSchema.optional(),
+    sourceEntityId: sourceIdSchema.optional(),
+    targetEntityId: sourceIdSchema.optional(),
+    publicationId: sourceIdSchema.optional(),
+  })
+  .strict()
+  .refine(
+    (reference) =>
+      reference.relationshipId !== undefined
+        ? reference.sourceEntityId !== undefined &&
+          reference.targetEntityId !== undefined
+        : reference.relationshipKey !== undefined,
+    'A Journey relationship reference must have published endpoints or a legacy candidate key.',
+  );
+const journeyStepBaseSchema = {
+  id: z.string().min(1),
+  service: z.string().optional(),
+  entityKey: z.string().optional(),
+  stepEntityKey: z.string().optional(),
+  stepEntityId: sourceIdSchema.optional(),
+  entityReferences: z.array(journeyEntityReferenceSchema).optional(),
+  evidenceRef: z.string().optional(),
+  evidenceBasis: z.enum(['proven', 'derived', 'unresolved']),
+  order: z.enum(['entry', 'source-order', 'conditional', 'grouped']),
+  branchContext: z.string().optional(),
+  asyncGroup: z.string().optional(),
+  provenance: z.array(journeyProvenanceReferenceSchema),
+};
+const journeyStepSchema = z.discriminatedUnion('type', [
+  z
+    .object({
+      ...journeyStepBaseSchema,
+      type: z.literal('HttpRouteStep'),
+      method: z.string(),
+      route: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      ...journeyStepBaseSchema,
+      type: z.literal('ControllerStep'),
+      controller: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      ...journeyStepBaseSchema,
+      type: z.literal('ServiceStep'),
+      service: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      ...journeyStepBaseSchema,
+      type: z.literal('ComponentStep'),
+      component: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      ...journeyStepBaseSchema,
+      type: z.literal('ConnectorStep'),
+      connector: z.string(),
+      service: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      ...journeyStepBaseSchema,
+      type: z.literal('HttpClientCallStep'),
+      targetExpression: z.string(),
+      method: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      ...journeyStepBaseSchema,
+      type: z.literal('ApiCallStep'),
+      target: z.string(),
+      method: z.string().optional(),
+    })
+    .strict(),
+  z
+    .object({
+      ...journeyStepBaseSchema,
+      type: z.literal('UnresolvedCallStep'),
+      targetExpression: z.string(),
+      reason: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      ...journeyStepBaseSchema,
+      type: z.literal('PersistenceStep'),
+      target: z.string(),
+    })
+    .strict(),
+]);
+const journeyDiagnosticSchema = z
+  .object({
+    key: z.string().min(1),
+    reason: z.string(),
+    target: z.string(),
+    evidenceRef: z.string().optional(),
+  })
+  .strict();
+const journeySchema = z
+  .object({
+    id: journeyIdSchema,
+    name: z.string().min(1),
+    description: z.string().optional(),
+    sourceServices: z.array(z.string()),
+    confidence: z.enum(['proven', 'derived']),
+    completeness: z.enum(['complete', 'partial', 'unresolved']),
+    provenance: z.array(journeyProvenanceReferenceSchema),
+    steps: z.array(journeyStepSchema),
+    transitions: z.array(
+      z
+        .object({
+          id: z.string().min(1),
+          type: z.enum([
+            'RouteDispatch',
+            'MethodInvocation',
+            'ConnectorInvocation',
+            'HttpRequest',
+            'PersistenceOperation',
+          ]),
+          from: z.string().min(1),
+          to: z.string().min(1),
+          evidenceRef: z.string().optional(),
+          order: z.enum(['entry', 'source-order', 'conditional', 'grouped']),
+          provenance: z.array(journeyProvenanceReferenceSchema),
+          certainty: z.enum(['proven', 'derived', 'unresolved']),
+          entityReferences: z.array(journeyEntityReferenceSchema).optional(),
+          relationshipReferences: z
+            .array(journeyRelationshipReferenceSchema)
+            .optional(),
+        })
+        .strict(),
+    ),
+    entityReferences: z.array(journeyEntityReferenceSchema),
+    relationshipReferences: z.array(journeyRelationshipReferenceSchema),
+    unresolvedBoundaries: z.array(journeyDiagnosticSchema),
+    diagnostics: z.array(journeyDiagnosticSchema).optional(),
+  })
+  .strict();
 const searchLookupQuerySchema = z
   .object({ publicationId: sourceIdSchema.optional() })
   .strict();
@@ -984,6 +1199,116 @@ export function createApiServer(
     );
   });
 
+  server.get('/api/v1/search/journeys', async (request, reply) => {
+    const query = parseCatalogueQuery(request.query, journeySearchQuerySchema);
+    const searchText =
+      query.service ?? query.api ?? query.connector ?? query.query;
+    const page = await catalogue.searchProjectedEntities({
+      ...(query.cursor === undefined
+        ? {}
+        : { afterId: decodeIdCursor(query.cursor) }),
+      ...(query.publicationId === undefined
+        ? {}
+        : { publicationId: query.publicationId }),
+      type: 'journey',
+      ...(searchText === undefined
+        ? {}
+        : {
+            text: {
+              query: searchText,
+              match: 'contains',
+              field: 'text',
+            } as const,
+          }),
+      limit: query.limit + 1,
+    });
+    const items = await Promise.all(
+      page.items.map(async (item) => {
+        const published = await catalogue.getPublishedEntity(
+          item.publicationId,
+          item.entityId,
+        );
+        if (published === undefined) {
+          throw new CatalogueIntegrityError(
+            `Journey projection ${item.entityId} references a missing published entity`,
+          );
+        }
+        return publishedJourneyResponse(published);
+      }),
+    );
+    return sendKeyedPage(
+      reply,
+      items,
+      query.limit,
+      (item) => item.journeyEntityId,
+    );
+  });
+
+  server.get(
+    '/api/v1/knowledge/publications/:publicationId/journeys/:journeyId',
+    async (request, reply) => {
+      const params = z
+        .object({
+          publicationId: sourceIdSchema,
+          journeyId: journeyIdSchema,
+        })
+        .strict()
+        .safeParse(request.params);
+      if (!params.success) {
+        throw new ApiError(
+          400,
+          'Invalid Request',
+          'Journey identity is invalid.',
+        );
+      }
+      parseCatalogueQuery(request.query, z.object({}).strict());
+      const page = await catalogue.searchProjectedEntities({
+        publicationId: params.data.publicationId,
+        type: 'journey',
+        text: {
+          query: params.data.journeyId,
+          match: 'contains',
+          field: 'text',
+        },
+        limit: 100,
+      });
+      if (page.items.length === 100) {
+        throw new CatalogueIntegrityError(
+          `Journey identity search returned too many candidates for ${params.data.journeyId}`,
+        );
+      }
+      const matches: ReturnType<typeof publishedJourneyResponse>[] = [];
+      for (const item of page.items) {
+        const published = await catalogue.getPublishedEntity(
+          params.data.publicationId,
+          item.entityId,
+        );
+        if (published === undefined) {
+          throw new CatalogueIntegrityError(
+            `Journey projection ${item.entityId} references a missing published entity`,
+          );
+        }
+        const response = publishedJourneyResponse(published);
+        if (response.journeyId === params.data.journeyId) {
+          matches.push(response);
+        }
+      }
+      if (matches.length === 0) {
+        throw new ApiError(
+          404,
+          'Not Found',
+          'Published Journey was not found.',
+        );
+      }
+      if (matches.length > 1) {
+        throw new CatalogueIntegrityError(
+          `Journey identity ${params.data.journeyId} is not unique in publication ${params.data.publicationId}`,
+        );
+      }
+      return reply.send(matches[0]);
+    },
+  );
+
   server.get('/api/v1/search/relationships', async (request, reply) => {
     const query = parseCatalogueQuery(
       request.query,
@@ -1410,6 +1735,104 @@ function sendKeyedPage<T>(
     items: pageItems,
     nextCursor: hasMore && last !== undefined ? encodeCursor(key(last)) : null,
   });
+}
+
+function publishedJourneyResponse(published: {
+  readonly publicationId: string;
+  readonly entityVersionId: string;
+  readonly versionNumber: number;
+  readonly entity: {
+    readonly id: string;
+    readonly type: string;
+    readonly name: string;
+    readonly sourceEvidenceIds: readonly string[];
+    readonly provenance: readonly {
+      readonly facts?: Readonly<Record<string, string>>;
+    }[];
+  };
+}) {
+  if (published.entity.type !== 'journey') {
+    throw new CatalogueIntegrityError(
+      `Published entity ${published.entity.id} is not a Journey`,
+    );
+  }
+  const serializedModels = published.entity.provenance.flatMap((item) =>
+    item.facts?.journeyJson ? [item.facts.journeyJson] : [],
+  );
+  if (serializedModels.length !== 1) {
+    throw new CatalogueIntegrityError(
+      `Published Journey ${published.entity.id} must contain exactly one serialized model`,
+    );
+  }
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(serializedModels[0] ?? '');
+  } catch (error) {
+    throw new CatalogueIntegrityError(
+      `Published Journey ${published.entity.id} contains invalid model JSON: ${String(error)}`,
+    );
+  }
+  const parsed = journeySchema.safeParse(decoded);
+  if (
+    !parsed.success ||
+    parsed.data.name !== published.entity.name ||
+    published.entity.provenance.every(
+      (item) => item.facts?.journeyId !== parsed.data.id,
+    )
+  ) {
+    throw new CatalogueIntegrityError(
+      `Published Journey ${published.entity.id} does not match its serialized model`,
+    );
+  }
+  const pinReference = <
+    T extends {
+      readonly entityId?: string | undefined;
+      readonly relationshipId?: string | undefined;
+      readonly documentEntityId?: string | undefined;
+    },
+  >(
+    reference: T,
+  ): T =>
+    reference.entityId || reference.relationshipId || reference.documentEntityId
+      ? { ...reference, publicationId: published.publicationId }
+      : reference;
+  return {
+    publicationId: published.publicationId,
+    journeyEntityId: published.entity.id,
+    journeyId: parsed.data.id,
+    sourceEvidenceIds: [...published.entity.sourceEvidenceIds],
+    journey: {
+      ...parsed.data,
+      entityReferences: parsed.data.entityReferences.map(pinReference),
+      relationshipReferences:
+        parsed.data.relationshipReferences.map(pinReference),
+      provenance: parsed.data.provenance.map(pinReference),
+      steps: parsed.data.steps.map((step) => ({
+        ...step,
+        ...(step.entityReferences
+          ? {
+              entityReferences: step.entityReferences.map(pinReference),
+            }
+          : {}),
+        provenance: step.provenance.map(pinReference),
+      })),
+      transitions: parsed.data.transitions.map((transition) => ({
+        ...transition,
+        ...(transition.entityReferences
+          ? {
+              entityReferences: transition.entityReferences.map(pinReference),
+            }
+          : {}),
+        ...(transition.relationshipReferences
+          ? {
+              relationshipReferences:
+                transition.relationshipReferences.map(pinReference),
+            }
+          : {}),
+        provenance: transition.provenance.map(pinReference),
+      })),
+    },
+  };
 }
 
 function decodeIdCursor(cursor: string): string {

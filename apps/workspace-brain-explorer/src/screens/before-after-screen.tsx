@@ -16,7 +16,7 @@ interface Snapshot {
   caption: string;
   entities: number;
   relationships: number;
-  breakdown: Record<RelationshipType, number>;
+  breakdown: Partial<Record<RelationshipType, number>>;
   live?: boolean;
 }
 
@@ -66,7 +66,9 @@ function SnapshotCard({
   scale: number;
   highlight?: boolean;
 }) {
-  const types = RELATIONSHIP_TYPES.filter((t) => snapshot.breakdown[t] > 0);
+  const types = RELATIONSHIP_TYPES.filter(
+    (t) => (snapshot.breakdown[t] ?? 0) > 0,
+  );
   return (
     <div
       className={cn(
@@ -123,7 +125,7 @@ function SnapshotCard({
 
       <ul className="mt-4 space-y-2">
         {RELATIONSHIP_TYPES.map((t) => {
-          const count = snapshot.breakdown[t];
+          const count = snapshot.breakdown[t] ?? 0;
           return (
             <li
               key={t}

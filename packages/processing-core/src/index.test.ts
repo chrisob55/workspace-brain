@@ -162,7 +162,7 @@ describe('deterministic document processing', () => {
     ).toContainEqual(['typescript', 3]);
     expect(documentProcessors.map(({ id, version }) => [id, version])).toEqual(
       expect.arrayContaining([
-        ['scala-source', 2],
+        ['scala-source', 3],
         ['play-routes', 1],
         ['hocon', 1],
       ]),
@@ -644,6 +644,25 @@ describe('deterministic document processing', () => {
     expect(() =>
       processDocument('invalid.scala', 'class Example { /* not closed'),
     ).toThrow('Unterminated Scala block comment');
+  });
+
+  it('bounds oversized Scala value signatures and marks their evidence truncated', () => {
+    const result = processDocument(
+      'Example.scala',
+      `class Example {\n  val payload = "${'x'.repeat(2500)}"\n}`,
+    );
+    const value = result.evidence.find(
+      (item) =>
+        item.locator.kind === 'scala-symbol' &&
+        item.locator.symbolKind === 'value',
+    );
+    expect(value?.truncated).toBe(true);
+    expect(value?.excerpt.length).toBeLessThanOrEqual(2000);
+    expect(
+      value?.locator.kind === 'scala-symbol'
+        ? value.locator.signature?.length
+        : undefined,
+    ).toBe(2000);
   });
 
   it('rejects malformed structured documents and unsupported formats', () => {

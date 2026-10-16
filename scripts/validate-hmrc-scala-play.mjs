@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import console from 'node:console';
 import { spawnSync } from 'node:child_process';
-import { stat } from 'node:fs/promises';
+import { readdir, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, URL } from 'node:url';
@@ -13,14 +13,13 @@ if (agentsRoot === undefined) {
   );
 }
 
-const services = [
-  'agent-client-relationships',
-  'agent-access-control',
-  'agent-services-account',
-  'agent-subscription',
-  'agent-registration',
-  'agent-authorisation-api',
-];
+const services = (await readdir(agentsRoot, { withFileTypes: true }))
+  .filter((entry) => entry.isDirectory() && entry.name.startsWith('agent-'))
+  .map((entry) => entry.name)
+  .sort();
+if (services.length === 0) {
+  throw new Error(`No agent-* repositories found under ${agentsRoot}`);
+}
 const roots = await Promise.all(
   services.map(async (service) => {
     const root = resolve(agentsRoot, service);
@@ -74,6 +73,7 @@ assert.ok(report.hmrcCandidates.totals.routes > 0);
 assert.ok(report.hmrcCandidates.totals.resolvedRoutes > 0);
 assert.ok(report.hmrcCandidates.totals.staticPaths > 0);
 assert.ok(report.publication.hmrcScalaPlay.entities > 0);
+assert.ok(report.publication.hmrcScalaPlay.journeys > 0);
 assert.ok(report.publication.hmrcScalaPlay.operations > 0);
 assert.ok(report.publication.hmrcScalaPlay.semanticRelationships.CALLS > 0);
 assert.ok(

@@ -9,7 +9,8 @@ import {
 } from '@workspace-brain/domain';
 
 import { analyzeHmrcScalaPlayRepository } from './hmrc-scala-play-candidates.js';
-import { processDocument } from './index.js';
+import { extractHmrcScalaPlayKnowledge } from './hmrc-scala-play-knowledge.js';
+import { generateJourneysFromStaticPaths, processDocument } from './index.js';
 
 const repositoryPath = 'agent-example';
 const sourceRootId = '01ARZ3NDEKTSV4RRFFQ69G5FAV';
@@ -103,6 +104,16 @@ function candidateInputs(
         extractionRuleId: processed.extractionRuleId,
         extractionRuleVersion: processed.extractionRuleVersion,
       },
+      extractionContext: {
+        repositories: [
+          {
+            id: `repository:${rootId}`,
+            path: `${rootId}/${repositoryPath}`,
+            fingerprint: 'a'.repeat(64),
+          },
+        ],
+        documents: [],
+      },
     }));
   });
 }
@@ -179,6 +190,57 @@ describe('HMRC Scala Play validation-only candidates', () => {
         ({ documentPath }) => documentPath === 'conf/app.routes',
       ),
     ).toBe(true);
+  });
+
+  it('does not classify a directly injected repository as a participating service', () => {
+    const repositoryFixtures = [
+      {
+        path: 'conf/app.routes',
+        content: 'GET /lookup controllers.LookupController.get()\n',
+      },
+      {
+        path: 'app/controllers/LookupController.scala',
+        content: [
+          'package controllers',
+          'import repositories.LookupRepository',
+          'class LookupController(repository: LookupRepository) {',
+          '  def get() = repository.lookup()',
+          '}',
+        ].join('\n'),
+      },
+      {
+        path: 'app/repositories/LookupRepository.scala',
+        content: [
+          'package repositories',
+          'class LookupRepository {',
+          '  def lookup() = "value"',
+          '}',
+        ].join('\n'),
+      },
+    ];
+    const analysis = analyzeHmrcScalaPlayRepository(
+      repositoryPath,
+      candidateInputs(sourceRootId, repositoryFixtures),
+    );
+    const repository = analysis.components.find(
+      ({ symbolName }) => symbolName === 'repositories.LookupRepository',
+    );
+    const journey = generateJourneysFromStaticPaths(analysis.staticPaths, {
+      componentRoles: new Map(
+        analysis.components.map(({ symbolName, role }) => [symbolName, role]),
+      ),
+    })[0];
+
+    expect(repository?.role).toBe('component');
+    expect(journey?.sourceServices).toEqual([]);
+    expect(journey?.steps).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'ComponentStep',
+          component: 'repositories.LookupRepository',
+        }),
+      ]),
+    );
   });
 
   it('keeps candidate identities independent of generated source-root identifiers', () => {
@@ -321,6 +383,239 @@ describe('HMRC Scala Play validation-only candidates', () => {
 
     expect(result.routes[0]?.resolvedHandlerMethod).toBe(
       'controllers.HealthController.check',
+    );
+  });
+
+  it('creates deterministic journey models from static paths', () => {
+    const result = analyzeHmrcScalaPlayRepository(
+      repositoryPath,
+      candidateInputs(sourceRootId),
+    );
+    const journeys = generateJourneysFromStaticPaths(result.staticPaths, {
+      componentRoles: new Map(
+        result.components.map(({ symbolName, role }) => [symbolName, role]),
+      ),
+    });
+
+    expect(journeys).toHaveLength(1);
+    expect(journeys[0]).toMatchObject({
+      name: 'POST /relationships',
+      confidence: 'derived',
+      completeness: 'partial',
+      sourceServices: ['services.RelationshipService'],
+    });
+    expect(
+      journeys[0]?.steps.map((step) => {
+        switch (step.type) {
+          case 'HttpRouteStep':
+            return [step.type, `${step.method} ${step.route}`];
+          case 'ControllerStep':
+            return [step.type, step.controller];
+          case 'ServiceStep':
+            return [step.type, step.service];
+          case 'ComponentStep':
+            return [step.type, step.component];
+          case 'ConnectorStep':
+            return [step.type, step.connector];
+          case 'HttpClientCallStep':
+            return [step.type, step.targetExpression];
+          case 'ApiCallStep':
+            return [step.type, step.target];
+          case 'UnresolvedCallStep':
+            return [step.type, step.targetExpression];
+          case 'PersistenceStep':
+            return [step.type, step.target];
+        }
+      }),
+    ).toEqual([
+      ['HttpRouteStep', 'POST /relationships'],
+      ['ControllerStep', 'controllers.RelationshipController.create'],
+      ['ServiceStep', 'services.RelationshipService'],
+      ['ConnectorStep', 'connectors.AgentConnector'],
+      ['HttpClientCallStep', 'http.post'],
+      ['UnresolvedCallStep', 'relationshipService.create().map'],
+      ['ServiceStep', 'services.RelationshipService'],
+      ['UnresolvedCallStep', 'relationshipService.fallback'],
+    ]);
+    expect(journeys[0]?.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          reason: 'unresolved:relationshipService.fallback',
+        }),
+        expect.objectContaining({
+          reason: 'http-client-destination-not-bound-to-published-api',
+          target: 'http.post',
+        }),
+      ]),
+    );
+    expect(journeys[0]?.transitions).toHaveLength(7);
+    expect(journeys[0]?.steps[5]).toMatchObject({
+      order: 'conditional',
+      branchContext: 'if',
+      evidenceBasis: 'unresolved',
+    });
+    expect(journeys[0]?.steps[6]).toMatchObject({
+      order: 'grouped',
+      branchContext: 'if',
+      asyncGroup: 'map',
+      evidenceBasis: 'derived',
+    });
+    expect(journeys[0]?.transitions[3]).toMatchObject({
+      certainty: 'proven',
+      order: 'source-order',
+    });
+    expect(journeys[0]?.transitions[4]).toMatchObject({
+      certainty: 'unresolved',
+      order: 'conditional',
+    });
+    expect(journeys[0]?.transitions[5]).toMatchObject({
+      certainty: 'derived',
+      order: 'grouped',
+    });
+  });
+
+  it('publishes a Journey candidate with serialized model and graph references', () => {
+    const inputs = candidateInputs(sourceRootId);
+    const first = extractHmrcScalaPlayKnowledge(inputs);
+    const repeated = extractHmrcScalaPlayKnowledge([...inputs].reverse());
+    const journeyEntity = first.entities.find(({ type }) => type === 'journey');
+    const journeyJson = journeyEntity?.provenance
+      .map(({ facts }) => facts?.journeyJson)
+      .find((value): value is string => value !== undefined);
+
+    expect(journeyEntity).toBeDefined();
+    expect(journeyJson).toBeDefined();
+    const journey = JSON.parse(journeyJson!) as {
+      id: string;
+      completeness: string;
+      entityReferences: { entityKey: string }[];
+      relationshipReferences: { relationshipKey: string }[];
+      unresolvedBoundaries: { target: string }[];
+    };
+    expect(journey.completeness).toBe('partial');
+    expect(journey.entityReferences.length).toBeGreaterThan(0);
+    expect(journey.relationshipReferences.length).toBeGreaterThan(0);
+    expect(journey.unresolvedBoundaries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ target: 'relationshipService.fallback' }),
+      ]),
+    );
+    expect(
+      first.relationships.some(
+        ({ sourceEntityKey, targetEntityKey }) =>
+          sourceEntityKey === journeyEntity?.key &&
+          journey.entityReferences.some(
+            ({ entityKey }) => entityKey === targetEntityKey,
+          ),
+      ),
+    ).toBe(true);
+    expect(repeated.entities).toEqual(first.entities);
+    expect(repeated.relationships).toEqual(first.relationships);
+  });
+
+  it('bounds recursive call expansion and preserves the omitted traversal boundary', () => {
+    const recursiveFixtures = [
+      {
+        path: 'conf/app.routes',
+        content: 'GET /cycle controllers.CycleController.go()\n',
+      },
+      {
+        path: 'app/controllers/CycleController.scala',
+        content: [
+          'package controllers',
+          'import services.CycleService',
+          'class CycleController(service: CycleService) {',
+          '  def go() = service.one()',
+          '}',
+        ].join('\n'),
+      },
+      {
+        path: 'app/services/CycleService.scala',
+        content: [
+          'package services',
+          'class CycleService {',
+          '  def one() = two()',
+          '  def two() = one()',
+          '}',
+        ].join('\n'),
+      },
+    ];
+    const analysis = analyzeHmrcScalaPlayRepository(
+      repositoryPath,
+      candidateInputs(sourceRootId, recursiveFixtures),
+    );
+    const journey = generateJourneysFromStaticPaths(analysis.staticPaths, {
+      componentRoles: new Map(
+        analysis.components.map(({ symbolName, role }) => [symbolName, role]),
+      ),
+    })[0];
+
+    expect(analysis.staticPaths[0]?.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('traversal-stopped-repeated-method'),
+      ]),
+    );
+    expect(journey?.completeness).toBe('partial');
+    expect(journey?.unresolvedBoundaries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          reason: expect.stringContaining('traversal-stopped-repeated-method'),
+        }),
+      ]),
+    );
+  });
+
+  it('bounds oversized static paths and preserves evidence for the omitted boundary', () => {
+    const calls = Array.from(
+      { length: 300 },
+      (_, index) => `service.missing${index}()`,
+    ).join(', ');
+    const oversizedFixtures = [
+      {
+        path: 'conf/app.routes',
+        content: 'GET /large controllers.LargeController.go()\n',
+      },
+      {
+        path: 'app/controllers/LargeController.scala',
+        content: [
+          'package controllers',
+          'import services.LargeService',
+          'class LargeController(service: LargeService) {',
+          `  def go() = Seq(${calls})`,
+          '}',
+        ].join('\n'),
+      },
+      {
+        path: 'app/services/LargeService.scala',
+        content: 'package services\nclass LargeService {}\n',
+      },
+    ];
+    const analysis = analyzeHmrcScalaPlayRepository(
+      repositoryPath,
+      candidateInputs(sourceRootId, oversizedFixtures),
+    );
+    const staticPath = analysis.staticPaths[0];
+    const journey = generateJourneysFromStaticPaths(analysis.staticPaths)[0];
+
+    expect(staticPath?.steps).toHaveLength(256);
+    expect(staticPath?.traversalBoundary).toMatchObject({
+      reason: 'traversal-stopped-step-limit',
+    });
+    expect(journey?.completeness).toBe('partial');
+    expect(journey?.unresolvedBoundaries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          reason: expect.stringContaining('traversal-stopped-step-limit'),
+          evidenceRef: staticPath?.traversalBoundary?.evidence.evidenceId,
+        }),
+      ]),
+    );
+    expect(journey?.provenance).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: staticPath?.traversalBoundary?.evidence.evidenceId,
+        }),
+      ]),
     );
   });
 });

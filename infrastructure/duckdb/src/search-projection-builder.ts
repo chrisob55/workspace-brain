@@ -111,13 +111,23 @@ export function buildSearchProjection(
       compareOrdinal(left.relationshipId, right.relationshipId),
     );
   const documents: ProjectedSearchDocument[] = [
-    ...projectedEntities.map((entity) =>
-      createSearchDocument(
+    ...projectedEntities.map((entity) => {
+      const snapshot = entitiesById.get(entity.entityId);
+      if (!snapshot) {
+        throw new Error(
+          `Publication ${publication.id} is missing entity ${entity.entityId}`,
+        );
+      }
+      return createSearchDocument(
         publication,
         entitySearchDocumentId(entity.entityId),
-        [entity.name, entity.type],
-      ),
-    ),
+        [
+          entity.name,
+          entity.type,
+          ...(entity.type === 'journey' ? [journeySearchText(snapshot)] : []),
+        ],
+      );
+    }),
     ...projectedRelationships.map((relationship) =>
       createSearchDocument(
         publication,
@@ -189,6 +199,69 @@ function createSearchDocument(
     searchableTerms: tokenizeSearchText(searchableText),
     publishedAt: publication.publishedAt,
   };
+}
+
+function journeySearchText(entity: KnowledgeEntity): string {
+  const serialized = entity.provenance.flatMap((item) =>
+    item.facts?.journeyJson ? [item.facts.journeyJson] : [],
+  );
+  if (serialized.length !== 1) {
+    throw new Error(
+      `Published Journey ${entity.id} must contain one serialized model`,
+    );
+  }
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(serialized[0] ?? '');
+  } catch (error) {
+    throw new Error(
+      `Published Journey ${entity.id} contains invalid model JSON`,
+      { cause: error },
+    );
+  }
+  if (
+    !isRecord(decoded) ||
+    typeof decoded.id !== 'string' ||
+    typeof decoded.name !== 'string' ||
+    !Array.isArray(decoded.sourceServices) ||
+    !Array.isArray(decoded.entityReferences) ||
+    !Array.isArray(decoded.steps)
+  ) {
+    throw new Error(
+      `Published Journey ${entity.id} is missing searchable model fields`,
+    );
+  }
+  const terms = [
+    decoded.id,
+    decoded.name,
+    ...decoded.sourceServices.filter(isString),
+    ...decoded.entityReferences.flatMap((reference) =>
+      isRecord(reference) && isString(reference.label) ? [reference.label] : [],
+    ),
+    ...decoded.steps.flatMap((step) =>
+      isRecord(step)
+        ? [
+            step.method,
+            step.route,
+            step.controller,
+            step.service,
+            step.component,
+            step.connector,
+            step.target,
+            step.targetExpression,
+          ].filter(isString)
+        : [],
+    ),
+  ];
+  return terms.join(' ');
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isString(value: unknown): value is string {
+  return typeof value === 'string';
 }
 
 function resolveSnapshots<

@@ -214,6 +214,28 @@ const knowledgeInputEvidencePageSchema = z
   .object({
     items: z.array(knowledgeInputEvidenceSchema),
     nextOffset: z.number().int().nonnegative().nullable(),
+    hasExtractionContext: z.boolean().optional(),
+  })
+  .strict();
+const extractionContextSchema =
+  knowledgeInputEvidenceSchema.shape.extractionContext.unwrap();
+const extractionContextPageSchema = z
+  .object({
+    items: z.array(
+      z.union([
+        z
+          .object({
+            repository: extractionContextSchema.shape.repositories.element,
+          })
+          .strict(),
+        z
+          .object({
+            document: extractionContextSchema.shape.documents.element,
+          })
+          .strict(),
+      ]),
+    ),
+    nextOffset: z.number().int().nonnegative().nullable(),
   })
   .strict();
 
@@ -387,11 +409,13 @@ async function processKnowledgeEvent(
     event.payload.documentVersionId,
   );
   const parsedInputs: z.infer<typeof knowledgeInputEvidenceSchema>[] = [];
+  let hasExtractionContext = false;
   let offset = 0;
   while (true) {
     const rawPage = await bus.request<unknown>(
       'workspace.catalogue.knowledge.document-evidence',
-      { documentVersionId, offset },
+      { documentVersionId, offset, separateContext: true },
+      { timeoutMs: 60_000 },
     );
     const page = knowledgeInputEvidencePageSchema.parse(rawPage);
     if (
@@ -402,10 +426,50 @@ async function processKnowledgeEvent(
       throw new Error('Knowledge evidence page returned an invalid offset');
     }
     parsedInputs.push(...page.items);
+    hasExtractionContext ||= page.hasExtractionContext === true;
     if (page.nextOffset === null) {
       break;
     }
     offset = page.nextOffset;
+  }
+  if (hasExtractionContext) {
+    const context: z.infer<typeof extractionContextSchema> = {
+      repositories: [],
+      documents: [],
+    };
+    offset = 0;
+    while (true) {
+      const page = extractionContextPageSchema.parse(
+        await bus.request<unknown>(
+          'workspace.catalogue.knowledge.document-evidence',
+          { documentVersionId, offset, contextOnly: true },
+          { timeoutMs: 60_000 },
+        ),
+      );
+      if (
+        page.nextOffset !== null &&
+        (page.items.length === 0 ||
+          page.nextOffset !== offset + page.items.length)
+      ) {
+        throw new Error('Extraction context page returned an invalid offset');
+      }
+      for (const item of page.items) {
+        if ('repository' in item) {
+          context.repositories.push(item.repository);
+        } else {
+          context.documents.push(item.document);
+        }
+      }
+      if (page.nextOffset === null) {
+        break;
+      }
+      offset = page.nextOffset;
+    }
+    const first = parsedInputs[0];
+    if (first === undefined) {
+      throw new Error('Extraction context returned without evidence');
+    }
+    first.extractionContext = context;
   }
   const inputs: KnowledgeInputEvidence[] = parsedInputs.map((input) => ({
     evidence: {

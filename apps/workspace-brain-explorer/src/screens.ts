@@ -9,6 +9,7 @@ import {
   Landmark,
   Network,
   Puzzle,
+  Route,
   Rocket,
   ScanSearch,
   Sparkles,
@@ -27,6 +28,7 @@ import { ExplainWhyScreen } from './screens/explain-why-screen';
 import { FutureScreen } from './screens/future-screen';
 import { GlossaryScreen } from './screens/glossary-screen';
 import { GraphExplorerScreen } from './screens/graph-explorer-screen';
+import { JourneysScreen } from './screens/journeys-screen';
 import { HowItWorksScreen } from './screens/how-it-works-screen';
 import { OpenApiScreen } from './screens/openapi-screen';
 import { OverviewScreen } from './screens/overview-screen';
@@ -78,6 +80,13 @@ export const SCREENS: ScreenDefinition[] = [
     icon: Network,
     component: GraphExplorerScreen,
     fullBleed: true,
+  },
+  {
+    id: 'journeys',
+    title: 'Published Journeys',
+    question: 'What static paths are supported by evidence?',
+    icon: Route,
+    component: JourneysScreen,
   },
   {
     id: 'explain',

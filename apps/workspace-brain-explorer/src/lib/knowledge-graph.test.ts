@@ -173,6 +173,13 @@ describe('knowledge graph', () => {
       CONTAINS: 0,
       EXPOSES: 1,
       REFERENCES: 1,
+      BELONGS_TO: 0,
+      DOCUMENTS: 0,
+      USES: 0,
+      IMPLEMENTS: 0,
+      CONSUMES: 0,
+      CLASSIFIED_AS: 0,
+      DERIVED_FROM: 0,
     });
   });
 

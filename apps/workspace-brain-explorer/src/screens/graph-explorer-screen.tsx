@@ -41,10 +41,17 @@ import { cn } from '@/lib/utils';
 
 const EXPAND_BATCH = 12;
 const TYPE_ORDER: RelationshipType[] = [
-  'CONTAINS',
-  'EXPOSES',
+  'USES',
+  'CONSUMES',
   'REFERENCES',
   'DEPENDS_ON',
+  'CONTAINS',
+  'EXPOSES',
+  'DERIVED_FROM',
+  'BELONGS_TO',
+  'DOCUMENTS',
+  'IMPLEMENTS',
+  'CLASSIFIED_AS',
 ];
 
 type Selection = { kind: 'node' | 'edge'; id: string } | null;
@@ -54,7 +61,12 @@ function otherEnd(rel: KnowledgeRelationship, id: string) {
 }
 
 function findSeed(graph: KnowledgeGraph): KnowledgeEntity | undefined {
+  const deepLinkedId = window.location.hash.replace(/^#\/?/, '').split('/')[2];
+  const deepLinked = deepLinkedId
+    ? graph.entityById.get(deepLinkedId)
+    : undefined;
   return (
+    deepLinked ??
     graph.entities.find(
       (e) =>
         e.type === 'document' &&
@@ -107,6 +119,29 @@ function Explorer() {
     if (seed) setVisible(expand(seed.id, new Set([seed.id])));
     // Seed once per publication.
   }, [seed]);
+
+  useEffect(() => {
+    const followPublishedLink = () => {
+      const [screen, kind, id] = window.location.hash
+        .replace(/^#\/?/, '')
+        .split('/');
+      if (screen !== 'graph' || !id) return;
+      if (kind === 'entity' && graph.entityById.has(id)) {
+        setVisible(expand(id, new Set([id])));
+        setSelection({ kind: 'node', id });
+      } else if (kind === 'relationship') {
+        const relationship = graph.relationshipById.get(id);
+        if (!relationship) return;
+        setVisible(
+          new Set([relationship.sourceEntityId, relationship.targetEntityId]),
+        );
+        setSelection({ kind: 'edge', id });
+      }
+    };
+    followPublishedLink();
+    window.addEventListener('hashchange', followPublishedLink);
+    return () => window.removeEventListener('hashchange', followPublishedLink);
+  }, [graph, expand]);
 
   const visibleEdges = useMemo(
     () =>

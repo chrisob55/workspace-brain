@@ -29,7 +29,7 @@ case "${1:-}" in
     ;;
   up)
     ensure_env
-    "${compose[@]}" up -d --build --wait
+    "${compose[@]}" up -d --no-build --wait librechat
     port=$(grep -E '^LIBRECHAT_PORT=.+' "$env_file" | cut -d= -f2 || true)
     printf 'LibreChat: http://localhost:%s\n' "${port:-3080}"
     ;;

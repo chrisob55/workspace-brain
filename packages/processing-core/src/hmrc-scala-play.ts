@@ -394,7 +394,20 @@ export function normalizeScala(content: string): NormalizedBlock[] {
           depth + (item.text === '{' ? 1 : item.text === '}' ? -1 : 0),
         0,
       );
-    if (!method && nesting !== 1) continue;
+    if (!method) {
+      const bodyStart = tokens[owner.declarationEnd];
+      if (bodyStart?.text === ':') {
+        let memberStart = index;
+        while (memberStart > 0 && tokens[memberStart - 1]?.line === token.line)
+          memberStart -= 1;
+        if (
+          nesting !== 0 ||
+          tokens[memberStart]?.column !==
+            tokens[owner.declarationEnd + 1]?.column
+        )
+          continue;
+      } else if (nesting !== 1) continue;
+    }
     let cursor = index + 2;
     while (
       cursor < owner.end &&
@@ -436,7 +449,7 @@ export function normalizeScala(content: string): NormalizedBlock[] {
           symbolKind: 'value',
           symbolName: `${method?.fullName ?? owner.fullName}.${name.text}`,
           enclosingSymbol: method?.fullName ?? owner.fullName,
-          signature: expression,
+          signature: expression.slice(0, maxEvidenceText),
           lineStart: token.line,
           lineEnd: tokens[cursor - 1]?.line ?? token.line,
         },
@@ -783,7 +796,7 @@ function findDeclarationHeaderEnd(
     const token = tokens[index];
     if (!token) break;
     if (
-      token.text === '{' &&
+      (token.text === '{' || token.text === ':') &&
       parentheses === 0 &&
       brackets === 0 &&
       braces === 0

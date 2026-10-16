@@ -1,4 +1,6 @@
 import {
+  createDocumentId,
+  createDocumentVersionId,
   createEntityVersionId,
   createEvidenceId,
   createKnowledgeEntityId,
@@ -6,6 +8,7 @@ import {
   createKnowledgePublicationId,
   createKnowledgeRelationshipId,
   createRelationshipVersionId,
+  createSourceId,
   type KnowledgeEntity,
   type KnowledgePublication,
   type KnowledgeRelationship,
@@ -170,6 +173,66 @@ describe('search projection builder', () => {
           documentId === `relationship:${dependency.snapshot.id}`,
       )?.searchableText,
     ).toBe('depends_on @workspace/service lodash');
+  });
+
+  it('indexes published Journey terms from their immutable provenance facts', () => {
+    const journeyEvidenceId = createEvidenceId();
+    const journey = entitySnapshot('GET /subscriptions/:id', {
+      type: 'journey',
+      provenance: [
+        {
+          evidenceId: journeyEvidenceId,
+          documentVersionId: createDocumentVersionId(),
+          documentId: createDocumentId(),
+          sourceId: createSourceId(),
+          documentPath: 'source/repo/conf/app.routes',
+          contentFingerprint: 'e'.repeat(64),
+          locator: { kind: 'text-lines', lineStart: 1, lineEnd: 1 },
+          processorId: 'play-routes',
+          processorVersion: 1,
+          extractionRuleId: 'play-route-evidence',
+          extractionRuleVersion: 1,
+          knowledgeExtractorId: 'hmrc-scala-play-architecture',
+          knowledgeExtractorVersion: 1,
+          facts: {
+            journeyJson: JSON.stringify({
+              id: 'a'.repeat(64),
+              name: 'GET /subscriptions/:id',
+              sourceServices: ['services.SubscriptionService'],
+              entityReferences: [
+                { label: 'connectors.CitizenDetailsConnector' },
+              ],
+              steps: [
+                {
+                  type: 'HttpClientCallStep',
+                  targetExpression: 'http.get',
+                  method: 'GET',
+                },
+              ],
+            }),
+          },
+        },
+      ],
+    });
+    const projection = buildSearchProjection(
+      publicationFor([journey], []),
+      [journey],
+      [],
+    );
+
+    expect(projection.documents[0]?.searchableText).toContain(
+      'services.subscriptionservice',
+    );
+    expect(projection.documents[0]?.searchableText).toContain(
+      'connectors.citizendetailsconnector',
+    );
+    expect(projection.documents[0]?.searchableText).toContain('http.get');
+    expect(projection.documents[0]?.searchableTerms).toEqual(
+      expect.arrayContaining([
+        'subscriptionservice',
+        'citizendetailsconnector',
+      ]),
+    );
   });
 
   it('is idempotent when the same publication is replayed', () => {

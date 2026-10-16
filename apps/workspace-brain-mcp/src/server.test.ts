@@ -31,10 +31,14 @@ const PUB2 = '01JABCDEFGHJKMNPQRSTVWXYZ1';
 const MODEL = '01JMODEL000000000000000000';
 const ENT = '01JENTITY0000000000000000A';
 const REL = '01JRELATION000000000000000';
+const JOURNEY = 'a'.repeat(64);
 
 const EXPECTED_TOOLS = [
   'search_entities',
   'search_relationships',
+  'search_journeys',
+  'get_journey',
+  'get_service_journeys',
   'get_entity',
   'get_published_entity',
   'list_relationships_for_entity',
@@ -174,6 +178,18 @@ const EXPECTED_SCHEMAS: Record<
       'cursor',
     ],
   },
+  search_journeys: {
+    required: [],
+    optional: ['query', 'api', 'connector', 'publicationId', 'limit', 'cursor'],
+  },
+  get_journey: {
+    required: ['publicationId', 'journeyId'],
+    optional: [],
+  },
+  get_service_journeys: {
+    required: ['service'],
+    optional: ['publicationId', 'limit', 'cursor'],
+  },
   get_entity: { required: ['entityId'], optional: [] },
   get_published_entity: {
     required: ['publicationId', 'entityId'],
@@ -231,7 +247,7 @@ describe('tool inventory', () => {
   it('registers exactly the expected read-only tools', async () => {
     const tools = await listTools();
     expect(tools.map((tool) => tool.name)).toEqual(EXPECTED_TOOLS);
-    expect(tools).toHaveLength(17);
+    expect(tools).toHaveLength(20);
     for (const tool of tools) {
       expect(tool.annotations).toMatchObject({
         readOnlyHint: true,
@@ -430,6 +446,24 @@ describe('endpoint mapping', () => {
         field: 'type',
       },
     ],
+    [
+      'search_journeys',
+      { query: 'subscription', api: undefined, publicationId: PUB, limit: 5 },
+      '/api/v1/search/journeys',
+      { query: 'subscription', publicationId: PUB, limit: '5' },
+    ],
+    [
+      'get_journey',
+      { publicationId: PUB, journeyId: JOURNEY },
+      `/api/v1/knowledge/publications/${PUB}/journeys/${JOURNEY}`,
+      {},
+    ],
+    [
+      'get_service_journeys',
+      { service: 'services.SubscriptionService', publicationId: PUB },
+      '/api/v1/search/journeys',
+      { publicationId: PUB, service: 'services.SubscriptionService' },
+    ],
     ['get_entity', { entityId: ENT }, `/api/v1/knowledge/entities/${ENT}`, {}],
     [
       'get_published_entity',
@@ -517,9 +551,128 @@ describe('endpoint mapping', () => {
       {},
     ],
   ])('%s %j calls the matching endpoint', async (name, args, path, query) => {
+    if (name === 'search_journeys' || name === 'get_service_journeys') {
+      routes.set(
+        '/api/v1/search/journeys',
+        json(200, { items: [], nextCursor: null }),
+      );
+    }
     const result = await call(name, args);
     expect(requests).toEqual([{ method: 'GET', path, query }]);
     expect(result.isError).toBe(false);
+  });
+});
+
+describe('Journey search responses', () => {
+  it('returns concise published summaries with exact previews and provenance counts', async () => {
+    const steps = Array.from({ length: 7 }, (_, index) => ({
+      id: `step-${index}`,
+      type: index === 0 ? 'HttpRouteStep' : 'UnresolvedCallStep',
+      order: index === 0 ? 'entry' : 'source-order',
+      route: index === 0 ? 'POST /amls/arn/:arn' : undefined,
+      targetExpression: index === 0 ? undefined : `call${index}()`,
+      evidenceBasis: 'derived',
+      provenance: [
+        {
+          id: `evidence-${index}`,
+          kind: 'evidence',
+          label: `step ${index}`,
+        },
+      ],
+    }));
+    routes.set(
+      '/api/v1/search/journeys',
+      json(200, {
+        items: [
+          {
+            publicationId: PUB,
+            journeyEntityId: ENT,
+            journeyId: JOURNEY,
+            sourceEvidenceIds: ['source-1', 'source-2', 'source-3', 'source-4'],
+            journey: {
+              id: JOURNEY,
+              name: 'POST /amls/arn/:arn',
+              description: 'Technical route journey',
+              sourceServices: ['example.services.AmlsService'],
+              confidence: 'derived',
+              completeness: 'partial',
+              provenance: [
+                { id: 'journey-evidence-1', kind: 'evidence', label: 'route' },
+                { id: 'journey-evidence-2', kind: 'evidence', label: 'call' },
+                {
+                  id: 'journey-evidence-3',
+                  kind: 'evidence',
+                  label: 'service',
+                },
+                { id: 'journey-evidence-4', kind: 'evidence', label: 'extra' },
+              ],
+              steps,
+              transitions: [{ id: 'transition-1' }],
+              unresolvedBoundaries: [
+                { key: 'boundary-1', reason: 'unresolved', target: 'target' },
+              ],
+              diagnostics: [
+                { key: 'diagnostic-1', reason: 'bounded', target: 'target' },
+              ],
+              entityReferences: [{ entityKey: 'service-1', label: 'service' }],
+              relationshipReferences: [
+                { relationshipKey: 'uses-1', type: 'USES' },
+              ],
+            },
+          },
+        ],
+        nextCursor: 'next-page',
+      }),
+    );
+
+    const result = await call('search_journeys', { publicationId: PUB });
+
+    expect(result.isError).toBe(false);
+    expect(result.json).toMatchObject({
+      nextCursor: 'next-page',
+      items: [
+        {
+          journeyId: JOURNEY,
+          sourceEvidenceIds: ['source-1', 'source-2', 'source-3'],
+          sourceEvidenceCount: 4,
+          journey: {
+            name: 'POST /amls/arn/:arn',
+            completeness: 'partial',
+            stepCount: 7,
+            stepPreview: [
+              {
+                id: 'step-0',
+                type: 'HttpRouteStep',
+                route: 'POST /amls/arn/:arn',
+              },
+              { id: 'step-1', type: 'UnresolvedCallStep' },
+              { id: 'step-2', type: 'UnresolvedCallStep' },
+              { id: 'step-3', type: 'UnresolvedCallStep' },
+              { id: 'step-4', type: 'UnresolvedCallStep' },
+            ],
+            stepsTruncated: true,
+            transitionsOmitted: true,
+            provenanceReferenceCount: 4,
+            unresolvedBoundaryCount: 1,
+            diagnosticCount: 1,
+            entityReferences: [{ entityKey: 'service-1', label: 'service' }],
+            relationshipReferences: [
+              { relationshipKey: 'uses-1', type: 'USES' },
+            ],
+          },
+        },
+      ],
+    });
+    expect(JSON.stringify(result.json).includes('transition-1')).toBe(false);
+  });
+
+  it('documents the detail tool for complete step and transition data', async () => {
+    const tools = await listTools();
+    const description = tools.find(
+      (tool) => tool.name === 'search_journeys',
+    )!.description!;
+    expect(description).toContain('compact preview');
+    expect(description).toContain('Use get_journey for all recorded steps');
   });
 });
 
@@ -1171,6 +1324,136 @@ describe('error handling', () => {
         '../sources',
       ),
     ).toThrow(/entityId/);
+  });
+});
+
+describe('Journey tool payloads', () => {
+  it('returns publication-pinned Journey records with provenance and boundaries', async () => {
+    const published = {
+      publicationId: PUB,
+      journeyEntityId: ENT,
+      journeyId: JOURNEY,
+      sourceEvidenceIds: [REL],
+      journey: {
+        id: JOURNEY,
+        name: 'GET /subscriptions (static candidate)',
+        confidence: 'derived',
+        completeness: 'partial',
+        sourceServices: ['services.SubscriptionService'],
+        entityReferences: [
+          {
+            entityKey: 'module:service-candidate',
+            role: 'service',
+            label: 'Candidate service name',
+            entityId: ENT,
+            entityType: 'module',
+            displayName: 'services.SubscriptionService',
+            publicationId: PUB,
+          },
+        ],
+        relationshipReferences: [
+          {
+            relationshipKey: 'USES:journey->service',
+            type: 'USES',
+            relationshipId: REL,
+            sourceEntityId: PUB2,
+            targetEntityId: ENT,
+            publicationId: PUB,
+          },
+        ],
+        steps: [
+          {
+            id: 'unresolved-1',
+            type: 'UnresolvedCallStep',
+            order: 'source-order',
+            evidenceBasis: 'unresolved',
+            provenance: [],
+          },
+        ],
+        transitions: [],
+        provenance: [{ id: REL, kind: 'evidence', label: 'source file' }],
+        unresolvedBoundaries: [
+          {
+            key: 'unresolved-1',
+            target: 'service.accept()',
+            reason: 'unresolved',
+          },
+        ],
+      },
+    };
+    const page = { items: [published], nextCursor: null };
+    routes.set('/api/v1/search/journeys', json(200, page));
+    routes.set(
+      `/api/v1/knowledge/publications/${PUB}/journeys/${JOURNEY}`,
+      json(200, published),
+    );
+
+    const search = await call('get_service_journeys', {
+      service: 'services.SubscriptionService',
+      publicationId: PUB,
+    });
+    const retrieve = await call('get_journey', {
+      publicationId: PUB,
+      journeyId: JOURNEY,
+    });
+
+    expect(search.json).toEqual(page);
+    expect(retrieve.json).toEqual(published);
+    expect(search.isError).toBe(false);
+    expect(retrieve.isError).toBe(false);
+    routes.set(
+      `/api/v1/knowledge/publications/${PUB}/entities/${ENT}`,
+      json(200, {
+        publicationId: PUB,
+        entity: {
+          id: ENT,
+          type: 'module',
+          name: 'services.SubscriptionService',
+        },
+      }),
+    );
+    routes.set(
+      `/api/v1/knowledge/publications/${PUB}/entities/${ENT}/relationships`,
+      json(200, { items: [], nextCursor: null }),
+    );
+    const compact = await call('search_journeys', { publicationId: PUB });
+    expect(compact.isError).toBe(false);
+    expect(compact.json).toMatchObject({
+      items: [
+        {
+          journey: {
+            entityReferences: [
+              {
+                entityId: ENT,
+                entityType: 'module',
+                displayName: 'services.SubscriptionService',
+                publicationId: PUB,
+                role: 'service',
+              },
+            ],
+            relationshipReferences: [
+              { relationshipId: REL, type: 'USES', publicationId: PUB },
+            ],
+          },
+        },
+      ],
+    });
+    const reference = published.journey.entityReferences[0]!;
+    const entityResult = await call('get_published_entity', {
+      publicationId: reference.publicationId,
+      entityId: reference.entityId,
+    });
+    await call('list_relationships_for_entity', {
+      publicationId: reference.publicationId,
+      entityId: reference.entityId,
+    });
+    expect(entityResult.json).toMatchObject({
+      publicationId: PUB,
+      entity: { id: ENT },
+    });
+    expect(requests.at(-1)).toMatchObject({
+      path: `/api/v1/knowledge/publications/${PUB}/entities/${ENT}/relationships`,
+    });
   });
 });
 
