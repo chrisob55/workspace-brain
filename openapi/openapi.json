@@ -4143,7 +4143,9 @@
         "type": "object",
         "required": ["type"],
         "anyOf": [
-          { "required": ["relationshipId", "sourceEntityId", "targetEntityId"] },
+          {
+            "required": ["relationshipId", "sourceEntityId", "targetEntityId"]
+          },
           { "required": ["relationshipKey"] }
         ],
         "properties": {
