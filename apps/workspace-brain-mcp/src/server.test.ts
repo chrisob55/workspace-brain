@@ -1358,10 +1358,28 @@ describe('Journey tool payloads', () => {
             relationshipId: REL,
             sourceEntityId: PUB2,
             targetEntityId: ENT,
+            sourceDisplayName: 'GET /subscriptions (static candidate)',
+            targetDisplayName: 'services.SubscriptionService',
             publicationId: PUB,
           },
         ],
         steps: [
+          {
+            id: 'service-1',
+            type: 'ServiceStep',
+            order: 'source-order',
+            evidenceBasis: 'derived',
+            service: 'services.SubscriptionService',
+            subject: {
+              role: 'service',
+              label: 'services.SubscriptionService',
+              entityId: ENT,
+              entityType: 'module',
+              displayName: 'services.SubscriptionService',
+              publicationId: PUB,
+            },
+            provenance: [],
+          },
           {
             id: 'unresolved-1',
             type: 'UnresolvedCallStep',
@@ -1432,7 +1450,26 @@ describe('Journey tool payloads', () => {
               },
             ],
             relationshipReferences: [
-              { relationshipId: REL, type: 'USES', publicationId: PUB },
+              {
+                relationshipId: REL,
+                type: 'USES',
+                publicationId: PUB,
+                sourceDisplayName: 'GET /subscriptions (static candidate)',
+                targetDisplayName: 'services.SubscriptionService',
+              },
+            ],
+            stepPreview: [
+              {
+                id: 'service-1',
+                subject: {
+                  entityId: ENT,
+                  entityType: 'module',
+                  displayName: 'services.SubscriptionService',
+                  publicationId: PUB,
+                  role: 'service',
+                },
+              },
+              { id: 'unresolved-1' },
             ],
           },
         },

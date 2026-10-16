@@ -237,6 +237,13 @@ class SubscriptionController {
           ...journey.transitions.flatMap(
             (transition) => transition.entityReferences ?? [],
           ),
+          ...journey.steps.flatMap((step) =>
+            step.subject ? [step.subject] : [],
+          ),
+          ...journey.transitions.flatMap((transition) => [
+            ...(transition.fromSubject ? [transition.fromSubject] : []),
+            ...(transition.toSubject ? [transition.toSubject] : []),
+          ]),
         ]) {
           const entity = publishedEntities.get(reference.entityId ?? '');
           expect(entity).toBeDefined();
@@ -258,6 +265,48 @@ class SubscriptionController {
             sourceEntityId: reference.sourceEntityId,
             targetEntityId: reference.targetEntityId,
           });
+          expect(reference.sourceDisplayName).toBe(
+            publishedEntities.get(reference.sourceEntityId ?? '')?.name,
+          );
+          expect(reference.targetDisplayName).toBe(
+            publishedEntities.get(reference.targetEntityId ?? '')?.name,
+          );
+        }
+        const subjectRoles = new Map(
+          journey.steps.map((step) => [step.type, step.subject?.role]),
+        );
+        expect(subjectRoles.get('HttpRouteStep')).toBe('operation');
+        expect(journey.steps[0]?.subject?.displayName).toBe(journey.name);
+        for (const [type, role] of [
+          ['ControllerStep', 'controller'],
+          ['ServiceStep', 'service'],
+          ['ConnectorStep', 'connector'],
+        ] as const) {
+          for (const step of journey.steps.filter(
+            (candidate) => candidate.type === type,
+          )) {
+            expect(step.subject?.role).toBe(role);
+          }
+        }
+        for (const step of journey.steps.filter(
+          (candidate) =>
+            candidate.type === 'HttpClientCallStep' &&
+            new Set(
+              (candidate.entityReferences ?? [])
+                .filter((reference) => reference.role === 'api')
+                .map((reference) => reference.entityId),
+            ).size === 1,
+        )) {
+          expect(step.subject?.entityType).toBe('api');
+        }
+        const stepsById = new Map(journey.steps.map((step) => [step.id, step]));
+        for (const transition of journey.transitions) {
+          expect(transition.fromSubject).toEqual(
+            stepsById.get(transition.from)?.subject,
+          );
+          expect(transition.toSubject).toEqual(
+            stepsById.get(transition.to)?.subject,
+          );
         }
         for (const step of journey.steps) {
           expect(step).not.toHaveProperty('entityKey');

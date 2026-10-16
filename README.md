@@ -1,307 +1,108 @@
 # Workspace Brain
 
-Workspace Brain is a **Knowledge Model Production Platform**: it is intended to
-discover and organise knowledge in local workspaces, repositories, and
-documents, then produce traceable, versioned Knowledge Models for AI OS and
-other consumers. It is not itself an agent or reasoning platform.
+Workspace Brain discovers knowledge in local workspaces, repositories and
+documents, then produces immutable, evidence-backed Knowledge Model
+publications for people, AI OS and other consumers. It is not itself an agent
+or reasoning platform.
 
-The project is being delivered in vertical slices. Slices 0-9 provide
-deterministic filesystem discovery, evidence extraction, immutable Knowledge
-Model publications, publication-scoped lexical search, one-hop knowledge
-exploration with evidence-backed provenance, deterministic knowledge
-evolution (diffs between publications), and publication currency (whether
-published knowledge still reflects the catalogue's current document versions),
-plus a deterministic JSON package export for each immutable publication.
-Slice 9 adds independently registered architectural extractors: discovered
-repository containment, OpenAPI 3 operations, explicit ADR metadata/references,
-and resolved Markdown document links. See the
-[Slice 9 report](docs/implementation/slice-9-report.md) and
-[ADR-026](docs/adr/ADR-026-deterministic-architectural-extraction.md).
-Search, exploration, diffs, currency, and export do not mutate knowledge; no
-AI, embeddings, semantic search, or graph store is used.
-See the [architecture document](docs/architecture/Workspace-Brain-ADD-v1.md),
-the [Slice 8 implementation report](docs/implementation/slice-8-report.md),
-the [Slice 7 implementation report](docs/implementation/slice-7-report.md),
-the [Slice 6 implementation report](docs/implementation/slice-6-report.md), and
-[Slice 1 remediation report](docs/implementation/slice-1-remediation-report.md)
-for architecture, current exploration behavior, and runtime topology.
+## Start here
 
-## Principles
+**[Local runtime guide: start, rebuild, reprocess, verify](docs/local-development.md)**
+is the single day-to-day operating guide. Use it instead of piecing together
+commands from architecture documents or old implementation reports.
 
-- Source files and repositories remain authoritative and are accessed
-  read-only.
-- Discovery is deterministic and useful without AI.
-- The API owns catalogue writes; the ingestion worker scans sources and sends
-  inventory over NATS JetStream.
-- Published Knowledge Models are immutable, evidence-backed, provenance-aware,
-  and versioned.
-- AI OS and other consumers should use published contracts, not internal
-  storage or infrastructure.
-
-See [ADR-001](docs/adr/ADR-001-workspace-brain-product-boundary.md) for the
-product boundary and [ADR-022](docs/adr/ADR-022-mvp-boundary-and-read-only-sources.md)
-for the current MVP scope.
-
-## Current capabilities
-
-- Configured filesystem sources and logical workspaces.
-- Read-only discovery of Git repositories and configured document types.
-- SHA-256 file fingerprints and deterministic change classification:
-  added, modified, removed, and unchanged.
-- Stable inventory identities, scan history, and discovery events.
-- Document-version evidence and deterministic, controlled-vocabulary
-  Knowledge Model candidates with immutable publication snapshots.
-- Architectural schema 2 publications with `repository`,
-  `architectural-decision`, `document` and `operation` entities alongside the
-  original vocabulary; historical schema 1 publications remain readable.
-- `CONTAINS`, `EXPOSES` and `REFERENCES` extraction from frozen Git boundaries,
-  explicit manifest entries, OpenAPI operations and actual document links.
-  No ownership or relationship is inferred from free prose or folder names.
-- Publication-scoped lexical search and deterministic one-hop relationship
-  exploration with source-version provenance.
-- Deterministic publication diffs: added, removed, and modified entities and
-  relationships between two publications of the same Knowledge Model, stored
-  as derived, rebuildable artefacts.
-- Read-only, cursor-paginated API endpoints for sources, workspaces,
-  repositories, documents, search, published knowledge, and publication diffs.
-- A single `GET /api/v1/knowledge/publications/{publicationId}/export` endpoint
-  returns deterministic publication metadata, immutable entity/relationship
-  snapshots, and evidence-backed provenance as plain JSON.
-- Docker Compose runtime with the API, ingestion worker, NATS JetStream,
-  Qdrant, and Ollama. Qdrant and Ollama are part of the broader architecture;
-  the completed knowledge-exploration slice does not use them for indexing or
-  AI.
-
-## Getting started
-
-Requirements: Node.js 22 or later, pnpm 10.32.1, and Docker Compose for the
-containerized runtime.
-
-Install dependencies and run the checks:
+Requirements: Node.js 22+, pnpm 10.32.1, Docker with Compose v2.
+Run commands from the repository root:
 
 ```sh
 pnpm install --frozen-lockfile
-pnpm build
-pnpm lint
-pnpm typecheck
-pnpm test
-pnpm test:contract
-```
-
-To run the API and ingestion worker with Docker Compose:
-
-```sh
-docker compose -f deploy/compose/compose.yaml up --build
-```
-
-To also run LibreChat with the Workspace Brain MCP server pre-wired (opt-in
-`librechat` profile, served on `http://localhost:3080`, not port 3000):
-
-```sh
 make rebuild-backend
-make rebuild-librechat
+make rebuild-librechat    # optional: chat + bundled MCP server
+make start-explorer      # foreground dev server; separate terminal
 ```
 
-`make rebuild-backend` and `make rebuild-librechat` build separate images;
-the latter rebuilds only LibreChat, which contains the MCP server. Use
-`make start-librechat` to start it later with its required Compose services.
-The Explorer is separate again: `make start-explorer` runs its local Vite
-development server without starting or rebuilding Docker services.
+| Interface           | Default address       |
+| ------------------- | --------------------- |
+| Workspace Brain API | http://localhost:3000 |
+| Explorer dev server | http://localhost:5173 |
+| LibreChat           | http://localhost:3080 |
 
-See [docs/librechat-compose.md](docs/librechat-compose.md) for setup, tests and
-troubleshooting.
+Put sources in `sources/`, or set `WORKSPACE_SOURCES_PATH` in
+`deploy/compose/.env` before starting ingestion. See the guide for source
+configuration, LibreChat provider keys and low-memory Docker hosts.
 
 ### Make shortcuts: backend, Explorer, and LibreChat separately
 
-From the repository root, run `make help` for all commands. Docker Compose is
-required for the backend; the Explorer runs locally with the Node.js/pnpm
-dependencies installed above.
+- **No code changes:** `make start-backend`, optional `make start-librechat`,
+  and `make start-explorer` in a separate terminal.
+- **Changed code:** use the [change-to-command table](docs/local-development.md#i-changed-something-what-do-i-run).
+  Local `pnpm build` does not update Docker containers; restarting a container
+  does not deploy code.
+- **Changed extraction/publication logic:** rebuild affected services, then
+  `pnpm reprocess:architecture`. This runs inside the deployed worker.
+  Follow the [deploy and reprocess checklist](docs/local-development.md#updated-extraction-or-publication-logic-deploy-then-reprocess).
+- **Status:** `make status`, `make logs`, optional `pnpm librechat:verify`.
+- **Stop, keep data:** `make stop-backend`, `make stop-librechat`, Ctrl-C for
+  Explorer. Do not wipe volumes as a routine update step.
+- **All commands:** `make help`.
 
-```sh
-# Rebuild without Docker layer or Turbo task caches, then recreate containers.
-make rebuild-backend
+## Current capabilities
 
-# Backend-only selections; neither Explorer nor LibreChat is built here.
-make rebuild-api
-make rebuild-workers
-make rebuild-ingestion-worker
-make rebuild-knowledge-worker
+- Deterministic, read-only filesystem discovery with stable inventory
+  identities, fingerprints, scan history and change classification.
+- Document-version evidence, provenance, controlled-vocabulary entities and
+  relationships, and immutable Knowledge Model publications.
+- Architectural extraction from Git boundaries, manifests, OpenAPI operations,
+  explicit ADR metadata and actual document links.
+- Evidence-backed static Journeys, including ordered steps, transitions,
+  boundaries and published entity references. These are not runtime traces.
+- Publication-scoped lexical search, one-hop exploration, publication diffs,
+  currency checks and deterministic JSON exports.
+- Read-only HTTP API, Explorer and MCP tools for consumers such as LibreChat.
 
-# Build/rebuild and start LibreChat separately from the backend.
-make build-librechat
-make rebuild-librechat
-make start-librechat
+No AI enrichment, embeddings, semantic search or graph store is used for these
+capabilities. Qdrant and Ollama are present in Compose for the broader
+architecture, but are not needed for the deterministic pipeline.
 
-# In a separate terminal: Explorer dev server at http://localhost:5173.
-make start-explorer
-```
+## Principles
 
-`make build-librechat` builds only the LibreChat image, including its bundled
-MCP server. `make rebuild-librechat` bypasses Docker build cache for that image
-and recreates LibreChat; `make start-librechat` starts it without building.
-Both start commands generate missing LibreChat secrets without replacing
-existing values and wait for LibreChat and its required API, NATS and Mongo
-services. Build the backend separately first if its images are missing or
-stale. `make stop-librechat` stops LibreChat and Mongo while preserving their
-data volumes; it does not stop backend services.
+- Source files remain authoritative and are accessed read-only.
+- The API owns catalogue writes; workers communicate over NATS.
+- Published knowledge is immutable, versioned, evidence-backed and
+  provenance-aware.
+- Consumers use published contracts, not internal storage or infrastructure.
 
-`rebuild-*` backend commands use `--no-cache --pull`, disable local and remote
-Turbo build caches, and wait for services to become running/healthy. They do not
-delete volumes or reset the catalogue. Worker commands also bring up their
-required API/NATS/worker dependencies. The core backend excludes LibreChat,
-Qdrant and Ollama; the Explorer is never started by a backend target.
-
-For quick starts using existing backend images, use `make start-backend`,
-`make start-api`, `make start-workers`, `make start-ingestion-worker`, or
-`make start-knowledge-worker`. These commands deliberately do not build; use a
-`rebuild-*` target first if an image is missing or code has changed.
-
-`make start-explorer` refreshes Vite's dependency optimization cache. For a fresh
-production build instead, use `make build-explorer`, or `make rebuild-explorer`
-to build and serve the preview at `http://localhost:4173`. Both build commands
-disable Turbo caching. Stop either Explorer server with Ctrl-C. The Explorer
-proxies to `http://localhost:3000` by default; set `WORKSPACE_BRAIN_API_URL` to
-override that destination.
-
-Use `make status`, `make logs`, and `make stop-backend` for container operations.
-The stop command preserves volumes and leaves optional services alone. On
-low-memory Docker hosts, use
-`make rebuild-backend TURBO_BUILD_ARGS=--concurrency=1`. Cache-free builds still
-use the locked dependency versions; they do not upgrade dependencies.
-
-Docker build contexts exclude both compiled output and TypeScript incremental
-state (`*.tsbuildinfo`). Copying incremental state without its output can make
-`tsc` report success without emitting declarations, causing dependent packages
-to fail with TS7016. A cache-free Docker build alone does not prevent this:
-the incremental state must also be excluded from the copied source tree.
-
-#### Rebuild and run everything
-
-To cleanly rebuild and run all three independently managed parts, run the
-following from the repository root. The LibreChat targets create the
-git-ignored `deploy/compose/.env` with development secrets as needed and never
-overwrite existing values:
-
-```sh
-make rebuild-backend
-make rebuild-librechat
-make start-explorer
-```
-
-- API: `http://localhost:3000`; LibreChat: `http://localhost:3080`.
-- The backend rebuild does not include LibreChat, Explorer, Qdrant or Ollama.
-- `make rebuild-librechat` rebuilds only LibreChat and its bundled MCP server.
-- Add `TURBO_BUILD_ARGS=--concurrency=1` before the build command on
-  low-memory Docker VMs (for example 2 GB Colima).
-- Stop the independent parts with `make stop-backend`, `make stop-librechat`,
-  and Ctrl-C for the Explorer dev server; these preserve data volumes.
-- Verify the LibreChat/MCP wiring with `pnpm librechat:verify`.
-
-By default, Compose mounts `./sources` read-only into the ingestion worker.
-Place a test workspace there or set `WORKSPACE_SOURCES_PATH` to another
-directory. The API is available at `http://localhost:3000`; its health and
-readiness endpoints are `/health` and `/ready`. Discovery inventory is exposed
-at `/api/v1/repositories` and `/api/v1/documents`. The full API contract is in
-[openapi/openapi.json](openapi/openapi.json).
-
-Compose logs use structured JSON with ISO-8601 UTC `time` values. Look for
-`source scan started` and `source scan completed` (including added, modified,
-removed and unchanged document counts) in the ingestion/API logs, then
-`document evidence submitted`, `knowledge candidates submitted`,
-`knowledge model published; search projection requested`, and
-`search projection built`. A completed scan with no document changes does not
-by itself create a new publication. Routine `/health` and `/ready` requests
-are omitted from request logs; readiness failures are still logged. Use
-`docker compose -f deploy/compose/compose.yaml logs -f ingestion-worker knowledge-worker workspace-brain-api`
-to follow the pipeline.
-
-The ingestion worker retrieves its configured sources over NATS with a
-5-second request timeout. The API snapshots registered source configuration
-before starting event consumers, so these requests do not wait behind long
-publication writes or reprocessing backlogs. Configuration changes require
-`make rebuild-api`; the snapshot refreshes on each API startup. Explorer
-catalogue queries and `/ready` still wait for catalogue operations and can be
-slow during large reprocessing runs; `/health` checks process liveness only.
-
-To run the end-to-end Compose discovery smoke test:
-
-```sh
-pnpm test:smoke:discovery
-```
-
-The smoke test starts an isolated Compose project, creates a temporary fixture
-under the repository, and removes the project and fixture when it finishes.
-
-### Architectural extraction validation and rollout
-
-After building, validate real sources read-only in a temporary catalogue:
-
-```sh
-node scripts/validate-architecture.mjs /path/to/workspace-brain /path/to/ai-os
-```
-
-The command prints counts, extractor contributions, diagnostics and provenance
-examples, checks deterministic extraction/export/diff/currency, and removes
-only its own temporary catalogue. It does not update the running API.
-
-Existing consumed document versions are not automatically reprocessed by an
-unchanged scan. After deploying the updated API/migrations and worker, and
-completing a fresh scan, explicitly submit reprocessing from a runtime with
-access to both the API and the internal NATS/ingestion services:
-
-```sh
-API_URL=http://workspace-brain-api:3000 NATS_SERVERS=nats://nats:4222 \
-  pnpm reprocess:architecture
-```
-
-Set `SOURCE_ID` to limit reprocessing to one catalogue source. The command
-reuses the worker's bounded, hash-checked content reads and versioned,
-idempotent submissions; it does not fabricate discovery events or modify
-sources. Submission is not publication completion: check API/worker logs and
-pin the resulting publication before querying/exporting it. Reprocessing an
-already accepted processor-3 version reuses its frozen context. Structural-only
-freshness remains outside document-based currency.
+See [ADR-001](docs/adr/ADR-001-workspace-brain-product-boundary.md) for the
+product boundary and [ADR-022](docs/adr/ADR-022-mvp-boundary-and-read-only-sources.md)
+for the MVP scope.
 
 ## Repository map
 
-| Path                             | Purpose                                             |
-| -------------------------------- | --------------------------------------------------- |
-| `apps/workspace-brain-api/`      | HTTP API and catalogue-facing operations            |
-| `apps/ingestion-worker/`         | Read-only filesystem scanning and discovery         |
-| `apps/workspace-brain-explorer/` | Visual product showcase of published knowledge      |
-| `apps/workspace-brain-mcp/`      | Read-only MCP server over the HTTP API              |
-| `packages/`                      | Domain, configuration, and catalogue contracts      |
-| `infrastructure/`                | DuckDB, filesystem, and NATS adapters               |
-| `config/`                        | Example Workspace Brain configuration               |
-| `deploy/compose/`                | Local container runtime                             |
-| `openapi/`                       | Public HTTP API contract                            |
-| `test/`                          | Contract and integration tests                      |
-| `docs/`                          | Architecture, decisions, and implementation records |
+| Path                                                             | Purpose                                         |
+| ---------------------------------------------------------------- | ----------------------------------------------- |
+| [apps/workspace-brain-api/](apps/workspace-brain-api/)           | HTTP API and catalogue writes                   |
+| [apps/ingestion-worker/](apps/ingestion-worker/)                 | Read-only filesystem scanning                   |
+| [apps/knowledge-worker/](apps/knowledge-worker/)                 | Evidence processing and candidate submission    |
+| [apps/workspace-brain-explorer/](apps/workspace-brain-explorer/) | Published-knowledge UI                          |
+| [apps/workspace-brain-mcp/](apps/workspace-brain-mcp/)           | Read-only MCP server over HTTP                  |
+| [packages/](packages/)                                           | Domain, processing, configuration and contracts |
+| [infrastructure/](infrastructure/)                               | DuckDB, filesystem and NATS adapters            |
+| [config/](config/)                                               | Source, workspace and runtime settings          |
+| [deploy/compose/](deploy/compose/)                               | Container runtime                               |
+| [openapi/openapi.json](openapi/openapi.json)                     | Public HTTP API contract                        |
+| [test/](test/)                                                   | Contract and integration tests                  |
 
-## Documentation index
+## Documentation
 
-- [Documentation index](docs/README.md) — guides to architecture, decisions,
-  and implementation records.
-- [Architecture Definition Document v1](docs/architecture/Workspace-Brain-ADD-v1.md)
-  — system boundaries, target services, contracts, and roadmap.
-- [ADR index](docs/adr/README.md) — accepted Architecture v1 decisions.
-- [Implementation reports](docs/implementation/) — slice delivery,
-  remediation, and known architecture deviations.
-- [Configuration example](config/workspace-brain.yaml) — local source,
-  workspace, and runtime settings.
-- [OpenAPI contract](openapi/openapi.json) — HTTP endpoints and response
-  schemas.
+- **Operate/develop:** [local runtime guide](docs/local-development.md).
+- **LibreChat integration details:** [setup and diagnostics](docs/librechat-compose.md).
+- **All docs:** [documentation index](docs/README.md).
+- **Architecture and roadmap:** [Architecture Definition Document](docs/architecture/Workspace-Brain-ADD-v1.md)
+  and [Architecture FAQ](docs/architecture/architecture-faq.md).
+- **Decisions:** [ADR index](docs/adr/README.md). Supersede accepted decisions
+  with a new ADR rather than silently rewriting them.
+- **Delivery history:** [implementation reports](docs/implementation/).
+  These are historical records, not the current startup instructions.
 
-The ADRs are the record of accepted architectural decisions. Supersede a
-decision with a new ADR rather than silently rewriting an accepted one.
-
-## Direction
-
-Deterministic discovery, evidence extraction, immutable Knowledge Model
-publication, lexical search, exploration, and publication diffs are
-implemented. The intended next steps are richer graph queries, analytics,
-semantic search, and AI OS consumption packaging. AI-assisted enrichment is a
-later, controlled step: AI output is candidate knowledge and does not
-establish or publish facts. The architecture document describes the broader
-roadmap; capabilities beyond those listed above should not be read as already
-implemented.
+AI-assisted enrichment is a later, controlled direction: AI output is
+candidate knowledge and does not establish or publish facts.

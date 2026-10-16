@@ -1,9 +1,18 @@
 # Workspace Brain documentation
 
-This directory contains the accepted architecture, decision record, and
-implementation history for Workspace Brain.
+This directory contains operating guides, architecture, decisions, and
+implementation history. Use the operating guide for current commands;
+implementation reports are historical records, not startup instructions.
 
 ## Start here
+
+- **[Local runtime guide](local-development.md)** — first run, daily startup,
+  exactly what to rebuild/restart after each change, reprocessing, verification
+  and troubleshooting. This is the operational source of truth.
+- [LibreChat integration reference](librechat-compose.md) — bundled MCP
+  architecture, provider configuration and integration tests.
+
+## Architecture and history
 
 - [Architecture Definition Document v1](architecture/Workspace-Brain-ADD-v1.md)
   — product boundaries, domain model, service responsibilities, runtime

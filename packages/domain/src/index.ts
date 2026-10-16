@@ -360,6 +360,11 @@ export type JourneyStepBase = {
   readonly entityKey?: string;
   readonly stepEntityKey?: string;
   readonly stepEntityId?: string;
+  /**
+   * The published entity this step acts on (route operation, controller,
+   * service, connector or API), resolved once at publication time.
+   */
+  readonly subject?: JourneyEntityReference;
   readonly entityReferences?: readonly JourneyEntityReference[];
   readonly evidenceRef?: string;
   readonly evidenceBasis: JourneyEvidenceBasis;
@@ -442,6 +447,8 @@ export type JourneyTransition = {
   readonly type: JourneyTransitionType;
   readonly from: string;
   readonly to: string;
+  readonly fromSubject?: JourneyEntityReference;
+  readonly toSubject?: JourneyEntityReference;
   readonly evidenceRef?: string;
   readonly order: JourneyStepOrder;
   readonly provenance: readonly ProvenanceReference[];
@@ -481,6 +488,8 @@ export type JourneyRelationshipReference = {
   readonly relationshipId?: string;
   readonly sourceEntityId?: string;
   readonly targetEntityId?: string;
+  readonly sourceDisplayName?: string;
+  readonly targetDisplayName?: string;
   readonly publicationId?: string;
 };
 

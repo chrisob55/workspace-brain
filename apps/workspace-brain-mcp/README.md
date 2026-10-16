@@ -342,6 +342,17 @@ path to the binary (from `which node`) as `command`.
 
 ## Connecting Workspace Brain MCP to local LibreChat
 
+**Using this repository's Compose stack?** MCP is already bundled inside the
+`librechat` image. Use the [local runtime guide](../../docs/local-development.md)
+for startup and rebuilds, and the
+[integration reference](../../docs/librechat-compose.md) for diagnostics.
+Do not configure host bundle mounts or run `docker compose restart api` for
+this stack: its service is named `librechat`, and code updates require
+`make rebuild-librechat`.
+
+The alternatives below are for an **independently installed LibreChat**, not
+the Compose stack shipped in this repository.
+
 LibreChat starts the server as a stdio child process defined in
 `librechat.yaml`. First check that the Workspace Brain API is up on the host:
 
@@ -394,7 +405,7 @@ curl -s http://localhost:3000/ready    # {"status":"ready"}
    - Running `node /Users/you/mcp/workspace-brain-mcp/dist/server.js` by hand
      should print `workspace-brain MCP server running on stdio` to stderr.
 
-### Option B: LibreChat runs in Docker
+### Option B: Independently installed LibreChat runs in Docker
 
 In the standard LibreChat Compose setup, the backend is the **`api`**
 service (container name `LibreChat`).

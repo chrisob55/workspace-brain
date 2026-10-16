@@ -16,6 +16,8 @@ export interface JourneyRelationshipReferenceView {
   relationshipId?: string;
   sourceEntityId?: string;
   targetEntityId?: string;
+  sourceDisplayName?: string;
+  targetDisplayName?: string;
   publicationId?: string;
 }
 
@@ -25,6 +27,7 @@ export interface JourneyStepView {
   evidenceBasis: string;
   order: string;
   stepEntityId?: string;
+  subject?: JourneyEntityReferenceView;
   entityReferences?: JourneyEntityReferenceView[];
   provenance: {
     id: string;
@@ -43,6 +46,8 @@ export interface JourneyTransitionView {
   type: string;
   from: string;
   to: string;
+  fromSubject?: JourneyEntityReferenceView;
+  toSubject?: JourneyEntityReferenceView;
   certainty: string;
   order: string;
   entityReferences?: JourneyEntityReferenceView[];
@@ -121,6 +126,10 @@ function isRelationshipReference(
       (isString(value.relationshipId) &&
         isString(value.sourceEntityId) &&
         isString(value.targetEntityId))) &&
+    (value.sourceDisplayName === undefined ||
+      isString(value.sourceDisplayName)) &&
+    (value.targetDisplayName === undefined ||
+      isString(value.targetDisplayName)) &&
     (value.publicationId === undefined || isString(value.publicationId))
   );
 }
@@ -133,6 +142,7 @@ function isJourneyStep(value: unknown): value is JourneyStepView {
     isString(value.evidenceBasis) &&
     isString(value.order) &&
     (value.stepEntityId === undefined || isString(value.stepEntityId)) &&
+    (value.subject === undefined || isEntityReference(value.subject)) &&
     (value.entityReferences === undefined ||
       (Array.isArray(value.entityReferences) &&
         value.entityReferences.every(isEntityReference))) &&
@@ -156,6 +166,8 @@ function isTransition(value: unknown): value is JourneyTransitionView {
     isString(value.to) &&
     isString(value.certainty) &&
     isString(value.order) &&
+    (value.fromSubject === undefined || isEntityReference(value.fromSubject)) &&
+    (value.toSubject === undefined || isEntityReference(value.toSubject)) &&
     Array.isArray(value.provenance) &&
     (value.entityReferences === undefined ||
       (Array.isArray(value.entityReferences) &&
@@ -257,6 +269,9 @@ export function journeyMatches(journey: JourneyView, query: string): boolean {
     journey.name,
     journey.description ?? '',
     ...journey.sourceServices,
+    ...journey.steps.flatMap((step) =>
+      step.subject?.displayName ? [step.subject.displayName] : [],
+    ),
     ...journey.steps.flatMap((step) =>
       [
         'route',

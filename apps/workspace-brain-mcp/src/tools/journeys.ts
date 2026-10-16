@@ -46,6 +46,15 @@ function requiredString(value: unknown, field: string): string {
   return value;
 }
 
+function optionalString(
+  record: Record<string, unknown>,
+  field: string,
+  context: string,
+): Record<string, string> {
+  if (record[field] === undefined) return {};
+  return { [field]: requiredString(record[field], `${context}.${field}`) };
+}
+
 function compactStep(value: unknown, index: number): Record<string, unknown> {
   const step = requiredRecord(value, `journey.steps[${index}]`);
   const preview: Record<string, unknown> = {
@@ -53,6 +62,9 @@ function compactStep(value: unknown, index: number): Record<string, unknown> {
     type: requiredString(step.type, `journey.steps[${index}].type`),
     order: requiredString(step.order, `journey.steps[${index}].order`),
   };
+  if (step.subject !== undefined) {
+    preview.subject = compactEntityReference(step.subject);
+  }
   for (const field of [
     'route',
     'controller',
@@ -88,26 +100,28 @@ function compactStep(value: unknown, index: number): Record<string, unknown> {
 }
 
 function compactEntityReferences(value: unknown): unknown[] {
-  return requiredArray(value, 'entityReferences').map((item) => {
-    const reference = requiredRecord(item, 'entityReference');
-    if (reference.entityId === undefined) return reference;
-    return {
-      entityId: requiredString(reference.entityId, 'entityReference.entityId'),
-      entityType: requiredString(
-        reference.entityType,
-        'entityReference.entityType',
-      ),
-      displayName: requiredString(
-        reference.displayName,
-        'entityReference.displayName',
-      ),
-      publicationId: requiredString(
-        reference.publicationId,
-        'entityReference.publicationId',
-      ),
-      role: requiredString(reference.role, 'entityReference.role'),
-    };
-  });
+  return requiredArray(value, 'entityReferences').map(compactEntityReference);
+}
+
+function compactEntityReference(item: unknown): unknown {
+  const reference = requiredRecord(item, 'entityReference');
+  if (reference.entityId === undefined) return reference;
+  return {
+    entityId: requiredString(reference.entityId, 'entityReference.entityId'),
+    entityType: requiredString(
+      reference.entityType,
+      'entityReference.entityType',
+    ),
+    displayName: requiredString(
+      reference.displayName,
+      'entityReference.displayName',
+    ),
+    publicationId: requiredString(
+      reference.publicationId,
+      'entityReference.publicationId',
+    ),
+    role: requiredString(reference.role, 'entityReference.role'),
+  };
 }
 
 function compactJourneySearchResponse(body: unknown): unknown {
@@ -225,6 +239,16 @@ function compactJourneySearchResponse(body: unknown): unknown {
                 reference.targetEntityId,
                 'relationshipReference.targetEntityId',
               ),
+              ...optionalString(
+                reference,
+                'sourceDisplayName',
+                'relationshipReference',
+              ),
+              ...optionalString(
+                reference,
+                'targetDisplayName',
+                'relationshipReference',
+              ),
               publicationId: requiredString(
                 reference.publicationId,
                 'relationshipReference.publicationId',
@@ -247,7 +271,7 @@ export function registerJourneyTools(
     {
       title: 'Search Published Journeys',
       description:
-        'Search Journey records from immutable Knowledge Publications by literal text, API-name text, or connector-name text. Results contain a compact preview, completeness, unresolved boundaries, diagnostics, provenance and graph references with entityId, entityType, displayName and publicationId. Use get_published_entity and list_relationships_for_entity with those IDs for graph traversal. Use get_journey for all recorded steps and transitions. Legacy publications can contain unresolved candidate references. Text matching does not prove a binding or runtime execution. Pin publicationId for reproducible reads. Returns { items, nextCursor }.',
+        'Search Journey records from immutable Knowledge Publications by literal text, API-name text, or connector-name text. Results contain a compact preview where each step subject names the published entity it acts on (use subject.displayName when describing the Journey to people), completeness, unresolved boundaries, diagnostics, provenance and graph references with entityId, entityType, displayName and publicationId. Use get_published_entity and list_relationships_for_entity with those IDs for graph traversal. Use get_journey for all recorded steps and transitions. Legacy publications can contain unresolved candidate references. Text matching does not prove a binding or runtime execution. Pin publicationId for reproducible reads. Returns { items, nextCursor }.',
       inputSchema: {
         query: searchText.optional().describe('Literal Journey text search.'),
         api: searchText
@@ -270,7 +294,7 @@ export function registerJourneyTools(
     {
       title: 'Get Published Journey',
       description:
-        'Retrieve one Journey by its deterministic Journey ID from an immutable Knowledge Publication. Includes static steps, transitions, confidence, completeness, unresolved boundaries, provenance, and publication-pinned entity/relationship IDs. Follow entityReferences using get_published_entity and list_relationships_for_entity with the reference publicationId. Legacy publications retain unresolved candidate references. This is static source analysis, not an observed runtime trace.',
+        'Retrieve one Journey by its deterministic Journey ID from an immutable Knowledge Publication. Includes static steps (each with a subject naming the published entity it acts on), transitions (with fromSubject/toSubject), confidence, completeness, unresolved boundaries, provenance, and publication-pinned entity/relationship IDs with display names. Describe steps to people by subject.displayName, keeping entityId for follow-up reads. Follow entityReferences using get_published_entity and list_relationships_for_entity with the reference publicationId. Legacy publications retain unresolved candidate references. This is static source analysis, not an observed runtime trace.',
       inputSchema: {
         publicationId: publicationIdSchema,
         journeyId: journeyIdSchema,

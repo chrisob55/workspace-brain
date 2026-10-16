@@ -33,6 +33,36 @@ function stepLabel(step: JourneyStepView): string {
   return step.type;
 }
 
+function StepLink({
+  step,
+  fallbackLabel,
+  subject,
+  graphEntities,
+}: {
+  step: JourneyStepView | undefined;
+  fallbackLabel: string;
+  subject?: JourneyEntityReferenceView | undefined;
+  graphEntities: readonly KnowledgeEntity[];
+}) {
+  const resolved = subject ?? step?.subject;
+  return resolved ? (
+    <RelatedLink
+      label={resolved.displayName ?? resolved.label}
+      role={resolved.role}
+      entityId={resolved.entityId}
+      entityType={resolved.entityType}
+      graphEntities={graphEntities}
+    />
+  ) : (
+    <RelatedLink
+      label={step ? stepLabel(step) : fallbackLabel}
+      role="step"
+      entityId={step?.stepEntityId}
+      graphEntities={graphEntities}
+    />
+  );
+}
+
 function RelatedLink({
   label,
   role,
@@ -138,24 +168,32 @@ function StepDetails({
     step.branchContext || step.asyncGroup
       ? [step.branchContext, step.asyncGroup].filter(Boolean).join(' · ')
       : undefined;
+  const sourceText = stepLabel(step);
   return (
     <div className="min-w-0 flex-1">
       <div className="flex flex-wrap items-center gap-2">
         <Badge variant="outline">{step.type}</Badge>
-        <RelatedLink
-          label={stepLabel(step)}
-          role={step.type}
+        <StepLink
+          step={step}
+          fallbackLabel={step.id}
           graphEntities={graphEntities}
-          entityId={step.stepEntityId}
         />
         <Badge variant="secondary">{step.evidenceBasis}</Badge>
       </div>
+      {step.subject && sourceText !== step.subject.displayName && (
+        <p className="mt-1 break-all font-mono text-xs text-muted-foreground">
+          {sourceText}
+        </p>
+      )}
       {detail && <p className="mt-1 text-xs text-muted-foreground">{detail}</p>}
       {step.entityReferences && (
         <div className="mt-2">
           <ReferenceLinks
             references={step.entityReferences.filter(
-              (reference) => reference.role !== 'step',
+              (reference) =>
+                reference.role !== 'step' &&
+                (step.subject === undefined ||
+                  reference.entityId !== step.subject.entityId),
             )}
             graphEntities={graphEntities}
           />
@@ -304,17 +342,17 @@ function JourneyDetail({
                   key={transition.id}
                   className="flex flex-wrap items-center gap-2 rounded-lg border p-3 text-sm"
                 >
-                  <RelatedLink
-                    label={from ? stepLabel(from) : transition.from}
-                    role="step"
-                    entityId={from?.stepEntityId}
+                  <StepLink
+                    step={from}
+                    fallbackLabel={transition.from}
+                    subject={transition.fromSubject}
                     graphEntities={graphEntities}
                   />
                   <ArrowRight className="size-4 shrink-0 text-muted-foreground" />
-                  <RelatedLink
-                    label={to ? stepLabel(to) : transition.to}
-                    role="step"
-                    entityId={to?.stepEntityId}
+                  <StepLink
+                    step={to}
+                    fallbackLabel={transition.to}
+                    subject={transition.toSubject}
                     graphEntities={graphEntities}
                   />
                   <Badge variant="outline">{transition.type}</Badge>
@@ -385,7 +423,10 @@ function JourneyDetail({
                         className="hover:text-primary"
                         href={`#/graph/relationship/${encodeURIComponent(reference.relationshipId)}`}
                       >
-                        {reference.type}: {reference.relationshipId}
+                        {reference.sourceDisplayName &&
+                        reference.targetDisplayName
+                          ? `${reference.sourceDisplayName} ${reference.type} ${reference.targetDisplayName}`
+                          : `${reference.type}: ${reference.relationshipId}`}
                       </a>
                     ) : (
                       `${reference.type}: unresolved candidate reference`

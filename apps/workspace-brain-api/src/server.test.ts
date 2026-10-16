@@ -1237,6 +1237,15 @@ describe('Workspace Brain API routes', () => {
       relationshipId: relationship.id,
       sourceEntityId: journeyEntityId,
       targetEntityId: entity.id,
+      sourceDisplayName: 'GET /subscriptions',
+      targetDisplayName: entity.name,
+    };
+    const subject = {
+      role: reference.role,
+      label: reference.label,
+      entityId: reference.entityId,
+      entityType: reference.entityType,
+      displayName: reference.displayName,
     };
     const provenance = journeyModel.provenance.map((item) => ({
       ...item,
@@ -1252,11 +1261,14 @@ describe('Workspace Brain API routes', () => {
       steps: journeyModel.steps.map((step) => ({
         ...step,
         stepEntityId: entity.id,
+        subject,
         entityReferences: [reference],
         provenance,
       })),
       transitions: journeyModel.transitions.map((transition) => ({
         ...transition,
+        fromSubject: subject,
+        toSubject: subject,
         entityReferences: [reference],
         relationshipReferences: [relationshipReference],
         provenance,
@@ -1304,6 +1316,11 @@ describe('Workspace Brain API routes', () => {
         (transition) => transition.relationshipReferences,
       ),
       ...model.transitions.map((transition) => transition.provenance),
+      model.steps.map((step) => step.subject),
+      model.transitions.flatMap((transition) => [
+        transition.fromSubject,
+        transition.toSubject,
+      ]),
     ]) {
       expect(references).toEqual(
         expect.arrayContaining([
@@ -1311,6 +1328,14 @@ describe('Workspace Brain API routes', () => {
         ]),
       );
     }
+    expect(model.steps[0]?.subject).toEqual({
+      ...subject,
+      publicationId: publication.id,
+    });
+    expect(model.relationshipReferences[0]).toMatchObject({
+      sourceDisplayName: 'GET /subscriptions',
+      targetDisplayName: entity.name,
+    });
     await server.close();
   });
 

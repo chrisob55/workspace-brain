@@ -177,6 +177,42 @@ describe('published Journey decoding', () => {
     };
     expect(decodePublishedJourney(malformed).error).toMatch(/does not match/);
   });
+  it('decodes published step and transition subjects and searches their display names', () => {
+    const subject = {
+      role: 'operation',
+      label: 'GET /subscriptions/:id',
+      entityId: '01J00000000000000000000006',
+      entityType: 'operation',
+      displayName: 'Subscription route operation',
+    };
+    const encode = (model: unknown) => ({
+      ...entity,
+      provenance: entity.provenance.map((item) => ({
+        ...item,
+        facts: { journeyJson: JSON.stringify(model) },
+      })),
+    });
+    const withSubjects = {
+      ...journey,
+      steps: [{ ...journey.steps[0]!, subject }, journey.steps[1]!],
+      transitions: [{ ...journey.transitions[0]!, fromSubject: subject }],
+    };
+    const decoded = decodePublishedJourney(encode(withSubjects)).journey!;
+    expect(decoded.steps[0]?.subject).toEqual(subject);
+    expect(decoded.transitions[0]?.fromSubject).toEqual(subject);
+    expect(journeyMatches(decoded, 'route operation')).toBe(true);
+    expect(
+      decodePublishedJourney(
+        encode({
+          ...withSubjects,
+          steps: [
+            { ...journey.steps[0]!, subject: { ...subject, displayName: 1 } },
+          ],
+        }),
+      ).error,
+    ).toMatch(/does not match/);
+  });
+
   it('decodes publication data without filling unresolved boundaries', () => {
     const result = decodePublishedJourney(entity);
     expect(result.journey?.steps[1]?.type).toBe('UnresolvedCallStep');
