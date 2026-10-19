@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "@workspace-brain/configuration": "workspace:*",
     "@workspace-brain/domain": "workspace:*",
     "@workspace-brain/nats": "workspace:*",
     "@workspace-brain/processing-core": "workspace:*",

@@ -10,6 +10,7 @@ import {
   createSourceId,
   type DiscoveryEvent,
   type DiscoverySource,
+  type RuntimeHeartbeat,
 } from '@workspace-brain/domain';
 import { createDuckDbCatalogue } from '@workspace-brain/duckdb';
 import type { FastifyInstance } from 'fastify';
@@ -104,6 +105,8 @@ function createHarness(options: HarnessOptions = {}) {
     string,
     (body: unknown) => Promise<unknown>
   >();
+  let runtimeHeartbeatHandler: ((event: unknown) => Promise<void>) | undefined;
+  const runtimeHeartbeats: RuntimeHeartbeat[] = [];
   const rebuildRequests: unknown[] = [];
   const sourceRequests: unknown[] = [];
   let pending: DiscoveryEvent[] = [builtEvent];
@@ -163,6 +166,22 @@ function createHarness(options: HarnessOptions = {}) {
       }
       published.push(event);
     },
+    async publishRuntimeHeartbeat(event) {
+      runtimeHeartbeats.push(event);
+    },
+    async subscribeRuntimeHeartbeats(handler) {
+      runtimeHeartbeatHandler = handler;
+      return () => {
+        runtimeHeartbeatHandler = undefined;
+      };
+    },
+    connectionState() {
+      return 'connected';
+    },
+    onConnectionState(handler) {
+      handler('connected');
+      return () => undefined;
+    },
     async subscribe(subject) {
       subscriptions.push(subject);
     },
@@ -214,6 +233,8 @@ function createHarness(options: HarnessOptions = {}) {
     calls,
     closes,
     published,
+    runtimeHeartbeats,
+    runtimeHeartbeatHandler: () => runtimeHeartbeatHandler,
     marked,
     subscriptions,
     requestSubjects,
@@ -428,14 +449,25 @@ describe('API startup orchestration', () => {
       },
     ]);
     expect(harness.published).toEqual([builtEvent]);
+    expect(harness.runtimeHeartbeats).toHaveLength(1);
+    expect(harness.runtimeHeartbeats[0]).toMatchObject({
+      schemaVersion: 1,
+      componentId: 'workspace-brain-api',
+      componentType: 'api',
+      instanceId: expect.stringMatching(/^workspace-brain-api-/),
+    });
     expect(harness.marked).toEqual([builtEvent.eventId]);
     expect(harness.logger.errors).toEqual([]);
-    expect(harness.logger.infos).toEqual([
-      {
-        details: { publicationCount: 1, correlationId: expect.any(String) },
-        message: 'Search projections reconciled with publications',
-      },
-    ]);
+    expect(harness.logger.infos).toContainEqual({
+      details: { publicationCount: 1, correlationId: expect.any(String) },
+      message: 'Search projections reconciled with publications',
+    });
+    expect(harness.logger.infos.map(({ message }) => message)).toContain(
+      'Runtime heartbeat subscription started',
+    );
+    expect(harness.logger.infos.map(({ message }) => message)).toContain(
+      'Runtime heartbeat publisher started',
+    );
     expect(harness.serverLogger.infos).toEqual([
       { details: { port: 3000 }, message: 'Workspace Brain API listening' },
     ]);
@@ -471,7 +503,10 @@ describe('API startup orchestration', () => {
         ),
       },
     ]);
-    expect(harness.logger.infos).toEqual([]);
+    expect(harness.logger.infos.map(({ message }) => message)).toEqual([
+      'Runtime heartbeat subscription started',
+      'Runtime heartbeat publisher started',
+    ]);
     // Already-committed outbox events are still flushed after the failure.
     expect(harness.published).toEqual([builtEvent]);
     expect(harness.closes).toEqual({ server: 0, bus: 0, catalogue: 0 });
@@ -498,7 +533,10 @@ describe('API startup orchestration', () => {
         }),
       }),
     ]);
-    expect(harness.logger.infos).toEqual([]);
+    expect(harness.logger.infos.map(({ message }) => message)).toEqual([
+      'Runtime heartbeat subscription started',
+      'Runtime heartbeat publisher started',
+    ]);
 
     await api.close();
   });

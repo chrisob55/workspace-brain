@@ -1,6 +1,7 @@
 import pino from 'pino';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { runtimeHeartbeatSubject } from '@workspace-brain/domain';
 import { connectNatsDiscoveryBus } from './index.js';
 
 const { connect } = vi.hoisted(() => ({ connect: vi.fn() }));
@@ -30,6 +31,8 @@ function createHarness(deliveryCount = 1) {
   const consume = vi.fn(async () => messages);
   const addConsumer = vi.fn(async () => {});
   const publish = vi.fn(async () => {});
+  const corePublish = vi.fn();
+  const flush = vi.fn(async () => {});
   const request = vi
     .fn<
       (
@@ -62,14 +65,57 @@ function createHarness(deliveryCount = 1) {
       consumers: { add: addConsumer },
     })),
     request,
+    publish: corePublish,
+    flush,
     drain: vi.fn(async () => {}),
     close: vi.fn(async () => {}),
   };
   connect.mockResolvedValue(connection);
-  return { message, addConsumer, consume, publish, request };
+  return {
+    message,
+    addConsumer,
+    consume,
+    publish,
+    request,
+    corePublish,
+    flush,
+  };
 }
 
 describe('NATS processing budgets', () => {
+  it('serializes transient runtime heartbeats over Core NATS', async () => {
+    const harness = createHarness();
+    const bus = await connectNatsDiscoveryBus(
+      'nats://test',
+      pino({ level: 'silent' }),
+    );
+    const event = {
+      schemaVersion: 1 as const,
+      componentId: 'parser-worker',
+      componentName: 'Parser Worker',
+      componentType: 'worker',
+      instanceId: 'parser-1',
+      version: '1.0.0',
+      startedAt: '2026-10-19T08:00:00.000Z',
+      uptimeSeconds: 3600,
+      timestamp: '2026-10-19T09:00:00.000Z',
+    };
+
+    await bus.publishRuntimeHeartbeat(event);
+
+    expect(harness.corePublish).toHaveBeenCalledOnce();
+    expect(harness.corePublish.mock.calls[0]?.[0]).toBe(
+      runtimeHeartbeatSubject,
+    );
+    expect(
+      JSON.parse(
+        new TextDecoder().decode(harness.corePublish.mock.calls[0]?.[1]),
+      ),
+    ).toEqual(event);
+    expect(harness.flush).toHaveBeenCalledOnce();
+    await bus.close();
+  });
+
   it('preserves the default request timeout and supports longer catalogue reads', async () => {
     const harness = createHarness();
     const bus = await connectNatsDiscoveryBus(

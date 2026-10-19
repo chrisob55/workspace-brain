@@ -31,6 +31,15 @@ describe('knowledge worker', () => {
       async subscribe(subject, _durableName, handler) {
         handlers.set(subject, handler);
       },
+      async publishRuntimeHeartbeat() {},
+      async subscribeRuntimeHeartbeats() {
+        return () => undefined;
+      },
+      connectionState: () => 'connected',
+      onConnectionState(handler) {
+        handler('connected');
+        return () => undefined;
+      },
       subscribeRequests() {},
       async request<T>(_subject: string, rawRequest: unknown): Promise<T> {
         const request = rawRequest as {
@@ -141,6 +150,15 @@ describe('knowledge worker', () => {
       async subscribe(subject, _durableName, handler) {
         handlers.set(subject, handler);
       },
+      async publishRuntimeHeartbeat() {},
+      async subscribeRuntimeHeartbeats() {
+        return () => undefined;
+      },
+      connectionState: () => 'connected',
+      onConnectionState(handler) {
+        handler('connected');
+        return () => undefined;
+      },
       subscribeRequests() {},
       async request<T>() {
         return {
@@ -230,6 +248,15 @@ describe('knowledge worker', () => {
         },
         async subscribe(subject, _durableName, handler) {
           handlers.set(subject, handler);
+        },
+        async publishRuntimeHeartbeat() {},
+        async subscribeRuntimeHeartbeats() {
+          return () => undefined;
+        },
+        connectionState: () => 'connected',
+        onConnectionState(handler) {
+          handler('connected');
+          return () => undefined;
         },
         subscribeRequests() {},
         async request<T>(

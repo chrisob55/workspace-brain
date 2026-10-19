@@ -31,10 +31,13 @@ import {
   knowledgeEntityTypes,
   searchMatchModes,
   type KnowledgeObjectProvenance,
+  type RuntimeStatusResponse,
 } from '@workspace-brain/domain';
 import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
 import pino from 'pino';
 import { z } from 'zod';
+
+import { RuntimeRegistryService } from './runtime-registry.js';
 
 const pageQuerySchema = z
   .object({
@@ -408,6 +411,7 @@ type SearchCatalogue = CatalogueReader &
 
 type ApiServerOptions = {
   readonly logger?: boolean;
+  readonly runtimeRegistry?: RuntimeRegistryService;
 };
 
 class ApiError extends Error {
@@ -437,6 +441,9 @@ export function createApiServer(
         : randomUUID();
     },
   });
+  const runtimeRegistry =
+    options.runtimeRegistry ??
+    new RuntimeRegistryService({ logger: server.log });
 
   // Diffs are derived artefacts computed in-process from immutable
   // publications; the API remains the sole DuckDB writer (ADR-017).
@@ -484,6 +491,13 @@ export function createApiServer(
   server.get('/health', { logLevel: 'silent' }, async () => ({
     status: 'ok',
   }));
+
+  server.get(
+    '/runtime/status',
+    { logLevel: 'silent' },
+    async (_request, reply) =>
+      reply.send(runtimeRegistry.snapshot() satisfies RuntimeStatusResponse),
+  );
 
   server.get('/ready', { logLevel: 'silent' }, async (_request, reply) => {
     try {

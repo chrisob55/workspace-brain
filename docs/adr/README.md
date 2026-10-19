@@ -27,6 +27,7 @@ Accepted Architecture v1 decisions. Supersede ADRs; do not silently rewrite them
 - [ADR-023: Deterministic Filesystem Discovery and Inventory Model](ADR-023-deterministic-filesystem-discovery-and-inventory-model.md)
 - [ADR-024: Local-First Trust Boundary](ADR-024-local-first-trust-boundary.md)
 - [ADR-026: Deterministic Architectural Extraction](ADR-026-deterministic-architectural-extraction.md)
+- [ADR-029: Runtime Heartbeat Registry](ADR-029-runtime-heartbeat-registry.md)
 
 ## Proposed decisions
 

@@ -3,7 +3,10 @@ import { resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { parseWorkspaceBrainConfig } from './index.js';
+import {
+  parseRuntimeObservabilityConfig,
+  parseWorkspaceBrainConfig,
+} from './index.js';
 
 const validConfig = `
 version: 1
@@ -32,6 +35,51 @@ describe('parseWorkspaceBrainConfig', () => {
     expect(config.sources[0]?.defaults.include_extensions).toEqual(
       expect.arrayContaining(['.scala', '.routes', '.conf']),
     );
+  });
+
+  describe('parseRuntimeObservabilityConfig', () => {
+    it('uses safe defaults and accepts validated overrides', () => {
+      expect(parseRuntimeObservabilityConfig({})).toEqual({
+        heartbeatEnabled: true,
+        heartbeatIntervalMs: 15_000,
+        degradedAfterMs: 30_000,
+        offlineAfterMs: 90_000,
+      });
+      expect(
+        parseRuntimeObservabilityConfig({
+          RUNTIME_HEARTBEAT_ENABLED: 'false',
+          RUNTIME_HEARTBEAT_INTERVAL_MS: '10000',
+          RUNTIME_DEGRADED_AFTER_MS: '20000',
+          RUNTIME_OFFLINE_AFTER_MS: '60000',
+          RUNTIME_INSTANCE_ID: 'api-a',
+        }),
+      ).toEqual({
+        heartbeatEnabled: false,
+        heartbeatIntervalMs: 10_000,
+        degradedAfterMs: 20_000,
+        offlineAfterMs: 60_000,
+        instanceId: 'api-a',
+      });
+    });
+
+    it.each([
+      {
+        RUNTIME_HEARTBEAT_INTERVAL_MS: '0',
+      },
+      {
+        RUNTIME_HEARTBEAT_INTERVAL_MS: '20000',
+        RUNTIME_DEGRADED_AFTER_MS: '20000',
+      },
+      {
+        RUNTIME_DEGRADED_AFTER_MS: '30000',
+        RUNTIME_OFFLINE_AFTER_MS: '30000',
+      },
+      {
+        RUNTIME_HEARTBEAT_ENABLED: 'yes',
+      },
+    ])('rejects invalid runtime configuration %#', (env) => {
+      expect(() => parseRuntimeObservabilityConfig(env)).toThrow();
+    });
   });
 
   it('accepts the checked-in local-first example configuration', async () => {

@@ -4,13 +4,21 @@ import type {
   CatalogueDiscovery,
   CatalogueHealth,
 } from '@workspace-brain/catalogue';
-import type { WorkspaceBrainConfig } from '@workspace-brain/configuration';
+import {
+  parseRuntimeObservabilityConfig,
+  type RuntimeObservabilityConfig,
+  type WorkspaceBrainConfig,
+} from '@workspace-brain/configuration';
 import {
   discoveryEventSubject,
   type DiscoverySource,
   type KnowledgeInputEvidence,
 } from '@workspace-brain/domain';
-import type { NatsDiscoveryBus } from '@workspace-brain/nats';
+import {
+  createHeartbeatPublisher,
+  type HeartbeatPublisher,
+  type NatsDiscoveryBus,
+} from '@workspace-brain/nats';
 import { z } from 'zod';
 
 import {
@@ -19,12 +27,20 @@ import {
   publishPendingEvents,
 } from './discovery-service.js';
 import type { InternalEventPublisher } from './events.js';
+import { RuntimeRegistryService } from './runtime-registry.js';
 
 export type StartupCatalogue = CatalogueDiscovery & CatalogueHealth;
 
 export type StartupBus = Pick<
   NatsDiscoveryBus,
-  'publish' | 'subscribe' | 'subscribeRequests' | 'close'
+  | 'publish'
+  | 'subscribe'
+  | 'subscribeRequests'
+  | 'publishRuntimeHeartbeat'
+  | 'subscribeRuntimeHeartbeats'
+  | 'connectionState'
+  | 'onConnectionState'
+  | 'close'
 >;
 
 export type StartupLogger = {
@@ -42,8 +58,12 @@ export type StartupDependencies<Catalogue extends StartupCatalogue> = {
   readonly openCatalogue: () => Promise<Catalogue>;
   readonly loadConfiguration: () => Promise<WorkspaceBrainConfig>;
   readonly connectBus: () => Promise<StartupBus>;
-  readonly createServer: (catalogue: Catalogue) => StartupServer;
+  readonly createServer: (
+    catalogue: Catalogue,
+    runtimeRegistry: RuntimeRegistryService,
+  ) => StartupServer;
   readonly logger: StartupLogger;
+  readonly runtimeObservability?: RuntimeObservabilityConfig;
   readonly host: string;
   readonly port: number;
 };
@@ -218,6 +238,8 @@ export async function startWorkspaceBrainApi<
   const catalogue = await dependencies.openCatalogue();
   let bus: StartupBus | undefined;
   let server: StartupServer | undefined;
+  let runtimeRegistry: RuntimeRegistryService | undefined;
+  let heartbeatPublisher: HeartbeatPublisher | undefined;
 
   try {
     const registration = configForCatalogue(
@@ -244,6 +266,32 @@ export async function startWorkspaceBrainApi<
     }
 
     bus = await dependencies.connectBus();
+    const runtimeConfig =
+      dependencies.runtimeObservability ?? parseRuntimeObservabilityConfig({});
+    runtimeRegistry = new RuntimeRegistryService({
+      degradedAfterSeconds: runtimeConfig.degradedAfterMs / 1000,
+      offlineAfterSeconds: runtimeConfig.offlineAfterMs / 1000,
+      logger: dependencies.logger,
+    });
+    await runtimeRegistry.start(bus);
+    if (runtimeConfig.heartbeatEnabled) {
+      const componentId = 'workspace-brain-api';
+      heartbeatPublisher = createHeartbeatPublisher({
+        nats: bus,
+        componentId,
+        componentName: 'Workspace Brain API',
+        componentType: 'api',
+        instanceId:
+          runtimeConfig.instanceId ?? `${componentId}-${randomUUID()}`,
+        version:
+          process.env.WORKSPACE_BRAIN_VERSION ??
+          process.env.npm_package_version ??
+          '0.1.0',
+        intervalMs: runtimeConfig.heartbeatIntervalMs,
+        logger: dependencies.logger,
+      });
+      await heartbeatPublisher.start();
+    }
     const discovery = createDiscoveryService(
       catalogue,
       bus,
@@ -299,14 +347,20 @@ export async function startWorkspaceBrainApi<
       dependencies.logger,
     );
 
-    server = dependencies.createServer(catalogue);
+    server = dependencies.createServer(catalogue, runtimeRegistry);
     await server.listen({ host: dependencies.host, port: dependencies.port });
     server.log.info(
       { port: dependencies.port },
       'Workspace Brain API listening',
     );
   } catch (error) {
-    const cleanupErrors = await closeResources(server, bus, catalogue);
+    const cleanupErrors = await closeResources(
+      server,
+      heartbeatPublisher,
+      runtimeRegistry,
+      bus,
+      catalogue,
+    );
     if (cleanupErrors.length > 0) {
       throw new AggregateError(
         [error, ...cleanupErrors],
@@ -325,6 +379,8 @@ export async function startWorkspaceBrainApi<
     close() {
       closing ??= (async () => {
         await runningServer.close();
+        await heartbeatPublisher?.stop();
+        runtimeRegistry?.stop();
         await runningBus.close();
         await catalogue.close();
       })();
@@ -413,12 +469,18 @@ function logReconciliationFailure(
 
 async function closeResources(
   server: StartupServer | undefined,
+  heartbeatPublisher: HeartbeatPublisher | undefined,
+  runtimeRegistry: RuntimeRegistryService | undefined,
   bus: StartupBus | undefined,
   catalogue: CatalogueHealth,
 ): Promise<unknown[]> {
   const cleanupErrors: unknown[] = [];
   for (const close of [
     server === undefined ? undefined : () => server.close(),
+    heartbeatPublisher === undefined
+      ? undefined
+      : () => heartbeatPublisher.stop(),
+    runtimeRegistry === undefined ? undefined : () => runtimeRegistry.stop(),
     bus === undefined ? undefined : () => bus.close(),
     () => catalogue.close(),
   ]) {

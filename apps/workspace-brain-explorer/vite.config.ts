@@ -26,11 +26,17 @@ export default defineConfig(({ command, mode }) => {
       port: 5173,
       proxy: {
         '/api': { target: apiTarget, changeOrigin: true },
+        '/health': { target: apiTarget, changeOrigin: true },
+        '/ready': { target: apiTarget, changeOrigin: true },
+        '/runtime': { target: apiTarget, changeOrigin: true },
       },
     },
     preview: {
       proxy: {
         '/api': { target: apiTarget, changeOrigin: true },
+        '/health': { target: apiTarget, changeOrigin: true },
+        '/ready': { target: apiTarget, changeOrigin: true },
+        '/runtime': { target: apiTarget, changeOrigin: true },
       },
     },
   };

@@ -17,6 +17,9 @@ implementation reports are historical records, not startup instructions.
 - [Architecture Definition Document v1](architecture/Workspace-Brain-ADD-v1.md)
   — product boundaries, domain model, service responsibilities, runtime
   topology, and roadmap.
+- [Runtime observability](architecture/runtime-observability.md) — NATS
+  heartbeat contract, in-memory status semantics, configuration and local
+  diagnosis.
 - [Workspace Brain Architecture FAQ](architecture/architecture-faq.md)
   — architecture review questions and answers, including current capability
   boundaries and future AI governance.
