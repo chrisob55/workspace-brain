@@ -1,7 +1,10 @@
 import { mkdir, readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 
-import { parseWorkspaceBrainConfig } from '@workspace-brain/configuration';
+import {
+  parseRuntimeObservabilityConfig,
+  parseWorkspaceBrainConfig,
+} from '@workspace-brain/configuration';
 import { createDuckDbCatalogue } from '@workspace-brain/duckdb';
 import { connectNatsDiscoveryBus } from '@workspace-brain/nats';
 import pino from 'pino';
@@ -20,6 +23,7 @@ const migrationsDirectory =
 const port = Number(process.env.PORT ?? 3000);
 const host = process.env.HOST ?? '0.0.0.0';
 const natsServers = process.env.NATS_SERVERS ?? 'nats://nats:4222';
+const runtimeObservability = parseRuntimeObservabilityConfig();
 
 if (!Number.isInteger(port) || port < 1 || port > 65535) {
   throw new Error('PORT must be an integer between 1 and 65535');
@@ -39,7 +43,9 @@ const api = await startWorkspaceBrainApi({
     return parseWorkspaceBrainConfig(await readFile(configurationPath, 'utf8'));
   },
   connectBus: () => connectNatsDiscoveryBus(natsServers, logger),
-  createServer: (catalogue) => createApiServer(catalogue),
+  createServer: (catalogue, runtimeRegistry) =>
+    createApiServer(catalogue, { runtimeRegistry }),
+  runtimeObservability,
   logger,
   host,
   port,

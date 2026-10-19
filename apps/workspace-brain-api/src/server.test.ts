@@ -11,7 +11,9 @@ import {
   createRepositoryId,
   createSourceId,
   createWorkspaceId,
+  type RuntimeHeartbeat,
 } from '@workspace-brain/domain';
+import { createHeartbeatPublisher } from '@workspace-brain/nats';
 import type {
   PublicationSnapshot,
   SearchEntityRequest,
@@ -26,10 +28,13 @@ import {
   serializeKnowledgePublicationPackage,
 } from '@workspace-brain/domain-publication';
 import { CatalogueIntegrityError } from '@workspace-brain/catalogue';
-import { describe, expect, it } from 'vitest';
+import pino from 'pino';
+import { describe, expect, it, vi } from 'vitest';
 
 import { snapshot as publicationPackageSnapshot } from '../../../packages/domain-publication/src/test-fixtures.js';
+import { refreshRuntimeStatus } from '../../workspace-brain-explorer/src/lib/runtime-status.js';
 import { createApiServer } from './server.js';
+import { RuntimeRegistryService } from './runtime-registry.js';
 
 const source = {
   id: createSourceId(),
@@ -659,6 +664,183 @@ describe('Workspace Brain API routes', () => {
     expect(ready.statusCode).toBe(200);
     expect(ready.json()).toEqual({ status: 'ready' });
     await server.close();
+  });
+
+  it('returns a bounded expected-only runtime registry snapshot', async () => {
+    const server = createApiServer(createCatalogue(), { logger: false });
+    const response = await server.inject('/runtime/status');
+    const body = response.json();
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-type']).toContain('application/json');
+    expect(body).toMatchObject({
+      generatedAt: expect.any(String),
+      thresholds: {
+        degradedAfterSeconds: 30,
+        offlineAfterSeconds: 90,
+      },
+    });
+    expect(body.components).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          componentId: 'workspace-brain-api',
+          status: 'unknown',
+          source: 'heartbeat',
+        }),
+        expect.objectContaining({
+          componentId: 'nats',
+          status: 'unknown',
+          source: 'nats-connection',
+        }),
+      ]),
+    );
+    await server.close();
+  });
+
+  it('serves multiple runtime instances while NATS is disconnected', async () => {
+    const now = Date.parse('2026-10-19T09:00:00.000Z');
+    const registry = new RuntimeRegistryService({
+      expectedComponents: [
+        {
+          componentId: 'nats',
+          componentName: 'NATS',
+          componentType: 'infrastructure',
+          source: 'nats-connection',
+        },
+      ],
+      now: () => now,
+      logger: { error() {}, info() {} },
+    });
+    const bus = {
+      async subscribeRuntimeHeartbeats() {
+        return () => undefined;
+      },
+      connectionState: () => 'disconnected' as const,
+      onConnectionState(handler: (state: 'disconnected') => void) {
+        handler('disconnected');
+        return () => undefined;
+      },
+    };
+    await registry.start(bus);
+    const heartbeat = (instanceId: string): RuntimeHeartbeat => ({
+      schemaVersion: 1,
+      componentId: 'parser-worker',
+      componentName: 'Parser Worker',
+      componentType: 'worker',
+      instanceId,
+      version: '1.0.0',
+      startedAt: '2026-10-19T08:00:00.000Z',
+      uptimeSeconds: 3600,
+      timestamp: '2026-10-19T09:00:00.000Z',
+    });
+    registry.acceptHeartbeat(heartbeat('parser-1'));
+    registry.acceptHeartbeat(heartbeat('parser-2'));
+    const server = createApiServer(createCatalogue(), {
+      logger: false,
+      runtimeRegistry: registry,
+    });
+    const response = await server.inject('/runtime/status');
+    const body = response.json();
+
+    expect(response.statusCode).toBe(200);
+    expect(
+      body.components.filter(
+        (component: { componentId: string }) =>
+          component.componentId === 'parser-worker',
+      ),
+    ).toHaveLength(2);
+    expect(body.components).toContainEqual(
+      expect.objectContaining({
+        componentId: 'nats',
+        status: 'offline',
+        source: 'nats-connection',
+      }),
+    );
+    registry.stop();
+    await server.close();
+  });
+
+  it('carries a published heartbeat through the registry, REST route, and Explorer refresh', async () => {
+    const now = Date.parse('2026-10-19T09:00:00.000Z');
+    const logger = pino({ level: 'silent' });
+    let heartbeatHandler: ((event: unknown) => Promise<void>) | undefined;
+    const bus = {
+      async publishRuntimeHeartbeat(event: RuntimeHeartbeat) {
+        await heartbeatHandler?.(event);
+      },
+      async subscribeRuntimeHeartbeats(
+        handler: (event: unknown) => Promise<void>,
+      ) {
+        heartbeatHandler = handler;
+        return () => {
+          heartbeatHandler = undefined;
+        };
+      },
+      connectionState: () => 'connected' as const,
+      onConnectionState(
+        handler: (state: 'connected' | 'reconnecting' | 'disconnected') => void,
+      ) {
+        handler('connected');
+        return () => undefined;
+      },
+    };
+    const registry = new RuntimeRegistryService({
+      expectedComponents: [],
+      logger,
+      now: () => now,
+    });
+    await registry.start(bus);
+    const publisher = createHeartbeatPublisher({
+      nats: bus,
+      componentId: 'integration-worker',
+      componentName: 'Integration Worker',
+      componentType: 'worker',
+      instanceId: 'integration-1',
+      version: 'test',
+      logger,
+      now: () => now,
+    });
+    const server = createApiServer(createCatalogue(), {
+      logger: false,
+      runtimeRegistry: registry,
+    });
+    const mockFetch = vi.fn(async (input: RequestInfo | URL) => {
+      const response = await server.inject(String(input));
+      return new Response(response.body, {
+        status: response.statusCode,
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    try {
+      await publisher.start();
+      const result = await refreshRuntimeStatus(
+        new AbortController().signal,
+        undefined,
+        () => new Date(now),
+      );
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        '/runtime/status',
+        expect.objectContaining({ headers: { accept: 'application/json' } }),
+      );
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.snapshot.components).toContainEqual(
+          expect.objectContaining({
+            componentId: 'integration-worker',
+            instanceId: 'integration-1',
+            status: 'healthy',
+          }),
+        );
+      }
+    } finally {
+      await publisher.stop();
+      registry.stop();
+      await server.close();
+      vi.unstubAllGlobals();
+    }
   });
 
   it('replaces malformed correlation IDs before logging or returning them', async () => {

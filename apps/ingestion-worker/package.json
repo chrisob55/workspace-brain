@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@workspace-brain/catalogue": "workspace:*",
+    "@workspace-brain/configuration": "workspace:*",
     "@workspace-brain/domain": "workspace:*",
     "@workspace-brain/filesystem": "workspace:*",
     "@workspace-brain/nats": "workspace:*",

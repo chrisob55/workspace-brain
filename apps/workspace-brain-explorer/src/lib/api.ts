@@ -6,8 +6,9 @@ import type {
   PublicationCurrency,
   PublicationPackage,
 } from './types';
+import type { RuntimeStatusResponse } from '@workspace-brain/domain';
 
-const API_BASE =
+export const API_BASE =
   (import.meta.env.VITE_WORKSPACE_BRAIN_API_BASE as string | undefined) ?? '';
 const SNAPSHOT_URL = `${import.meta.env.BASE_URL}snapshot/publication.json`;
 
@@ -40,8 +41,16 @@ async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
 }
 
 export const api = {
-  listModels: (signal?: AbortSignal) =>
-    getJson<Page<KnowledgeModel>>('/api/v1/knowledge/models?limit=100', signal),
+  runtimeStatus: (signal?: AbortSignal) =>
+    getJson<RuntimeStatusResponse>('/runtime/status', signal),
+
+  listModels: (signal?: AbortSignal, cursor?: string | null) =>
+    getJson<Page<KnowledgeModel>>(
+      `/api/v1/knowledge/models?limit=100${
+        cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''
+      }`,
+      signal,
+    ),
 
   latestPublication: (modelId: string, signal?: AbortSignal) =>
     getJson<KnowledgePublication>(
@@ -85,6 +94,11 @@ export const api = {
       total += result.items.length;
       cursor = result.nextCursor;
       if (!cursor) break;
+    }
+    if (cursor) {
+      throw new ApiError(
+        `Could not count all ${collection}; pagination exceeded 200 pages`,
+      );
     }
     return total;
   },

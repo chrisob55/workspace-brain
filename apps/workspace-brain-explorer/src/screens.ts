@@ -13,6 +13,7 @@ import {
   Rocket,
   ScanSearch,
   Sparkles,
+  Activity,
   Workflow,
   type LucideIcon,
 } from 'lucide-react';
@@ -33,6 +34,7 @@ import { HowItWorksScreen } from './screens/how-it-works-screen';
 import { OpenApiScreen } from './screens/openapi-screen';
 import { OverviewScreen } from './screens/overview-screen';
 import { ParserEcosystemScreen } from './screens/parser-ecosystem-screen';
+import { SystemArchitectureRuntimeScreen } from './screens/system-architecture-runtime-screen';
 
 export interface ScreenDefinition {
   id: string;
@@ -65,6 +67,13 @@ export const SCREENS: ScreenDefinition[] = [
     question: 'How does the system fit together?',
     icon: Cpu,
     component: ArchitectureMapScreen,
+  },
+  {
+    id: 'system-architecture-runtime',
+    title: 'System Architecture & Runtime',
+    question: 'What is running, where, and what happens next?',
+    icon: Activity,
+    component: SystemArchitectureRuntimeScreen,
   },
   {
     id: 'concepts',

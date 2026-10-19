@@ -20,6 +20,11 @@ MCP container to restart in this setup.
 
 **Build is not deploy. Deploy is not reprocess. Reprocess is not UI refresh.**
 
+The runtime page uses NATS-backed component heartbeats. See the
+[runtime observability guide](architecture/runtime-observability.md) for status
+thresholds, configuration, and commands to demonstrate healthy, degraded,
+offline, recovery, and NATS-disconnected states.
+
 - `pnpm build` updates local build output; it does **not** update containers.
 - `make start-*` starts existing images; it does **not** deploy code changes.
 - `make rebuild-*` builds images and recreates the selected services. Backend

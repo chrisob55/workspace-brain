@@ -18,44 +18,59 @@ UI edits normally hot reload. Stop/restart the dev server after changing its
 configuration; for production preview, stop the old server and run
 `make rebuild-explorer` (http://localhost:4173).
 
-The dev and preview servers proxy `/api` to the Workspace Brain API
-(`WORKSPACE_BRAIN_API_URL`, default `http://localhost:3000`). The explorer loads
+The dev and preview servers proxy `/api`, `/health`, `/ready` and `/runtime` to the
+Workspace Brain API (`WORKSPACE_BRAIN_API_URL`, default
+`http://localhost:3000`). Without `VITE_WORKSPACE_BRAIN_API_BASE`, browser
+requests are same-origin and use these proxies. An explicit
+`VITE_WORKSPACE_BRAIN_API_BASE` is baked into the client at build time and
+bypasses the proxy; cross-origin deployments must then provide CORS.
+The runtime screen reads `/runtime/status`; it does not inspect Docker.
+For temporary refresh diagnostics, open
+`http://localhost:4173/?runtimeDebug=1#/system-architecture-runtime` and inspect
+the browser console and Network panel. Remove the query parameter to disable
+logging. Restart Vite after proxy configuration changes.
+The explorer loads
 the latest publication of the most recently published Knowledge Model and its
 export package. If the API is unreachable it falls back to the bundled
 `public/snapshot/publication.json` (publication v377) and says so in the header.
 
 ## Screens
 
-1. Overview — the pipeline from repositories to exploration, with live counts.
-2. How Workspace Brain Works — interactive onboarding for developers,
-   architects and stakeholders: platform overview, pipeline stepper, parser
-   packs, publication anatomy, query journeys, code explorer, glossary, AI-OS
-   integration and a developer onboarding path. See below.
-3. Glossary & Concepts — the nine core ideas, illustrated with real data.
-4. Knowledge Graph — search and expand entities with React Flow.
-5. Explain Why — trace a fact to its file, lines, extractor and publication.
-6. OpenAPI Visualiser — operations exposed by each API contract.
-7. Architecture Decisions — search ADRs by number, descriptive title or source
-   path across repositories, with an explicitly labelled repository filter.
-   Each record shows the first authored sentence under its `Decision` heading
-   when the publication includes it; older publications identify missing
-   summaries rather than inventing them. Selecting a record shows its summary,
-   references and source evidence beside the list on desktop, or scrolls the
-   details into view on smaller screens. Titles use recorded source headings or
-   readable ADR filenames where available; missing titles are identified rather
-   than invented. An optional graph shows documents linking to the selected
-   ADR, not inferred dependencies between decisions.
-8. Parser Ecosystem — current and planned parser packs feeding one model.
-9. Behavioural Flow Vision — proposed ADR-027 direction; flow modelling is not
-   implemented and is distinguished from current structural knowledge.
-10. Before vs After Slice 9 — dependency analysis to architectural knowledge.
-11. Enterprise Scaling — organisation-specific estates, one common model.
-12. Future Direction — AI consumes published knowledge; it does not create facts.
-13. Architecture FAQ — searchable architecture-review questions and answers,
-    sourced from `docs/architecture/architecture-faq.md`. A compact executive
-    summary keeps the full source summary expandable. Filter questions by topic
-    or search both questions and answers; select a question to read its answer
-    beside the list on desktop or bring it into view on mobile.
+- Overview — the pipeline from repositories to exploration, with live counts.
+- How Workspace Brain Works — interactive onboarding for developers,
+  architects and stakeholders: platform overview, pipeline stepper, parser
+  packs, publication anatomy, query journeys, code explorer, glossary, AI-OS
+  integration and a developer onboarding path. See below.
+- Glossary & Concepts — the nine core ideas, illustrated with real data.
+- System Architecture & Runtime — implementation-backed service topology,
+  repository-to-publication flow, NATS subjects, build/reprocess guidance and
+  live heartbeat-backed component states and API-to-NATS connectivity.
+  Failed refreshes label a previously loaded snapshot stale; first-load
+  failures report the registry endpoint unavailable, not components offline.
+- Knowledge Graph — search and expand entities with React Flow.
+- Explain Why — trace a fact to its file, lines, extractor and publication.
+- OpenAPI Visualiser — operations exposed by each API contract.
+- Architecture Decisions — search ADRs by number, descriptive title or source
+  path across repositories, with an explicitly labelled repository filter.
+  Each record shows the first authored sentence under its `Decision` heading
+  when the publication includes it; older publications identify missing
+  summaries rather than inventing them. Selecting a record shows its summary,
+  references and source evidence beside the list on desktop, or scrolls the
+  details into view on smaller screens. Titles use recorded source headings or
+  readable ADR filenames where available; missing titles are identified rather
+  than invented. An optional graph shows documents linking to the selected
+  ADR, not inferred dependencies between decisions.
+- Parser Ecosystem — current and planned parser packs feeding one model.
+- Behavioural Flow Vision — proposed ADR-027 direction; flow modelling is not
+  implemented and is distinguished from current structural knowledge.
+- Before vs After Slice 9 — dependency analysis to architectural knowledge.
+- Enterprise Scaling — organisation-specific estates, one common model.
+- Future Direction — AI consumes published knowledge; it does not create facts.
+- Architecture FAQ — searchable architecture-review questions and answers,
+  sourced from `docs/architecture/architecture-faq.md`. A compact executive
+  summary keeps the full source summary expandable. Filter questions by topic
+  or search both questions and answers; select a question to read its answer
+  beside the list on desktop or bring it into view on mobile.
 
 Press **P** to present (fullscreen, sidebar hidden); use **←/→** to move
 between screens and **Esc** to exit.

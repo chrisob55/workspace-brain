@@ -117,52 +117,75 @@ export function App() {
 
   const navigation = useMemo(() => ({ goTo, presenting }), [goTo, presenting]);
   const Screen = screen.component;
+  const screenContent = (
+    <div
+      key={screen.id}
+      className={cn(
+        'animate-fade-up',
+        screen.fullBleed
+          ? 'h-full'
+          : 'mx-auto w-full max-w-7xl px-5 py-8 md:px-8',
+        presenting && !screen.fullBleed && 'max-w-[1500px] md:py-12',
+      )}
+    >
+      <Screen />
+    </div>
+  );
 
   const sidebar = (
-    <nav className="flex h-full flex-col gap-1 p-3" aria-label="Screens">
-      <div className="mb-4 flex items-center gap-2.5 px-2 pt-1">
+    <nav
+      className="flex h-full min-h-0 flex-col overflow-hidden p-3"
+      aria-label="Screens"
+    >
+      <div className="mb-4 flex shrink-0 items-center gap-2.5 px-2 pt-1">
         <BrainMark className="size-8" />
         <div className="leading-tight">
           <div className="text-sm font-semibold">Workspace Brain</div>
           <div className="text-xs text-muted-foreground">Explorer</div>
         </div>
       </div>
-      {SCREENS.map((item, i) => {
-        const Icon = item.icon;
-        const active = item.id === screen.id;
-        return (
-          <button
-            key={item.id}
-            type="button"
-            onClick={() => goTo(item.id)}
-            aria-current={active ? 'page' : undefined}
-            className={cn(
-              'group flex items-center gap-3 rounded-lg px-2.5 py-2 text-left text-sm transition-colors',
-              active
-                ? 'bg-primary/12 font-medium text-foreground'
-                : 'text-muted-foreground hover:bg-accent hover:text-foreground',
-            )}
-          >
-            <span
+      <div
+        className="min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain"
+        tabIndex={0}
+        aria-label="Screen list"
+      >
+        {SCREENS.map((item, i) => {
+          const Icon = item.icon;
+          const active = item.id === screen.id;
+          return (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => goTo(item.id)}
+              aria-current={active ? 'page' : undefined}
               className={cn(
-                'flex size-7 shrink-0 items-center justify-center rounded-md border text-[11px] tabular-nums',
+                'group flex w-full shrink-0 items-center gap-3 rounded-lg px-2.5 py-2 text-left text-sm transition-colors',
                 active
-                  ? 'border-primary/50 bg-primary text-primary-foreground'
-                  : 'bg-card',
+                  ? 'bg-primary/12 font-medium text-foreground'
+                  : 'text-muted-foreground hover:bg-accent hover:text-foreground',
               )}
             >
-              {active ? <Icon className="size-3.5" /> : i + 1}
-            </span>
-            <span className="min-w-0">
-              <span className="block truncate">{item.title}</span>
-              <span className="block truncate text-[11px] text-muted-foreground">
-                {item.question}
+              <span
+                className={cn(
+                  'flex size-7 shrink-0 items-center justify-center rounded-md border text-[11px] tabular-nums',
+                  active
+                    ? 'border-primary/50 bg-primary text-primary-foreground'
+                    : 'bg-card',
+                )}
+              >
+                {active ? <Icon className="size-3.5" /> : i + 1}
               </span>
-            </span>
-          </button>
-        );
-      })}
-      <div className="mt-auto space-y-2 px-2 pb-1 pt-4 text-[11px] leading-relaxed text-muted-foreground">
+              <span className="min-w-0">
+                <span className="block truncate">{item.title}</span>
+                <span className="block truncate text-[11px] text-muted-foreground">
+                  {item.question}
+                </span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      <div className="shrink-0 space-y-2 px-2 pb-1 pt-4 text-[11px] leading-relaxed text-muted-foreground">
         <p>
           Press <kbd className="rounded border bg-card px-1 font-mono">P</kbd>{' '}
           to present. Use{' '}
@@ -283,21 +306,10 @@ export function App() {
           >
             {knowledge.data ? (
               <KnowledgeContext.Provider value={knowledge.data}>
-                <div
-                  key={screen.id}
-                  className={cn(
-                    'animate-fade-up',
-                    screen.fullBleed
-                      ? 'h-full'
-                      : 'mx-auto w-full max-w-7xl px-5 py-8 md:px-8',
-                    presenting &&
-                      !screen.fullBleed &&
-                      'max-w-[1500px] md:py-12',
-                  )}
-                >
-                  <Screen />
-                </div>
+                {screenContent}
               </KnowledgeContext.Provider>
+            ) : screen.id === 'system-architecture-runtime' ? (
+              screenContent
             ) : (
               <LoadingState error={knowledge.error?.message} />
             )}

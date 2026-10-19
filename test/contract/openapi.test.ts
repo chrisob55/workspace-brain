@@ -84,7 +84,7 @@ describe('OpenAPI contract', () => {
       document.components.schemas.KnowledgeProvenance?.properties,
     ).toHaveProperty('facts');
   });
-  it('declares the Slice 0 health and read-only catalogue routes', async () => {
+  it('declares health, runtime status, and read-only catalogue routes', async () => {
     const document = JSON.parse(
       await readFile(openApiPath, 'utf8'),
     ) as OpenApiDocument;
@@ -92,6 +92,12 @@ describe('OpenAPI contract', () => {
     expect(document.openapi).toBe('3.1.0');
     expect(document.paths['/health']?.get?.operationId).toBe('getHealth');
     expect(document.paths['/ready']?.get?.operationId).toBe('getReadiness');
+    expect(document.paths['/runtime/status']?.get?.operationId).toBe(
+      'getRuntimeStatus',
+    );
+    expect(
+      document.components.schemas.RuntimeComponentStatus?.properties?.status,
+    ).toEqual({ enum: ['healthy', 'degraded', 'offline', 'unknown'] });
     expect(document.paths['/api/v1/sources']?.get?.operationId).toBe(
       'listSources',
     );

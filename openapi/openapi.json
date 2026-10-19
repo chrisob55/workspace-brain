@@ -66,6 +66,24 @@
         }
       }
     },
+    "/runtime/status": {
+      "get": {
+        "operationId": "getRuntimeStatus",
+        "tags": ["Operational / Current State"],
+        "responses": {
+          "200": {
+            "description": "Current in-memory runtime snapshot; returned without waiting for new heartbeats",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeStatusResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/sources": {
       "get": {
         "operationId": "listSources",
@@ -2239,6 +2257,148 @@
         "properties": {
           "status": {
             "enum": ["ready", "not_ready"]
+          }
+        }
+      },
+      "RuntimeHeartbeat": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schemaVersion",
+          "componentId",
+          "componentName",
+          "componentType",
+          "instanceId",
+          "version",
+          "startedAt",
+          "uptimeSeconds",
+          "timestamp"
+        ],
+        "properties": {
+          "schemaVersion": {
+            "const": 1
+          },
+          "componentId": {
+            "type": "string"
+          },
+          "componentName": {
+            "type": "string"
+          },
+          "componentType": {
+            "type": "string"
+          },
+          "instanceId": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "startedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "uptimeSeconds": {
+            "type": "number",
+            "minimum": 0
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Optional component-owned public JSON metadata, bounded to 4 KiB."
+          }
+        }
+      },
+      "RuntimeComponentStatus": {
+        "type": "object",
+        "required": [
+          "componentId",
+          "componentName",
+          "componentType",
+          "instanceId",
+          "status",
+          "source"
+        ],
+        "properties": {
+          "componentId": {
+            "type": "string"
+          },
+          "componentName": {
+            "type": "string"
+          },
+          "componentType": {
+            "type": "string"
+          },
+          "instanceId": {
+            "type": "string"
+          },
+          "status": {
+            "enum": ["healthy", "degraded", "offline", "unknown"]
+          },
+          "source": {
+            "enum": ["heartbeat", "nats-connection"]
+          },
+          "version": {
+            "type": "string"
+          },
+          "startedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "uptimeSeconds": {
+            "type": "number",
+            "minimum": 0
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "lastHeartbeat": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "ageSeconds": {
+            "type": "number",
+            "minimum": 0
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "RuntimeStatusResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["generatedAt", "thresholds", "components"],
+        "properties": {
+          "generatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "thresholds": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["degradedAfterSeconds", "offlineAfterSeconds"],
+            "properties": {
+              "degradedAfterSeconds": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "offlineAfterSeconds": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              }
+            }
+          },
+          "components": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RuntimeComponentStatus"
+            }
           }
         }
       },
