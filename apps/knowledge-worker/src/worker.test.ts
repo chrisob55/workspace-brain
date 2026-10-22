@@ -25,6 +25,7 @@ describe('knowledge worker', () => {
     const published: DiscoveryEvent[] = [];
     const requests: number[] = [];
     const bus: NatsDiscoveryBus = {
+      maxPayloadBytes: 1_048_576,
       async publish(event) {
         published.push(event);
       },
@@ -144,6 +145,7 @@ describe('knowledge worker', () => {
     const handlers = new Map<string, DiscoveryEventHandler>();
     const contents = Buffer.from('changed');
     const bus: NatsDiscoveryBus = {
+      maxPayloadBytes: 1_048_576,
       async publish() {
         throw new Error('Changed documents must not be submitted');
       },
@@ -243,6 +245,7 @@ describe('knowledge worker', () => {
       ];
       let requestedVersionId = '';
       const bus: NatsDiscoveryBus = {
+        maxPayloadBytes: 1_048_576,
         async publish(event) {
           published.push(event);
         },

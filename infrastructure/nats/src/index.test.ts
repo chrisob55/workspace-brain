@@ -1,8 +1,16 @@
 import pino from 'pino';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { runtimeHeartbeatSubject } from '@workspace-brain/domain';
-import { connectNatsDiscoveryBus } from './index.js';
+import {
+  createSourceId,
+  runtimeHeartbeatSubject,
+  type DiscoveryEvent,
+} from '@workspace-brain/domain';
+import {
+  connectNatsDiscoveryBus,
+  NonRetryableEventError,
+  NatsPayloadTooLargeError,
+} from './index.js';
 
 const { connect } = vi.hoisted(() => ({ connect: vi.fn() }));
 vi.mock('nats', async (importOriginal) => ({
@@ -15,7 +23,7 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-function createHarness(deliveryCount = 1) {
+function createHarness(deliveryCount = 1, maxPayloadBytes = 1_048_576) {
   const message = {
     data: new TextEncoder().encode('{}'),
     subject: 'workspace.processing.document.extracted',
@@ -45,6 +53,7 @@ function createHarness(deliveryCount = 1) {
       data: new TextEncoder().encode('{"ok":true}'),
     });
   const connection = {
+    info: { max_payload: maxPayloadBytes },
     jetstream: () => ({
       publish,
       consumers: { get: vi.fn(async () => ({ consume })) },
@@ -128,6 +137,36 @@ describe('NATS processing budgets', () => {
       { timeout: 5_000 },
       { timeout: 60_000 },
     ]);
+    await bus.close();
+  });
+
+  it('exposes the negotiated payload limit and rejects oversized serialized events before publish', async () => {
+    const harness = createHarness(1, 128);
+    const bus = await connectNatsDiscoveryBus(
+      'nats://test',
+      pino({ level: 'silent' }),
+    );
+    const event: DiscoveryEvent = {
+      eventId: 'event-id',
+      eventType: 'SourceScanRequested',
+      eventVersion: 1,
+      occurredAt: '2026-10-19T09:00:00.000Z',
+      producer: 'workspace-brain-ingestion-worker',
+      correlationId: 'correlation-id',
+      idempotencyKey: 'idempotency-key',
+      partitionKey: createSourceId(),
+      payload: { sourceId: createSourceId() },
+    };
+
+    expect(bus.maxPayloadBytes).toBe(128);
+    const rejectedPublish = bus.publish(event);
+    await expect(rejectedPublish).rejects.toBeInstanceOf(
+      NatsPayloadTooLargeError,
+    );
+    await expect(rejectedPublish).rejects.toBeInstanceOf(
+      NonRetryableEventError,
+    );
+    expect(harness.publish).not.toHaveBeenCalled();
     await bus.close();
   });
 

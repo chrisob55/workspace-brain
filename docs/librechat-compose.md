@@ -48,6 +48,11 @@ default). Never commit keys. Changing an environment-file key requires
 | `pnpm test:mcp:compose`    | Smoke checks using the LibreChat image/network/config; also checks the live container when running      | Docker                                                    |
 | `pnpm librechat:verify`    | Running containers, HTTP health, MCP initialisation and LibreChat's own tool listing                    | Running stack                                             |
 
+`pnpm librechat:verify` is not read-only: it registers a randomly named test
+account in MongoDB and does not remove it. Do not run it against a persistent
+account database unless retaining that test account is acceptable. It does not
+invoke a model provider.
+
 The smoke client in
 [apps/workspace-brain-mcp/src/smoke/](../apps/workspace-brain-mcp/src/smoke/)
 reports failures by stage: bundle, process start, initialisation, tool

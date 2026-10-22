@@ -1,6 +1,11 @@
 import { ulid } from 'ulid';
 
 export * from './runtime.js';
+export {
+  canonicalJson,
+  completeInventoryChecksum,
+  inventoryChunkChecksum,
+} from './inventory-integrity.js';
 
 export const processingDefinitionRegistry = [
   {
@@ -730,6 +735,9 @@ export type DiscoveryEventName =
   | 'SourceScanRequested'
   | 'SourceScanStarted'
   | 'SourceInventorySubmitted'
+  | 'SourceInventoryStarted'
+  | 'SourceInventoryChunk'
+  | 'SourceInventoryCompleted'
   | 'SourceScanFailed'
   | 'SourceScanCompleted'
   | 'RepositoryDiscovered'
@@ -751,6 +759,12 @@ export type DiscoveryEventName =
 
 export function discoveryEventSubject(eventType: DiscoveryEventName): string {
   switch (eventType) {
+    case 'SourceInventoryStarted':
+      return 'workspace.discovery.source.inventory.started.v1';
+    case 'SourceInventoryChunk':
+      return 'workspace.discovery.source.inventory.chunk.v1';
+    case 'SourceInventoryCompleted':
+      return 'workspace.discovery.source.inventory.completed.v1';
     case 'SearchProjectionRequested':
       return 'workspace.search.projection.requested';
     case 'SearchProjectionBuilt':
@@ -925,6 +939,38 @@ export type DiscoveryEventPayloads = {
   };
   SourceInventorySubmitted: {
     readonly scan: ScanResult;
+    readonly durationMilliseconds: number;
+  };
+  SourceInventoryStarted: {
+    readonly schemaVersion: 1;
+    readonly scanId: string;
+    readonly sourceId: SourceId;
+    readonly startedAt: string;
+    readonly discoveredAt: string;
+    readonly expectedRepositoryCount: number;
+    readonly expectedDocumentCount: number;
+  };
+  SourceInventoryChunk: {
+    readonly schemaVersion: 1;
+    readonly scanId: string;
+    readonly sourceId: SourceId;
+    readonly chunkIndex: number;
+    readonly repositoryCount: number;
+    readonly documentCount: number;
+    readonly repositories: readonly RepositoryCandidate[];
+    readonly documents: readonly DocumentCandidate[];
+    readonly checksum: string;
+    readonly createdAt: string;
+  };
+  SourceInventoryCompleted: {
+    readonly schemaVersion: 1;
+    readonly scanId: string;
+    readonly sourceId: SourceId;
+    readonly expectedChunkCount: number;
+    readonly repositoryCount: number;
+    readonly documentCount: number;
+    readonly inventoryChecksum: string;
+    readonly completedAt: string;
     readonly durationMilliseconds: number;
   };
   SourceScanFailed: {

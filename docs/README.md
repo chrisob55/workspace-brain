@@ -20,6 +20,9 @@ implementation reports are historical records, not startup instructions.
 - [Runtime observability](architecture/runtime-observability.md) — NATS
   heartbeat contract, in-memory status semantics, configuration and local
   diagnosis.
+- [Source inventory transfer](architecture/source-inventory-transfer.md) —
+  byte-bounded JetStream events, durable assembly, reconciliation, retries,
+  expiry and local diagnostics.
 - [Workspace Brain Architecture FAQ](architecture/architecture-faq.md)
   — architecture review questions and answers, including current capability
   boundaries and future AI governance.

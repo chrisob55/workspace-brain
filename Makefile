@@ -9,7 +9,7 @@ TURBO_BUILD_ARGS ?=
 	start-knowledge-worker rebuild-backend rebuild-api rebuild-workers \
 	rebuild-ingestion-worker rebuild-knowledge-worker start-explorer \
 	build-explorer rebuild-explorer build-librechat rebuild-librechat \
-	start-librechat stop-librechat status logs stop-backend reprocess-architecture
+	start-librechat stop-librechat status tui logs stop-backend reprocess-architecture
 
 help:
 	@printf '%s\n' \
@@ -42,6 +42,7 @@ help:
 		'  make status                  Show backend container status' \
 		'  make logs                    Follow API and worker logs (Ctrl-C to exit)' \
 		'  make stop-backend            Stop backend containers; retain all data volumes' \
+		'  make tui                     Live local service health and resource dashboard (q to quit)' \
 		'' \
 		'Backend rebuilds bypass Docker and Turbo caches; LibreChat rebuild bypasses Docker cache.' \
 		'Optional: make rebuild-backend TURBO_BUILD_ARGS=--concurrency=1'
@@ -85,6 +86,9 @@ stop-librechat:
 
 status:
 	$(COMPOSE) ps
+
+tui:
+	python3 scripts/workspace-brain-tui.py
 
 logs:
 	$(COMPOSE) logs -f workspace-brain-api ingestion-worker knowledge-worker

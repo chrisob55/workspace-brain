@@ -5,7 +5,9 @@ import type {
   CatalogueHealth,
 } from '@workspace-brain/catalogue';
 import {
+  parseDiscoveryInventoryConfig,
   parseRuntimeObservabilityConfig,
+  type DiscoveryInventoryConfig,
   type RuntimeObservabilityConfig,
   type WorkspaceBrainConfig,
 } from '@workspace-brain/configuration';
@@ -24,6 +26,7 @@ import { z } from 'zod';
 import {
   configForCatalogue,
   createDiscoveryService,
+  expireIncompleteInventoryAssemblies,
   publishPendingEvents,
 } from './discovery-service.js';
 import type { InternalEventPublisher } from './events.js';
@@ -34,6 +37,7 @@ export type StartupCatalogue = CatalogueDiscovery & CatalogueHealth;
 export type StartupBus = Pick<
   NatsDiscoveryBus,
   | 'publish'
+  | 'maxPayloadBytes'
   | 'subscribe'
   | 'subscribeRequests'
   | 'publishRuntimeHeartbeat'
@@ -64,6 +68,7 @@ export type StartupDependencies<Catalogue extends StartupCatalogue> = {
   ) => StartupServer;
   readonly logger: StartupLogger;
   readonly runtimeObservability?: RuntimeObservabilityConfig;
+  readonly discoveryInventory?: DiscoveryInventoryConfig;
   readonly host: string;
   readonly port: number;
 };
@@ -203,6 +208,18 @@ export const apiDurableSubscriptions = [
     'workspace-api-source-inventory-submitted',
   ],
   [
+    'workspace.discovery.source.inventory.started.v1',
+    'workspace-api-source-inventory-started-v1',
+  ],
+  [
+    'workspace.discovery.source.inventory.chunk.v1',
+    'workspace-api-source-inventory-chunk-v1',
+  ],
+  [
+    'workspace.discovery.source.inventory.completed.v1',
+    'workspace-api-source-inventory-completed-v1',
+  ],
+  [
     'workspace.discovery.source.scan.failed',
     'workspace-api-source-scan-failed',
   ],
@@ -240,6 +257,7 @@ export async function startWorkspaceBrainApi<
   let server: StartupServer | undefined;
   let runtimeRegistry: RuntimeRegistryService | undefined;
   let heartbeatPublisher: HeartbeatPublisher | undefined;
+  let inventoryAssemblyCleanupTimer: NodeJS.Timeout | undefined;
 
   try {
     const registration = configForCatalogue(
@@ -296,7 +314,31 @@ export async function startWorkspaceBrainApi<
       catalogue,
       bus,
       dependencies.logger,
+      bus.maxPayloadBytes,
     );
+    const inventoryConfig =
+      dependencies.discoveryInventory ?? parseDiscoveryInventoryConfig({});
+    await expireIncompleteInventoryAssemblies(
+      catalogue,
+      dependencies.logger,
+      inventoryConfig.assemblyTtlMs,
+    );
+    inventoryAssemblyCleanupTimer = setInterval(
+      () => {
+        void expireIncompleteInventoryAssemblies(
+          catalogue,
+          dependencies.logger,
+          inventoryConfig.assemblyTtlMs,
+        ).catch((error: unknown) => {
+          dependencies.logger.error(
+            { err: error },
+            'source inventory assembly cleanup failed',
+          );
+        });
+      },
+      Math.max(1_000, Math.min(inventoryConfig.assemblyTtlMs, 60_000)),
+    );
+    inventoryAssemblyCleanupTimer.unref();
     bus.subscribeRequests(
       'workspace.catalogue.discovery.sources',
       async (body) => {
@@ -354,6 +396,14 @@ export async function startWorkspaceBrainApi<
       'Workspace Brain API listening',
     );
   } catch (error) {
+    dependencies.logger.error(
+      { err: error },
+      'Workspace Brain API startup failed',
+    );
+    if (inventoryAssemblyCleanupTimer !== undefined) {
+      clearInterval(inventoryAssemblyCleanupTimer);
+      inventoryAssemblyCleanupTimer = undefined;
+    }
     const cleanupErrors = await closeResources(
       server,
       heartbeatPublisher,
@@ -381,6 +431,10 @@ export async function startWorkspaceBrainApi<
         await runningServer.close();
         await heartbeatPublisher?.stop();
         runtimeRegistry?.stop();
+        if (inventoryAssemblyCleanupTimer !== undefined) {
+          clearInterval(inventoryAssemblyCleanupTimer);
+          inventoryAssemblyCleanupTimer = undefined;
+        }
         await runningBus.close();
         await catalogue.close();
       })();

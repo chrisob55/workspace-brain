@@ -5,6 +5,41 @@ const positiveMilliseconds = z
   .regex(/^[1-9]\d*$/)
   .transform(Number)
   .pipe(z.number().safe().int().positive());
+const positiveSafeInteger = z
+  .string()
+  .regex(/^[1-9]\d*$/)
+  .transform(Number)
+  .pipe(z.number().safe().int().positive());
+
+const discoveryInventorySchema = z.object({
+  maxEventBytes: positiveSafeInteger.prefault('1000000'),
+  payloadSafetyRatio: z
+    .string()
+    .regex(/^(?:0(?:\.\d+)?|1(?:\.0+)?)$/)
+    .transform(Number)
+    .pipe(z.number().gt(0).lte(1))
+    .prefault('0.8'),
+  publishConcurrency: positiveSafeInteger.prefault('4'),
+  assemblyTtlMs: positiveMilliseconds.prefault('86400000'),
+});
+
+export interface DiscoveryInventoryConfig {
+  readonly maxEventBytes: number;
+  readonly payloadSafetyRatio: number;
+  readonly publishConcurrency: number;
+  readonly assemblyTtlMs: number;
+}
+
+export function parseDiscoveryInventoryConfig(
+  env: NodeJS.ProcessEnv = process.env,
+): DiscoveryInventoryConfig {
+  return discoveryInventorySchema.parse({
+    maxEventBytes: env.DISCOVERY_INVENTORY_MAX_EVENT_BYTES,
+    payloadSafetyRatio: env.DISCOVERY_INVENTORY_PAYLOAD_SAFETY_RATIO,
+    publishConcurrency: env.DISCOVERY_INVENTORY_PUBLISH_CONCURRENCY,
+    assemblyTtlMs: env.DISCOVERY_INVENTORY_ASSEMBLY_TTL_MS,
+  });
+}
 
 const runtimeObservabilitySchema = z
   .object({

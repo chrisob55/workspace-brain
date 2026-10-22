@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
+  parseDiscoveryInventoryConfig,
   parseRuntimeObservabilityConfig,
   parseWorkspaceBrainConfig,
 } from './index.js';
@@ -35,6 +36,41 @@ describe('parseWorkspaceBrainConfig', () => {
     expect(config.sources[0]?.defaults.include_extensions).toEqual(
       expect.arrayContaining(['.scala', '.routes', '.conf']),
     );
+  });
+
+  describe('parseDiscoveryInventoryConfig', () => {
+    it('uses safe defaults and accepts validated overrides', () => {
+      expect(parseDiscoveryInventoryConfig({})).toEqual({
+        maxEventBytes: 1_000_000,
+        payloadSafetyRatio: 0.8,
+        publishConcurrency: 4,
+        assemblyTtlMs: 86_400_000,
+      });
+      expect(
+        parseDiscoveryInventoryConfig({
+          DISCOVERY_INVENTORY_MAX_EVENT_BYTES: '900000',
+          DISCOVERY_INVENTORY_PAYLOAD_SAFETY_RATIO: '0.75',
+          DISCOVERY_INVENTORY_PUBLISH_CONCURRENCY: '2',
+          DISCOVERY_INVENTORY_ASSEMBLY_TTL_MS: '3600000',
+        }),
+      ).toEqual({
+        maxEventBytes: 900_000,
+        payloadSafetyRatio: 0.75,
+        publishConcurrency: 2,
+        assemblyTtlMs: 3_600_000,
+      });
+    });
+
+    it.each([
+      { DISCOVERY_INVENTORY_MAX_EVENT_BYTES: '0' },
+      { DISCOVERY_INVENTORY_MAX_EVENT_BYTES: '900000.5' },
+      { DISCOVERY_INVENTORY_PAYLOAD_SAFETY_RATIO: '0' },
+      { DISCOVERY_INVENTORY_PAYLOAD_SAFETY_RATIO: '1.1' },
+      { DISCOVERY_INVENTORY_PUBLISH_CONCURRENCY: '-1' },
+      { DISCOVERY_INVENTORY_ASSEMBLY_TTL_MS: '0' },
+    ])('rejects invalid inventory configuration %#', (env) => {
+      expect(() => parseDiscoveryInventoryConfig(env)).toThrow();
+    });
   });
 
   describe('parseRuntimeObservabilityConfig', () => {

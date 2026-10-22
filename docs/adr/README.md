@@ -28,6 +28,7 @@ Accepted Architecture v1 decisions. Supersede ADRs; do not silently rewrite them
 - [ADR-024: Local-First Trust Boundary](ADR-024-local-first-trust-boundary.md)
 - [ADR-026: Deterministic Architectural Extraction](ADR-026-deterministic-architectural-extraction.md)
 - [ADR-029: Runtime Heartbeat Registry](ADR-029-runtime-heartbeat-registry.md)
+- [ADR-030: Byte-Bounded Transactional Source Inventory Transfer](ADR-030-byte-bounded-transactional-source-inventory-transfer.md)
 
 ## Proposed decisions
 

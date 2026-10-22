@@ -2,6 +2,7 @@ import { mkdir, readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 
 import {
+  parseDiscoveryInventoryConfig,
   parseRuntimeObservabilityConfig,
   parseWorkspaceBrainConfig,
 } from '@workspace-brain/configuration';
@@ -24,6 +25,7 @@ const port = Number(process.env.PORT ?? 3000);
 const host = process.env.HOST ?? '0.0.0.0';
 const natsServers = process.env.NATS_SERVERS ?? 'nats://nats:4222';
 const runtimeObservability = parseRuntimeObservabilityConfig();
+const discoveryInventory = parseDiscoveryInventoryConfig();
 
 if (!Number.isInteger(port) || port < 1 || port > 65535) {
   throw new Error('PORT must be an integer between 1 and 65535');
@@ -46,6 +48,7 @@ const api = await startWorkspaceBrainApi({
   createServer: (catalogue, runtimeRegistry) =>
     createApiServer(catalogue, { runtimeRegistry }),
   runtimeObservability,
+  discoveryInventory,
   logger,
   host,
   port,

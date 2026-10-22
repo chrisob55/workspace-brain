@@ -114,6 +114,10 @@ function createHarness(options: HarnessOptions = {}) {
   const serverLogger = recordingLogger();
 
   const catalogue = {
+    async expireInventoryAssemblies() {
+      calls.push('expireInventoryAssemblies');
+      return [];
+    },
     async registerConfiguration() {
       calls.push('registerConfiguration');
       await options.registerConfiguration?.();
@@ -160,6 +164,7 @@ function createHarness(options: HarnessOptions = {}) {
     },
   } as unknown as StartupCatalogue;
   const bus: StartupBus = {
+    maxPayloadBytes: 1_048_576,
     async publish(event) {
       if (options.publish !== undefined) {
         await options.publish(event);
@@ -427,6 +432,7 @@ describe('API startup orchestration', () => {
       'registerConfiguration',
       'listSourcesForDiscovery',
       'connectBus',
+      'expireInventoryAssemblies',
       'rebuildSearchProjections',
       'listen',
     ]);
@@ -551,9 +557,9 @@ describe('API startup orchestration', () => {
     expect(catalogueFailure.busesConnected()).toBe(0);
     expect(catalogueFailure.serversCreated()).toBe(0);
 
+    const configurationError = new Error('invalid core configuration');
     const configurationFailure = createHarness({
-      loadConfiguration: () =>
-        Promise.reject(new Error('invalid core configuration')),
+      loadConfiguration: () => Promise.reject(configurationError),
     });
     await expect(
       startWorkspaceBrainApi(configurationFailure.dependencies),
@@ -562,6 +568,10 @@ describe('API startup orchestration', () => {
       server: 0,
       bus: 0,
       catalogue: 1,
+    });
+    expect(configurationFailure.logger.errors).toContainEqual({
+      details: { err: configurationError },
+      message: 'Workspace Brain API startup failed',
     });
     expect(configurationFailure.busesConnected()).toBe(0);
 

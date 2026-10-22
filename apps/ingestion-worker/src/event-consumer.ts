@@ -5,6 +5,8 @@ import type {
   CataloguePage,
   CataloguePageRequest,
 } from '@workspace-brain/catalogue';
+import type { DiscoveryInventoryConfig } from '@workspace-brain/configuration';
+import { parseDiscoveryInventoryConfig } from '@workspace-brain/configuration';
 import type {
   DiscoveryEvent,
   DiscoverySource,
@@ -20,6 +22,10 @@ import {
   readDocumentContentChunk,
   type SourceScanner,
 } from '@workspace-brain/filesystem';
+import {
+  InventoryPayloadBudgetExceededError,
+  createSourceInventoryTransfer,
+} from './source-inventory.js';
 
 const sourceListSubject = 'workspace.catalogue.discovery.sources';
 const documentContentRequestSchema = z
@@ -51,6 +57,9 @@ export class NatsEventConsumer implements EventConsumer {
     private readonly bus: NatsDiscoveryBus,
     private readonly logger: WorkerLogger,
     private readonly scanIntervalMilliseconds: number,
+    private readonly inventoryConfig: DiscoveryInventoryConfig = parseDiscoveryInventoryConfig(
+      {},
+    ),
   ) {
     if (
       !Number.isSafeInteger(scanIntervalMilliseconds) ||
@@ -225,26 +234,120 @@ export class NatsEventConsumer implements EventConsumer {
       );
       return;
     }
-    await this.bus.publish(
-      createWorkerEvent(
-        'SourceInventorySubmitted',
-        {
-          scan,
-          durationMilliseconds: performance.now() - startedAtMonotonic,
-        },
-        source.sourceId,
-        `source-inventory-submitted:${event.correlationId}`,
-        event.correlationId,
+    const payloadBudgetBytes = Math.min(
+      Math.floor(
+        this.bus.maxPayloadBytes * this.inventoryConfig.payloadSafetyRatio,
       ),
+      this.inventoryConfig.maxEventBytes,
     );
+    let transfer: ReturnType<typeof createSourceInventoryTransfer>;
+    try {
+      transfer = createSourceInventoryTransfer(
+        { ...scan, discoveredAt: event.occurredAt },
+        {
+          scanId: event.correlationId,
+          correlationId: event.correlationId,
+          startedAt: event.occurredAt,
+          completedAt: new Date().toISOString(),
+          durationMilliseconds: performance.now() - startedAtMonotonic,
+          payloadBudgetBytes,
+        },
+      );
+    } catch (error) {
+      if (!(error instanceof InventoryPayloadBudgetExceededError)) {
+        throw error;
+      }
+      const failureType = error.entryTooLarge
+        ? 'InventoryRecordExceedsPayloadBudget'
+        : 'InventoryEventExceedsPayloadBudget';
+      await this.bus.publish(
+        createWorkerEvent(
+          'SourceScanFailed',
+          {
+            sourceId: source.sourceId,
+            failedAt: new Date().toISOString(),
+            durationMilliseconds: performance.now() - startedAtMonotonic,
+            failureType,
+          },
+          source.sourceId,
+          `source-scan-failed:${event.correlationId}`,
+          event.correlationId,
+        ),
+      );
+      this.logger.error(
+        {
+          sourceId: source.sourceId,
+          scanId: event.correlationId,
+          payloadBytes: error.payloadBytes,
+          payloadBudgetBytes: error.payloadBudgetBytes,
+          failureType,
+        },
+        'source inventory exceeds the configured payload budget',
+      );
+      return;
+    }
+
     this.logger.info(
       {
+        scanId: event.correlationId,
+        sourceId: source.sourceId,
+        repositoryCount: scan.repositories.length,
+        documentCount: scan.documents.length,
+        chunkCount: transfer.chunks.length,
+        largestEventBytes: transfer.largestEventBytes,
+        payloadBudgetBytes,
+      },
+      'source inventory chunk plan produced',
+    );
+    await this.bus.publish(transfer.started);
+    for (
+      let start = 0;
+      start < transfer.chunks.length;
+      start += this.inventoryConfig.publishConcurrency
+    ) {
+      const chunkBatch = transfer.chunks.slice(
+        start,
+        start + this.inventoryConfig.publishConcurrency,
+      );
+      const results = await Promise.allSettled(
+        chunkBatch.map(async (chunk, offset) => {
+          await this.bus.publish(chunk);
+          const chunkIndex = start + offset;
+          this.logger.info(
+            {
+              scanId: event.correlationId,
+              sourceId: source.sourceId,
+              chunkIndex,
+              chunkCount: transfer.chunks.length,
+              eventBytes: transfer.chunkSizes[chunkIndex],
+              payloadBudgetBytes,
+            },
+            'source inventory chunk published',
+          );
+        }),
+      );
+      const failed = results.find(
+        (result): result is PromiseRejectedResult =>
+          result.status === 'rejected',
+      );
+      if (failed !== undefined) {
+        throw failed.reason;
+      }
+    }
+    await this.bus.publish(transfer.completed);
+    this.logger.info(
+      {
+        scanId: event.correlationId,
         sourceId: source.sourceId,
         correlationId: event.correlationId,
         repositoryCount: scan.repositories.length,
         documentCount: scan.documents.length,
+        chunkCount: transfer.chunks.length,
+        largestEventBytes: transfer.largestEventBytes,
+        payloadBudgetBytes,
+        durationMilliseconds: performance.now() - startedAtMonotonic,
       },
-      'source inventory submitted; awaiting catalogue change classification',
+      'source inventory published',
     );
   }
 }
