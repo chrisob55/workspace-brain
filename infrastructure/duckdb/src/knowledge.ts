@@ -74,6 +74,35 @@ const relationshipStatuses = [
   'superseded',
 ] as const;
 const idSchema = z.string().regex(/^[0-7][0-9A-HJKMNP-TV-Z]{25}$/);
+// Reuse validation and its compiled parser across evidence rows and reconciliations.
+const knowledgeInputEvidenceRowSchema = z.object({
+  id: idSchema,
+  document_version_id: idSchema,
+  evidence_key: z.string(),
+  evidence_kind: z.enum([
+    'heading',
+    'paragraph',
+    'list-item',
+    'table-row',
+    'code-block',
+    'structured-value',
+  ]),
+  excerpt: z.string(),
+  truncated: z.boolean(),
+  locator_json: z.string(),
+  version_id: idSchema,
+  document_id: idSchema,
+  content_fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+  processed_at: z.string(),
+  processor_id: z.string(),
+  processor_version: z.coerce.number().int(),
+  extraction_rule_id: z.string(),
+  extraction_rule_version: z.coerce.number().int(),
+  evidence_count: z.coerce.number().int(),
+  source_id: idSchema,
+  path: z.string(),
+  filename: z.string(),
+});
 const locatorSchema = z.union([
   z
     .object({
@@ -600,7 +629,7 @@ export async function listAvailableKnowledgePublications(
 ): Promise<{ readonly items: readonly KnowledgePublication[] }> {
   const page = await listKnowledgePublications(connection, request);
   for (const publication of page.items) {
-    await assertPublicationIntegrity(connection, publication);
+    await loadValidatedPublicationSnapshot(connection, publication);
   }
   return page;
 }
@@ -630,7 +659,7 @@ export async function getAvailableKnowledgePublication(
 ): Promise<KnowledgePublication | undefined> {
   const publication = await getKnowledgePublication(connection, publicationId);
   if (publication !== undefined) {
-    await assertPublicationIntegrity(connection, publication);
+    await loadValidatedPublicationSnapshot(connection, publication);
   }
   return publication;
 }
@@ -654,24 +683,14 @@ export async function getKnowledgePublicationSummary(
   connection: DuckDbConnection,
   publicationId: string,
 ): Promise<KnowledgePublicationSummary | undefined> {
-  const publication = await getAvailableKnowledgePublication(
-    connection,
-    publicationId,
-  );
-  if (publication === undefined) {
-    return undefined;
-  }
-  const entities = await loadPublishedEntities(connection, publication);
-  const relationships = await loadPublishedRelationships(
-    connection,
-    publication,
-  );
-  assertPublishedRelationshipEndpoints(relationships, entities, publication);
-  return {
-    publication,
-    entityCount: entities.length,
-    relationshipCount: relationships.length,
-  };
+  const snapshot = await getPublicationSnapshot(connection, publicationId);
+  return snapshot === undefined
+    ? undefined
+    : {
+        publication: snapshot.publication,
+        entityCount: snapshot.entities.length,
+        relationshipCount: snapshot.relationships.length,
+      };
 }
 
 /**
@@ -682,20 +701,10 @@ export async function getPublicationSnapshot(
   connection: DuckDbConnection,
   publicationId: string,
 ): Promise<PublicationSnapshot | undefined> {
-  const publication = await getAvailableKnowledgePublication(
-    connection,
-    publicationId,
-  );
-  if (publication === undefined) {
-    return undefined;
-  }
-  const entities = await loadPublishedEntities(connection, publication);
-  const relationships = await loadPublishedRelationships(
-    connection,
-    publication,
-  );
-  assertPublishedRelationshipEndpoints(relationships, entities, publication);
-  return { publication, entities, relationships };
+  const publication = await getKnowledgePublication(connection, publicationId);
+  return publication === undefined
+    ? undefined
+    : loadValidatedPublicationSnapshot(connection, publication);
 }
 
 export async function getPublishedEntity(
@@ -703,16 +712,10 @@ export async function getPublishedEntity(
   publicationId: string,
   entityId: string,
 ): Promise<PublishedEntity | undefined> {
-  const publication = await getAvailableKnowledgePublication(
-    connection,
-    publicationId,
-  );
-  if (publication === undefined) {
-    return undefined;
-  }
+  const snapshot = await getPublicationSnapshot(connection, publicationId);
+  if (snapshot === undefined) return undefined;
   const parsedEntityId = parseKnowledgeEntityId(entityId);
-  const entities = await loadPublishedEntities(connection, publication);
-  return entities.find(({ entity }) => entity.id === parsedEntityId);
+  return snapshot.entities.find(({ entity }) => entity.id === parsedEntityId);
 }
 
 export async function getPublishedRelationship(
@@ -720,21 +723,10 @@ export async function getPublishedRelationship(
   publicationId: string,
   relationshipId: string,
 ): Promise<PublishedRelationship | undefined> {
-  const publication = await getAvailableKnowledgePublication(
-    connection,
-    publicationId,
-  );
-  if (publication === undefined) {
-    return undefined;
-  }
-  const relationships = await loadPublishedRelationships(
-    connection,
-    publication,
-  );
-  const entities = await loadPublishedEntities(connection, publication);
-  assertPublishedRelationshipEndpoints(relationships, entities, publication);
+  const snapshot = await getPublicationSnapshot(connection, publicationId);
+  if (snapshot === undefined) return undefined;
   const parsedRelationshipId = parseKnowledgeRelationshipId(relationshipId);
-  return relationships.find(
+  return snapshot.relationships.find(
     ({ relationship }) => relationship.id === parsedRelationshipId,
   );
 }
@@ -743,23 +735,16 @@ export async function listPublishedEntityRelationships(
   connection: DuckDbConnection,
   request: PublishedRelationshipRequest,
 ): Promise<{ readonly items: readonly PublishedRelationshipTraversal[] }> {
-  const publication = await getAvailableKnowledgePublication(
+  const snapshot = await getPublicationSnapshot(
     connection,
     request.publicationId,
   );
-  if (publication === undefined) {
-    return { items: [] };
-  }
+  if (snapshot === undefined) return { items: [] };
+  const { publication, entities, relationships } = snapshot;
   const entityId = parseKnowledgeEntityId(request.entityId);
-  const entities = await loadPublishedEntities(connection, publication);
   if (!entities.some(({ entity }) => entity.id === entityId)) {
     return { items: [] };
   }
-  const relationships = await loadPublishedRelationships(
-    connection,
-    publication,
-  );
-  assertPublishedRelationshipEndpoints(relationships, entities, publication);
   const direction = z
     .enum(['incoming', 'outgoing', 'both'])
     .parse(request.direction);
@@ -864,10 +849,11 @@ export async function getPublishedRelationshipProvenance(
   };
 }
 
-async function assertPublicationIntegrity(
+// Reuse these validated rows within this operation; never cache across calls.
+async function loadValidatedPublicationSnapshot(
   connection: DuckDbConnection,
   publication: KnowledgePublication,
-): Promise<void> {
+): Promise<PublicationSnapshot> {
   const entities = await loadPublishedEntities(connection, publication);
   const relationships = await loadPublishedRelationships(
     connection,
@@ -922,7 +908,7 @@ async function assertPublicationIntegrity(
   }
   const evidenceIds = [...provenanceByEvidence.keys()].sort(compareOrdinal);
   if (evidenceIds.length === 0) {
-    return;
+    return { publication, entities, relationships };
   }
   const rows = await connection.runAndReadAll(
     "SELECT e.id AS evidence_id, e.document_version_id, CAST(e.locator_json AS VARCHAR) AS locator_json, v.document_id, v.source_id, v.path, v.content_fingerprint, v.processor_id, v.processor_version, v.extraction_rule_id, v.extraction_rule_version FROM extracted_evidence e JOIN document_versions v ON v.id = e.document_version_id WHERE list_contains(CAST(json_extract($1, '$') AS VARCHAR[]), e.id)",
@@ -969,6 +955,7 @@ async function assertPublicationIntegrity(
       `Publication ${publication.id} references missing mandatory evidence`,
     );
   }
+  return { publication, entities, relationships };
 }
 
 async function loadPublishedEntities(
@@ -2605,36 +2592,7 @@ async function nextVersionNumber(
 }
 
 function parseKnowledgeInputEvidence(row: unknown): KnowledgeInputEvidence {
-  const parsed = z
-    .object({
-      id: idSchema,
-      document_version_id: idSchema,
-      evidence_key: z.string(),
-      evidence_kind: z.enum([
-        'heading',
-        'paragraph',
-        'list-item',
-        'table-row',
-        'code-block',
-        'structured-value',
-      ]),
-      excerpt: z.string(),
-      truncated: z.boolean(),
-      locator_json: z.string(),
-      version_id: idSchema,
-      document_id: idSchema,
-      content_fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
-      processed_at: z.string(),
-      processor_id: z.string(),
-      processor_version: z.coerce.number().int(),
-      extraction_rule_id: z.string(),
-      extraction_rule_version: z.coerce.number().int(),
-      evidence_count: z.coerce.number().int(),
-      source_id: idSchema,
-      path: z.string(),
-      filename: z.string(),
-    })
-    .parse(row);
+  const parsed = knowledgeInputEvidenceRowSchema.parse(row);
   const locator = locatorSchema.parse(
     JSON.parse(parsed.locator_json) as unknown,
   ) as EvidenceLocator;

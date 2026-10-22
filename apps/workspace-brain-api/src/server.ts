@@ -853,20 +853,12 @@ export function createApiServer(
         request.query,
         publicationRelationshipQuerySchema,
       );
-      const publication =
-        await catalogue.getKnowledgePublication(publicationId);
-      if (publication === undefined) {
-        throw new ApiError(
-          404,
-          'Not Found',
-          'Knowledge publication was not found.',
-        );
-      }
       const entity = await catalogue.getPublishedEntity(
         publicationId,
         entityId,
       );
       if (entity === undefined) {
+        await ensurePublicationExists(catalogue, publicationId);
         throw new ApiError(
           404,
           'Not Found',
@@ -927,12 +919,12 @@ export function createApiServer(
         request.query,
         provenancePageQuerySchema,
       );
-      await ensurePublicationExists(catalogue, publicationId);
       const provenance = await catalogue.getPublishedEntityProvenance(
         publicationId,
         entityId,
       );
       if (provenance === undefined) {
+        await ensurePublicationExists(catalogue, publicationId);
         throw new ApiError(
           404,
           'Not Found',
@@ -981,12 +973,12 @@ export function createApiServer(
         request.query,
         provenancePageQuerySchema,
       );
-      await ensurePublicationExists(catalogue, publicationId);
       const provenance = await catalogue.getPublishedRelationshipProvenance(
         publicationId,
         relationshipId,
       );
       if (provenance === undefined) {
+        await ensurePublicationExists(catalogue, publicationId);
         throw new ApiError(
           404,
           'Not Found',
