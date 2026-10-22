@@ -8,6 +8,7 @@ import {
   type ConsumerMessages,
   type NatsConnection,
 } from 'nats';
+import { createHash } from 'node:crypto';
 import type { Logger } from 'pino';
 
 import {
@@ -35,6 +36,7 @@ export type RuntimeConnectionState =
   'connected' | 'reconnecting' | 'disconnected';
 
 export type NatsDiscoveryBus = {
+  readonly maxPayloadBytes: number;
   publish(event: DiscoveryEvent): Promise<void>;
   publishRuntimeHeartbeat(event: RuntimeHeartbeat): Promise<void>;
   subscribeRuntimeHeartbeats(
@@ -58,11 +60,39 @@ export type NatsDiscoveryBus = {
   close(): Promise<void>;
 };
 
+export class NonRetryableEventError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'NonRetryableEventError';
+  }
+}
+
+export class NatsPayloadTooLargeError extends NonRetryableEventError {
+  constructor(
+    readonly payloadBytes: number,
+    readonly maxPayloadBytes: number,
+  ) {
+    super(
+      `NATS event payload is ${payloadBytes} bytes; server maximum is ${maxPayloadBytes}`,
+    );
+    this.name = 'NatsPayloadTooLargeError';
+  }
+}
+
+export function serializeDiscoveryEvent(event: DiscoveryEvent): Uint8Array {
+  return codec.encode(JSON.stringify(event));
+}
+
 export async function connectNatsDiscoveryBus(
   servers: string,
   logger: Logger,
 ): Promise<NatsDiscoveryBus> {
   const connection = await connect({ servers });
+  const maxPayloadBytes = connection.info?.max_payload;
+  if (maxPayloadBytes === undefined || maxPayloadBytes < 1) {
+    await connection.close();
+    throw new Error('Connected NATS server did not advertise max_payload');
+  }
   try {
     await ensureStream(connection);
   } catch (error) {
@@ -94,12 +124,15 @@ export async function connectNatsDiscoveryBus(
   }
 
   return {
+    maxPayloadBytes,
     async publish(event) {
-      await js.publish(
-        discoveryEventSubject(event.eventType),
-        codec.encode(JSON.stringify(event)),
-        { msgID: event.idempotencyKey },
-      );
+      const payload = serializeDiscoveryEvent(event);
+      if (payload.byteLength > maxPayloadBytes) {
+        throw new NatsPayloadTooLargeError(payload.byteLength, maxPayloadBytes);
+      }
+      await js.publish(discoveryEventSubject(event.eventType), payload, {
+        msgID: event.idempotencyKey,
+      });
     },
 
     async publishRuntimeHeartbeat(event) {
@@ -248,12 +281,22 @@ async function consume(
     const heartbeat = setInterval(() => message.working(), 10_000);
     heartbeat.unref();
     try {
-      const event = JSON.parse(codec.decode(message.data)) as DiscoveryEvent;
+      let event: DiscoveryEvent;
+      try {
+        event = JSON.parse(codec.decode(message.data)) as DiscoveryEvent;
+      } catch (error) {
+        throw new NonRetryableEventError(
+          `Invalid discovery event JSON: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
       await handler(event);
       message.ack();
     } catch (error) {
       logger.error({ err: error }, 'NATS discovery event processing failed');
-      if (message.info.deliveryCount < maxProcessingAttempts) {
+      if (
+        !(error instanceof NonRetryableEventError) &&
+        message.info.deliveryCount < maxProcessingAttempts
+      ) {
         message.nak(1_000);
         continue;
       }
@@ -268,8 +311,14 @@ async function consume(
               consumer: durableName,
               streamSequence: message.info.streamSequence,
               deliveryCount: message.info.deliveryCount,
-              error: error instanceof Error ? error.message : String(error),
-              payloadBase64: Buffer.from(message.data).toString('base64'),
+              error: (error instanceof Error
+                ? error.message
+                : String(error)
+              ).slice(0, 512),
+              payloadBytes: message.data.byteLength,
+              payloadSha256: createHash('sha256')
+                .update(message.data)
+                .digest('hex'),
             }),
           ),
           {

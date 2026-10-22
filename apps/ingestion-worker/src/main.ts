@@ -2,7 +2,10 @@ import { randomUUID } from 'node:crypto';
 
 import pino from 'pino';
 
-import { parseRuntimeObservabilityConfig } from '@workspace-brain/configuration';
+import {
+  parseDiscoveryInventoryConfig,
+  parseRuntimeObservabilityConfig,
+} from '@workspace-brain/configuration';
 import { FilesystemSourceScanner } from '@workspace-brain/filesystem';
 import {
   connectNatsDiscoveryBus,
@@ -18,6 +21,7 @@ const logger = pino({
 });
 const natsServers = process.env.NATS_SERVERS ?? 'nats://nats:4222';
 const runtimeObservability = parseRuntimeObservabilityConfig();
+const discoveryInventoryConfig = parseDiscoveryInventoryConfig();
 const scanIntervalMilliseconds = Number(
   process.env.SCAN_INTERVAL_MS ?? 300_000,
 );
@@ -44,6 +48,7 @@ const worker = createIngestionWorker(
     bus,
     logger,
     scanIntervalMilliseconds,
+    discoveryInventoryConfig,
   ),
 );
 

@@ -25,6 +25,9 @@ The runtime page uses NATS-backed component heartbeats. See the
 thresholds, configuration, and commands to demonstrate healthy, degraded,
 offline, recovery, and NATS-disconnected states.
 
+- `make tui` opens a read-only terminal dashboard for container state,
+  health-check status, restart counts, CPU/memory snapshots, API liveness and
+  readiness, and LibreChat health. Press `r` to refresh or `q` to quit.
 - `pnpm build` updates local build output; it does **not** update containers.
 - `make start-*` starts existing images; it does **not** deploy code changes.
 - `make rebuild-*` builds images and recreates the selected services. Backend
@@ -36,7 +39,8 @@ offline, recovery, and NATS-disconnected states.
 
 ## First run
 
-Requirements: Node.js 22+, pnpm 10.32.1, Docker with Compose v2.
+Requirements: Node.js 22+, pnpm 10.32.1, Docker with Compose v2. The optional
+`make tui` dashboard also needs Python 3 (standard library only).
 
 ```sh
 pnpm install --frozen-lockfile
@@ -178,7 +182,7 @@ make status
 curl -fsS http://localhost:3000/health
 curl -fsS http://localhost:3000/ready
 pnpm librechat:status     # includes optional LibreChat services
-pnpm librechat:verify    # running LibreChat + MCP connectivity checks
+pnpm librechat:verify    # registers a persistent test user; see LibreChat guide
 ```
 
 | Symptom                                 | Next action                                                                                                       |
@@ -190,6 +194,24 @@ pnpm librechat:verify    # running LibreChat + MCP connectivity checks
 | Chat still uses old IDs/results         | Ask for latest publication; check MCP tool results, not only prose; rebuild LibreChat only if MCP code changed    |
 | `/health` works but `/ready` is slow    | Liveness is not catalogue readiness; catalogue work can queue during reprocessing                                 |
 | Build exits 137                         | Docker VM out of memory; reduce build concurrency or increase VM memory                                           |
+
+## Oversized or incomplete source inventory
+
+Inventory transfers use a server-aware byte budget and commit only after the
+API has durably staged and validated the complete scan. For protocol details,
+configuration, compatibility, and the local 1 MiB JetStream test, see the
+[source inventory transfer guide](architecture/source-inventory-transfer.md).
+
+Check bounded summaries and terminal failures without printing inventory
+payloads:
+
+```sh
+docker compose -f deploy/compose/compose.yaml logs --since=15m ingestion-worker workspace-brain-api nats
+```
+
+The assembly TTL expires inactive incomplete scans without changing catalogue
+state. A later complete filesystem scan uses a new scan ID; expiry is not an
+empty inventory.
 
 ## Developer checks (not deployment)
 

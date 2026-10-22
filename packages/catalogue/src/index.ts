@@ -73,6 +73,40 @@ export type ScanPersistenceResult = {
   readonly documentChanges: readonly InventoryChange<
     Document | InventoryRecord
   >[];
+  readonly inventoryCommitStatus?: 'committed' | 'duplicate' | 'superseded';
+};
+
+export type InventoryAssemblyChunk = {
+  readonly chunkIndex: number;
+  readonly repositoryCount: number;
+  readonly documentCount: number;
+  readonly repositories: readonly RepositoryCandidate[];
+  readonly documents: readonly DocumentCandidate[];
+  readonly checksum: string;
+};
+
+export type InventoryAssemblySnapshot = {
+  readonly sourceId: string;
+  readonly scanId: string;
+  readonly startedAt?: string;
+  readonly discoveredAt?: string;
+  readonly expectedRepositoryCount?: number;
+  readonly expectedDocumentCount?: number;
+  readonly expectedChunkCount?: number;
+  readonly repositoryCount?: number;
+  readonly documentCount?: number;
+  readonly inventoryChecksum?: string;
+  readonly completedAt?: string;
+  readonly durationMilliseconds?: number;
+  readonly status: 'assembling' | 'committed' | 'superseded' | 'expired';
+  readonly chunks: readonly InventoryAssemblyChunk[];
+};
+
+export type ExpiredInventoryAssembly = {
+  readonly sourceId: string;
+  readonly scanId: string;
+  readonly receivedChunkCount: number;
+  readonly expectedChunkCount?: number;
 };
 
 export type SourceScanMetrics = {
@@ -380,7 +414,37 @@ export interface CatalogueDiscovery
     discoveredAt: string,
     correlationId: string,
     durationMilliseconds: number,
+    inventoryCommit?: {
+      readonly scanId: string;
+      readonly inventoryChecksum: string;
+      readonly legacy?: boolean;
+    },
   ): Promise<ScanPersistenceResult>;
+  stageInventoryStarted(
+    payload: Extract<
+      DiscoveryEvent,
+      { readonly eventType: 'SourceInventoryStarted' }
+    >['payload'],
+  ): Promise<'staged' | 'duplicate'>;
+  stageInventoryChunk(
+    payload: Extract<
+      DiscoveryEvent,
+      { readonly eventType: 'SourceInventoryChunk' }
+    >['payload'],
+  ): Promise<'staged' | 'duplicate'>;
+  stageInventoryCompleted(
+    payload: Extract<
+      DiscoveryEvent,
+      { readonly eventType: 'SourceInventoryCompleted' }
+    >['payload'],
+  ): Promise<'staged' | 'duplicate'>;
+  getInventoryAssembly(
+    sourceId: string,
+    scanId: string,
+  ): Promise<InventoryAssemblySnapshot | undefined>;
+  expireInventoryAssemblies(
+    before: string,
+  ): Promise<readonly ExpiredInventoryAssembly[]>;
   listPendingDiscoveryEvents(limit: number): Promise<readonly DiscoveryEvent[]>;
   markDiscoveryEventPublished(
     eventId: string,

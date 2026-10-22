@@ -11,7 +11,8 @@ or reasoning platform.
 is the single day-to-day operating guide. Use it instead of piecing together
 commands from architecture documents or old implementation reports.
 
-Requirements: Node.js 22+, pnpm 10.32.1, Docker with Compose v2.
+Requirements: Node.js 22+, pnpm 10.32.1, Docker with Compose v2. The optional
+`make tui` dashboard also needs Python 3 (standard library only).
 Run commands from the repository root:
 
 ```sh
@@ -41,7 +42,8 @@ configuration, LibreChat provider keys and low-memory Docker hosts.
 - **Changed extraction/publication logic:** rebuild affected services, then
   `pnpm reprocess:architecture`. This runs inside the deployed worker.
   Follow the [deploy and reprocess checklist](docs/local-development.md#updated-extraction-or-publication-logic-deploy-then-reprocess).
-- **Status:** `make status`, `make logs`, optional `pnpm librechat:verify`.
+- **Status:** `make tui` for a live health/resource dashboard, `make status`
+  for Compose status, `make logs`, optional `pnpm librechat:verify`.
 - **Stop, keep data:** `make stop-backend`, `make stop-librechat`, Ctrl-C for
   Explorer. Do not wipe volumes as a routine update step.
 - **All commands:** `make help`.

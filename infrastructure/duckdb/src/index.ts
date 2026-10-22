@@ -19,6 +19,8 @@ import type {
   SearchRelationshipRequest,
   DocumentProcessingEvent,
   DocumentProcessingApplyResult,
+  ExpiredInventoryAssembly,
+  InventoryAssemblySnapshot,
   ScanPersistenceResult,
   SourceScanMetrics,
 } from '@workspace-brain/catalogue';
@@ -211,6 +213,31 @@ const inventoryRowSchema = z.object({
   is_present: z.boolean(),
 });
 
+const inventoryAssemblyRowSchema = z.object({
+  source_id: z.string(),
+  scan_id: z.string(),
+  started_at: z.string().nullable(),
+  discovered_at: z.string().nullable(),
+  expected_repository_count: z.coerce.number().nullable(),
+  expected_document_count: z.coerce.number().nullable(),
+  expected_chunk_count: z.coerce.number().nullable(),
+  repository_count: z.coerce.number().nullable(),
+  document_count: z.coerce.number().nullable(),
+  inventory_checksum: z.string().nullable(),
+  completed_at: z.string().nullable(),
+  duration_milliseconds: z.coerce.number().nullable(),
+  status: z.enum(['assembling', 'committed', 'superseded', 'expired']),
+});
+
+const inventoryAssemblyChunkRowSchema = z.object({
+  chunk_index: z.coerce.number(),
+  repository_count: z.coerce.number(),
+  document_count: z.coerce.number(),
+  checksum: z.string(),
+  repositories_json: z.string().nullable(),
+  documents_json: z.string().nullable(),
+});
+
 const discoveryEventEnvelopeSchema = z
   .object({
     eventId: z.string().min(1),
@@ -218,6 +245,9 @@ const discoveryEventEnvelopeSchema = z
       'SourceScanRequested',
       'SourceScanStarted',
       'SourceInventorySubmitted',
+      'SourceInventoryStarted',
+      'SourceInventoryChunk',
+      'SourceInventoryCompleted',
       'SourceScanFailed',
       'SourceScanCompleted',
       'RepositoryDiscovered',
@@ -724,6 +754,134 @@ export async function createDuckDbCatalogue(
       };
     },
 
+    async stageInventoryStarted(payload) {
+      return stageInventoryStarted(connection, payload);
+    },
+
+    async stageInventoryChunk(payload) {
+      return stageInventoryChunk(connection, payload);
+    },
+
+    async stageInventoryCompleted(payload) {
+      return stageInventoryCompleted(connection, payload);
+    },
+
+    async getInventoryAssembly(
+      sourceId: string,
+      scanId: string,
+    ): Promise<InventoryAssemblySnapshot | undefined> {
+      const rows = await connection.runAndReadAll(
+        'SELECT source_id, scan_id, started_at, discovered_at, expected_repository_count, expected_document_count, expected_chunk_count, repository_count, document_count, inventory_checksum, completed_at, duration_milliseconds, status FROM source_inventory_assemblies WHERE source_id = $1 AND scan_id = $2',
+        [sourceId, scanId],
+      );
+      const row = rows.getRowObjectsJson()[0];
+      if (row === undefined) {
+        return undefined;
+      }
+      const assembly = inventoryAssemblyRowSchema.parse(row);
+      const chunkRows = await connection.runAndReadAll(
+        'SELECT chunk_index, repository_count, document_count, checksum, CAST(repositories_json AS VARCHAR) AS repositories_json, CAST(documents_json AS VARCHAR) AS documents_json FROM source_inventory_chunks WHERE source_id = $1 AND scan_id = $2 ORDER BY chunk_index',
+        [sourceId, scanId],
+      );
+      return {
+        sourceId: assembly.source_id,
+        scanId: assembly.scan_id,
+        ...(assembly.started_at === null
+          ? {}
+          : { startedAt: assembly.started_at }),
+        ...(assembly.discovered_at === null
+          ? {}
+          : { discoveredAt: assembly.discovered_at }),
+        ...(assembly.expected_repository_count === null
+          ? {}
+          : { expectedRepositoryCount: assembly.expected_repository_count }),
+        ...(assembly.expected_document_count === null
+          ? {}
+          : { expectedDocumentCount: assembly.expected_document_count }),
+        ...(assembly.expected_chunk_count === null
+          ? {}
+          : { expectedChunkCount: assembly.expected_chunk_count }),
+        ...(assembly.repository_count === null
+          ? {}
+          : { repositoryCount: assembly.repository_count }),
+        ...(assembly.document_count === null
+          ? {}
+          : { documentCount: assembly.document_count }),
+        ...(assembly.inventory_checksum === null
+          ? {}
+          : { inventoryChecksum: assembly.inventory_checksum }),
+        ...(assembly.completed_at === null
+          ? {}
+          : { completedAt: assembly.completed_at }),
+        ...(assembly.duration_milliseconds === null
+          ? {}
+          : { durationMilliseconds: assembly.duration_milliseconds }),
+        status: assembly.status,
+        chunks: chunkRows.getRowObjectsJson().map((chunkRow) => {
+          const chunk = inventoryAssemblyChunkRowSchema.parse(chunkRow);
+          return {
+            chunkIndex: chunk.chunk_index,
+            repositoryCount: chunk.repository_count,
+            documentCount: chunk.document_count,
+            checksum: chunk.checksum,
+            repositories:
+              chunk.repositories_json === null
+                ? []
+                : (JSON.parse(
+                    chunk.repositories_json,
+                  ) as RepositoryCandidate[]),
+            documents:
+              chunk.documents_json === null
+                ? []
+                : (JSON.parse(chunk.documents_json) as DocumentCandidate[]),
+          };
+        }),
+      };
+    },
+
+    async expireInventoryAssemblies(before: string) {
+      await connection.run('BEGIN TRANSACTION');
+      try {
+        const rows = await connection.runAndReadAll(
+          "SELECT assemblies.source_id, assemblies.scan_id, COUNT(chunks.chunk_index) AS received_chunk_count, assemblies.expected_chunk_count FROM source_inventory_assemblies AS assemblies LEFT JOIN source_inventory_chunks AS chunks USING (source_id, scan_id) WHERE assemblies.status = 'assembling' AND assemblies.updated_at < CAST($1 AS TIMESTAMP) GROUP BY assemblies.source_id, assemblies.scan_id, assemblies.expected_chunk_count",
+          [before],
+        );
+        const expired = rows.getRowObjectsJson().map((row) => {
+          const parsed = z
+            .object({
+              source_id: z.string(),
+              scan_id: z.string(),
+              received_chunk_count: z.coerce.number(),
+              expected_chunk_count: z.coerce.number().nullable(),
+            })
+            .parse(row);
+          return {
+            sourceId: parsed.source_id,
+            scanId: parsed.scan_id,
+            receivedChunkCount: parsed.received_chunk_count,
+            ...(parsed.expected_chunk_count === null
+              ? {}
+              : { expectedChunkCount: parsed.expected_chunk_count }),
+          } satisfies ExpiredInventoryAssembly;
+        });
+        for (const assembly of expired) {
+          await connection.run(
+            'DELETE FROM source_inventory_chunks WHERE source_id = $1 AND scan_id = $2',
+            [assembly.sourceId, assembly.scanId],
+          );
+          await connection.run(
+            "UPDATE source_inventory_assemblies SET status = 'expired', updated_at = CURRENT_TIMESTAMP WHERE source_id = $1 AND scan_id = $2",
+            [assembly.sourceId, assembly.scanId],
+          );
+        }
+        await connection.run('COMMIT');
+        return expired;
+      } catch (error) {
+        await connection.run('ROLLBACK');
+        throw error;
+      }
+    },
+
     async persistScan(
       sourceId: string,
       repositories: readonly RepositoryCandidate[],
@@ -731,6 +889,10 @@ export async function createDuckDbCatalogue(
       discoveredAt: string,
       correlationId: string,
       durationMilliseconds: number,
+      inventoryCommit?: {
+        readonly scanId: string;
+        readonly inventoryChecksum: string;
+      },
     ): Promise<ScanPersistenceResult> {
       const parsedSourceId = parseSourceId(sourceId);
       const persistedRepositories: Repository[] = [];
@@ -740,6 +902,24 @@ export async function createDuckDbCatalogue(
       const documentChanges: InventoryChange<Document | InventoryRecord>[] = [];
       await connection.run('BEGIN TRANSACTION');
       try {
+        if (inventoryCommit !== undefined) {
+          const priorStatus = await prepareInventoryCommit(
+            connection,
+            sourceId,
+            discoveredAt,
+            inventoryCommit,
+          );
+          if (priorStatus !== undefined) {
+            await connection.run('COMMIT');
+            return {
+              repositories: [],
+              documents: [],
+              repositoryChanges: [],
+              documentChanges: [],
+              inventoryCommitStatus: priorStatus,
+            };
+          }
+        }
         const inventoryResult = await connection.runAndReadAll(
           "SELECT id, source_id, path, asset_type, fingerprint, strftime(discovered_at, '%Y-%m-%dT%H:%M:%S.%fZ') AS discovered_at, strftime(last_seen_at, '%Y-%m-%dT%H:%M:%S.%fZ') AS last_seen_at, is_present FROM inventory_records WHERE source_id = $1",
           [sourceId],
@@ -944,6 +1124,14 @@ export async function createDuckDbCatalogue(
           discoveredAt,
           metrics,
         );
+        if (inventoryCommit !== undefined) {
+          await recordInventoryCommit(
+            connection,
+            sourceId,
+            discoveredAt,
+            inventoryCommit,
+          );
+        }
         await connection.run('COMMIT');
       } catch (error) {
         await connection.run('ROLLBACK');
@@ -954,6 +1142,9 @@ export async function createDuckDbCatalogue(
         documents: persistedDocuments,
         repositoryChanges,
         documentChanges,
+        ...(inventoryCommit === undefined
+          ? {}
+          : { inventoryCommitStatus: 'committed' as const }),
       };
     },
 
@@ -2157,6 +2348,394 @@ function repositoryEventType(change: 'added' | 'modified'): string {
 
 function documentEventType(change: 'added' | 'modified'): string {
   return change === 'added' ? 'DocumentDiscovered' : 'DocumentModified';
+}
+
+async function prepareInventoryCommit(
+  connection: DuckDbConnection,
+  sourceId: string,
+  discoveredAt: string,
+  inventoryCommit: {
+    readonly scanId: string;
+    readonly inventoryChecksum: string;
+    readonly legacy?: boolean;
+  },
+): Promise<'duplicate' | 'superseded' | undefined> {
+  const existingResult = await connection.runAndReadAll(
+    'SELECT inventory_checksum, status FROM source_inventory_commits WHERE source_id = $1 AND scan_id = $2',
+    [sourceId, inventoryCommit.scanId],
+  );
+  const existingRaw = existingResult.getRowObjectsJson()[0];
+  if (existingRaw !== undefined) {
+    const existing = z
+      .object({
+        inventory_checksum: z.string(),
+        status: z.enum(['committed', 'superseded']),
+      })
+      .parse(existingRaw);
+    if (existing.inventory_checksum !== inventoryCommit.inventoryChecksum) {
+      throw new CatalogueIntegrityError(
+        `Inventory scan ${inventoryCommit.scanId} was already recorded with different content`,
+      );
+    }
+    await connection.run(
+      'UPDATE source_inventory_assemblies SET status = $3, updated_at = CURRENT_TIMESTAMP WHERE source_id = $1 AND scan_id = $2',
+      [sourceId, inventoryCommit.scanId, existing.status],
+    );
+    await connection.run(
+      'UPDATE source_inventory_chunks SET repositories_json = NULL, documents_json = NULL WHERE source_id = $1 AND scan_id = $2',
+      [sourceId, inventoryCommit.scanId],
+    );
+    return existing.status === 'committed' ? 'duplicate' : 'superseded';
+  }
+
+  if (!inventoryCommit.legacy) {
+    const assembly = await readInventoryAssemblyRow(
+      connection,
+      sourceId,
+      inventoryCommit.scanId,
+    );
+    if (
+      assembly === undefined ||
+      assembly.status !== 'assembling' ||
+      assembly.inventory_checksum !== inventoryCommit.inventoryChecksum
+    ) {
+      throw new CatalogueIntegrityError(
+        `Inventory scan ${inventoryCommit.scanId} is not a validated staged assembly`,
+      );
+    }
+  }
+
+  const latestResult = await connection.runAndReadAll(
+    "SELECT scan_id, strftime(discovered_at, '%Y-%m-%dT%H:%M:%S.%fZ') AS discovered_at FROM source_inventory_commits WHERE source_id = $1 AND status = 'committed' ORDER BY discovered_at DESC, scan_id DESC LIMIT 1",
+    [sourceId],
+  );
+  const latestRaw = latestResult.getRowObjectsJson()[0];
+  if (latestRaw !== undefined) {
+    const latest = z
+      .object({ scan_id: z.string(), discovered_at: z.string() })
+      .parse(latestRaw);
+    const candidateTime = Date.parse(discoveredAt);
+    const latestTime = Date.parse(latest.discovered_at);
+    if (
+      candidateTime < latestTime ||
+      (candidateTime === latestTime &&
+        inventoryCommit.scanId.localeCompare(latest.scan_id) <= 0)
+    ) {
+      await connection.run(
+        "INSERT INTO source_inventory_commits (source_id, scan_id, discovered_at, inventory_checksum, status) VALUES ($1, $2, $3, $4, 'superseded')",
+        [
+          sourceId,
+          inventoryCommit.scanId,
+          discoveredAt,
+          inventoryCommit.inventoryChecksum,
+        ],
+      );
+      await connection.run(
+        "UPDATE source_inventory_assemblies SET status = 'superseded', updated_at = CURRENT_TIMESTAMP WHERE source_id = $1 AND scan_id = $2",
+        [sourceId, inventoryCommit.scanId],
+      );
+      await connection.run(
+        'UPDATE source_inventory_chunks SET repositories_json = NULL, documents_json = NULL WHERE source_id = $1 AND scan_id = $2',
+        [sourceId, inventoryCommit.scanId],
+      );
+      return 'superseded';
+    }
+  }
+  return undefined;
+}
+
+async function recordInventoryCommit(
+  connection: DuckDbConnection,
+  sourceId: string,
+  discoveredAt: string,
+  inventoryCommit: {
+    readonly scanId: string;
+    readonly inventoryChecksum: string;
+  },
+): Promise<void> {
+  await connection.run(
+    "INSERT INTO source_inventory_commits (source_id, scan_id, discovered_at, inventory_checksum, status) VALUES ($1, $2, $3, $4, 'committed')",
+    [
+      sourceId,
+      inventoryCommit.scanId,
+      discoveredAt,
+      inventoryCommit.inventoryChecksum,
+    ],
+  );
+  await connection.run(
+    "UPDATE source_inventory_assemblies SET status = 'committed', updated_at = CURRENT_TIMESTAMP WHERE source_id = $1 AND scan_id = $2",
+    [sourceId, inventoryCommit.scanId],
+  );
+  await connection.run(
+    'UPDATE source_inventory_chunks SET repositories_json = NULL, documents_json = NULL WHERE source_id = $1 AND scan_id = $2',
+    [sourceId, inventoryCommit.scanId],
+  );
+}
+
+async function stageInventoryStarted(
+  connection: DuckDbConnection,
+  payload: Extract<
+    DiscoveryEvent,
+    { readonly eventType: 'SourceInventoryStarted' }
+  >['payload'],
+): Promise<'staged' | 'duplicate'> {
+  await connection.run('BEGIN TRANSACTION');
+  try {
+    await ensureInventoryAssembly(connection, payload.sourceId, payload.scanId);
+    const assembly = await readInventoryAssemblyRow(
+      connection,
+      payload.sourceId,
+      payload.scanId,
+    );
+    if (assembly === undefined) {
+      throw new Error('Inventory assembly was not created');
+    }
+    if (assembly.status === 'expired') {
+      throw new CatalogueIntegrityError(
+        `Inventory scan ${payload.scanId} has expired`,
+      );
+    }
+    assertNullableMatch(assembly.started_at, payload.startedAt, 'startedAt');
+    assertNullableMatch(
+      assembly.discovered_at,
+      payload.discoveredAt,
+      'discoveredAt',
+    );
+    assertNullableMatch(
+      assembly.expected_repository_count,
+      payload.expectedRepositoryCount,
+      'expectedRepositoryCount',
+    );
+    assertNullableMatch(
+      assembly.expected_document_count,
+      payload.expectedDocumentCount,
+      'expectedDocumentCount',
+    );
+    assertNullableMatch(
+      assembly.repository_count,
+      payload.expectedRepositoryCount,
+      'repositoryCount',
+    );
+    assertNullableMatch(
+      assembly.document_count,
+      payload.expectedDocumentCount,
+      'documentCount',
+    );
+    const duplicate = assembly.started_at !== null;
+    await connection.run(
+      'UPDATE source_inventory_assemblies SET started_at = COALESCE(started_at, $3), discovered_at = COALESCE(discovered_at, $4), expected_repository_count = COALESCE(expected_repository_count, $5), expected_document_count = COALESCE(expected_document_count, $6), updated_at = CURRENT_TIMESTAMP WHERE source_id = $1 AND scan_id = $2',
+      [
+        payload.sourceId,
+        payload.scanId,
+        payload.startedAt,
+        payload.discoveredAt,
+        payload.expectedRepositoryCount,
+        payload.expectedDocumentCount,
+      ],
+    );
+    await connection.run('COMMIT');
+    return duplicate ? 'duplicate' : 'staged';
+  } catch (error) {
+    await connection.run('ROLLBACK');
+    throw error;
+  }
+}
+
+async function stageInventoryChunk(
+  connection: DuckDbConnection,
+  payload: Extract<
+    DiscoveryEvent,
+    { readonly eventType: 'SourceInventoryChunk' }
+  >['payload'],
+): Promise<'staged' | 'duplicate'> {
+  await connection.run('BEGIN TRANSACTION');
+  try {
+    await ensureInventoryAssembly(connection, payload.sourceId, payload.scanId);
+    const assembly = await readInventoryAssemblyRow(
+      connection,
+      payload.sourceId,
+      payload.scanId,
+    );
+    if (assembly === undefined) {
+      throw new Error('Inventory assembly was not created');
+    }
+    if (assembly.status === 'expired') {
+      throw new CatalogueIntegrityError(
+        `Inventory scan ${payload.scanId} has expired`,
+      );
+    }
+    if (
+      assembly.expected_chunk_count !== null &&
+      payload.chunkIndex >= assembly.expected_chunk_count
+    ) {
+      throw new CatalogueIntegrityError(
+        `Inventory chunk index ${payload.chunkIndex} is outside the declared range`,
+      );
+    }
+    const existingResult = await connection.runAndReadAll(
+      'SELECT repository_count, document_count, checksum FROM source_inventory_chunks WHERE source_id = $1 AND scan_id = $2 AND chunk_index = $3',
+      [payload.sourceId, payload.scanId, payload.chunkIndex],
+    );
+    const existing = existingResult.getRowObjectsJson()[0];
+    if (existing !== undefined) {
+      const parsed = z
+        .object({
+          repository_count: z.coerce.number(),
+          document_count: z.coerce.number(),
+          checksum: z.string(),
+        })
+        .parse(existing);
+      if (
+        parsed.checksum !== payload.checksum ||
+        parsed.repository_count !== payload.repositoryCount ||
+        parsed.document_count !== payload.documentCount
+      ) {
+        throw new CatalogueIntegrityError(
+          `Conflicting inventory chunk ${payload.chunkIndex} for scan ${payload.scanId}`,
+        );
+      }
+      await connection.run('COMMIT');
+      return 'duplicate';
+    }
+    if (assembly.status !== 'assembling') {
+      throw new CatalogueIntegrityError(
+        `Cannot add a chunk to ${assembly.status} scan ${payload.scanId}`,
+      );
+    }
+    await connection.run(
+      'INSERT INTO source_inventory_chunks (source_id, scan_id, chunk_index, repository_count, document_count, checksum, repositories_json, documents_json, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)',
+      [
+        payload.sourceId,
+        payload.scanId,
+        payload.chunkIndex,
+        payload.repositoryCount,
+        payload.documentCount,
+        payload.checksum,
+        JSON.stringify(payload.repositories),
+        JSON.stringify(payload.documents),
+        payload.createdAt,
+      ],
+    );
+    await connection.run(
+      'UPDATE source_inventory_assemblies SET updated_at = CURRENT_TIMESTAMP WHERE source_id = $1 AND scan_id = $2',
+      [payload.sourceId, payload.scanId],
+    );
+    await connection.run('COMMIT');
+    return 'staged';
+  } catch (error) {
+    await connection.run('ROLLBACK');
+    throw error;
+  }
+}
+
+async function stageInventoryCompleted(
+  connection: DuckDbConnection,
+  payload: Extract<
+    DiscoveryEvent,
+    { readonly eventType: 'SourceInventoryCompleted' }
+  >['payload'],
+): Promise<'staged' | 'duplicate'> {
+  await connection.run('BEGIN TRANSACTION');
+  try {
+    await ensureInventoryAssembly(connection, payload.sourceId, payload.scanId);
+    const assembly = await readInventoryAssemblyRow(
+      connection,
+      payload.sourceId,
+      payload.scanId,
+    );
+    if (assembly === undefined) {
+      throw new Error('Inventory assembly was not created');
+    }
+    if (assembly.status === 'expired') {
+      throw new CatalogueIntegrityError(
+        `Inventory scan ${payload.scanId} has expired`,
+      );
+    }
+    assertNullableMatch(
+      assembly.expected_chunk_count,
+      payload.expectedChunkCount,
+      'expectedChunkCount',
+    );
+    assertNullableMatch(
+      assembly.repository_count,
+      payload.repositoryCount,
+      'repositoryCount',
+    );
+    assertNullableMatch(
+      assembly.document_count,
+      payload.documentCount,
+      'documentCount',
+    );
+    assertNullableMatch(
+      assembly.inventory_checksum,
+      payload.inventoryChecksum,
+      'inventoryChecksum',
+    );
+    const unexpectedResult = await connection.runAndReadAll(
+      'SELECT chunk_index FROM source_inventory_chunks WHERE source_id = $1 AND scan_id = $2 AND chunk_index >= $3 LIMIT 1',
+      [payload.sourceId, payload.scanId, payload.expectedChunkCount],
+    );
+    if (unexpectedResult.getRowObjectsJson().length > 0) {
+      throw new CatalogueIntegrityError(
+        `Inventory scan ${payload.scanId} contains an unexpected chunk index`,
+      );
+    }
+    const duplicate = assembly.inventory_checksum !== null;
+    await connection.run(
+      'UPDATE source_inventory_assemblies SET expected_chunk_count = COALESCE(expected_chunk_count, $3), repository_count = COALESCE(repository_count, $4), document_count = COALESCE(document_count, $5), inventory_checksum = COALESCE(inventory_checksum, $6), completed_at = COALESCE(completed_at, $7), duration_milliseconds = COALESCE(duration_milliseconds, $8), updated_at = CURRENT_TIMESTAMP WHERE source_id = $1 AND scan_id = $2',
+      [
+        payload.sourceId,
+        payload.scanId,
+        payload.expectedChunkCount,
+        payload.repositoryCount,
+        payload.documentCount,
+        payload.inventoryChecksum,
+        payload.completedAt,
+        payload.durationMilliseconds,
+      ],
+    );
+    await connection.run('COMMIT');
+    return duplicate ? 'duplicate' : 'staged';
+  } catch (error) {
+    await connection.run('ROLLBACK');
+    throw error;
+  }
+}
+
+async function ensureInventoryAssembly(
+  connection: DuckDbConnection,
+  sourceId: string,
+  scanId: string,
+): Promise<void> {
+  await connection.run(
+    'INSERT INTO source_inventory_assemblies (source_id, scan_id) VALUES ($1, $2) ON CONFLICT (source_id, scan_id) DO NOTHING',
+    [sourceId, scanId],
+  );
+}
+
+async function readInventoryAssemblyRow(
+  connection: DuckDbConnection,
+  sourceId: string,
+  scanId: string,
+): Promise<z.infer<typeof inventoryAssemblyRowSchema> | undefined> {
+  const rows = await connection.runAndReadAll(
+    'SELECT source_id, scan_id, started_at, discovered_at, expected_repository_count, expected_document_count, expected_chunk_count, repository_count, document_count, inventory_checksum, completed_at, duration_milliseconds, status FROM source_inventory_assemblies WHERE source_id = $1 AND scan_id = $2',
+    [sourceId, scanId],
+  );
+  const row = rows.getRowObjectsJson()[0];
+  return row === undefined ? undefined : inventoryAssemblyRowSchema.parse(row);
+}
+
+function assertNullableMatch<Value extends string | number>(
+  existing: Value | null,
+  incoming: Value,
+  field: string,
+): void {
+  if (existing !== null && existing !== incoming) {
+    throw new CatalogueIntegrityError(
+      `Conflicting inventory scan metadata for ${field}`,
+    );
+  }
 }
 
 async function upsertInventoryRecord(

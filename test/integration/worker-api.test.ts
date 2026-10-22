@@ -14,6 +14,8 @@ import {
 import type {
   CatalogueDiscovery,
   CataloguePage,
+  InventoryAssemblyChunk,
+  InventoryAssemblySnapshot,
 } from '@workspace-brain/catalogue';
 import type { NatsDiscoveryBus } from '@workspace-brain/nats';
 import { describe, expect, it } from 'vitest';
@@ -77,10 +79,15 @@ describe('worker/API application flow', () => {
     }[] = [];
     const catalogueCalls: string[] = [];
     const pendingEvents: DiscoveryEvent[] = [];
+    let inventoryAssembly: InventoryAssemblySnapshot | undefined;
     const catalogue: Pick<
       CatalogueDiscovery,
       | 'getSource'
       | 'persistScan'
+      | 'stageInventoryStarted'
+      | 'stageInventoryChunk'
+      | 'stageInventoryCompleted'
+      | 'getInventoryAssembly'
       | 'listPendingDiscoveryEvents'
       | 'markDiscoveryEventPublished'
       | 'recordScanStarted'
@@ -88,6 +95,55 @@ describe('worker/API application flow', () => {
     > = {
       async getSource(id: string) {
         return id === sourceId ? source : undefined;
+      },
+      async stageInventoryStarted(payload) {
+        inventoryAssembly = {
+          sourceId: payload.sourceId,
+          scanId: payload.scanId,
+          startedAt: payload.startedAt,
+          discoveredAt: payload.discoveredAt,
+          expectedRepositoryCount: payload.expectedRepositoryCount,
+          expectedDocumentCount: payload.expectedDocumentCount,
+          status: 'assembling',
+          chunks: [],
+        };
+        return 'staged';
+      },
+      async stageInventoryChunk(payload) {
+        if (inventoryAssembly === undefined) {
+          throw new Error('Inventory start was not staged');
+        }
+        const chunk: InventoryAssemblyChunk = {
+          chunkIndex: payload.chunkIndex,
+          repositoryCount: payload.repositoryCount,
+          documentCount: payload.documentCount,
+          repositories: payload.repositories,
+          documents: payload.documents,
+          checksum: payload.checksum,
+        };
+        inventoryAssembly = {
+          ...inventoryAssembly,
+          chunks: [...inventoryAssembly.chunks, chunk],
+        };
+        return 'staged';
+      },
+      async stageInventoryCompleted(payload) {
+        if (inventoryAssembly === undefined) {
+          throw new Error('Inventory start was not staged');
+        }
+        inventoryAssembly = {
+          ...inventoryAssembly,
+          expectedChunkCount: payload.expectedChunkCount,
+          repositoryCount: payload.repositoryCount,
+          documentCount: payload.documentCount,
+          inventoryChecksum: payload.inventoryChecksum,
+          completedAt: payload.completedAt,
+          durationMilliseconds: payload.durationMilliseconds,
+        };
+        return 'staged';
+      },
+      async getInventoryAssembly() {
+        return inventoryAssembly;
       },
       async persistScan(
         _id: string,
@@ -158,7 +214,9 @@ describe('worker/API application flow', () => {
     const bus = new FakeDiscoveryBus(discoverySource, (event) => {
       if (
         event.eventType === 'SourceScanStarted' ||
-        event.eventType === 'SourceInventorySubmitted' ||
+        event.eventType === 'SourceInventoryStarted' ||
+        event.eventType === 'SourceInventoryChunk' ||
+        event.eventType === 'SourceInventoryCompleted' ||
         event.eventType === 'SourceScanFailed'
       ) {
         return api.handle(event);
@@ -235,6 +293,7 @@ function createCatalogueEvent(
 
 class FakeDiscoveryBus implements NatsDiscoveryBus {
   readonly published: DiscoveryEvent[] = [];
+  readonly maxPayloadBytes = 1_048_576;
   private handler: ((event: DiscoveryEvent) => Promise<void>) | undefined;
 
   constructor(
