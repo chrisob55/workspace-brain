@@ -1004,6 +1004,61 @@ describe('Workspace Brain API routes', () => {
     await server.close();
   });
 
+  it('avoids publication preflight reads on successful traversal and provenance', async () => {
+    const catalogue = createCatalogue();
+    const publicationRead = vi.spyOn(catalogue, 'getKnowledgePublication');
+    const entityRead = vi.spyOn(catalogue, 'getPublishedEntity');
+    const server = createApiServer(catalogue, { logger: false });
+    try {
+      const base = `/api/v1/knowledge/publications/${publication.id}`;
+      for (const path of [
+        `${base}/entities/${publishedEntity.entity.id}/relationships`,
+        `${base}/entities/${publishedEntity.entity.id}/provenance`,
+        `${base}/relationships/${publishedRelationship.relationship.id}/provenance`,
+      ]) {
+        expect((await server.inject(path)).statusCode).toBe(200);
+      }
+      expect(publicationRead).not.toHaveBeenCalled();
+      expect(entityRead).toHaveBeenCalledTimes(1);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('preserves publication versus object 404 errors for traversal and provenance', async () => {
+    const server = createApiServer(createCatalogue(), { logger: false });
+    try {
+      const missingPublication = createKnowledgePublicationId();
+      const missingEntity = createKnowledgeEntityId();
+      const missingRelationship = createKnowledgeRelationshipId();
+      for (const [id, detail] of [
+        [missingPublication, 'Knowledge publication was not found.'],
+        [publication.id, 'Knowledge entity was not found in this publication.'],
+      ]) {
+        for (const operation of ['relationships', 'provenance']) {
+          const response = await server.inject(
+            `/api/v1/knowledge/publications/${id}/entities/${missingEntity}/${operation}`,
+          );
+          expect(response.statusCode).toBe(404);
+          expect(response.json().detail).toBe(detail);
+        }
+      }
+      for (const id of [missingPublication, publication.id]) {
+        const response = await server.inject(
+          `/api/v1/knowledge/publications/${id}/relationships/${missingRelationship}/provenance`,
+        );
+        expect(response.statusCode).toBe(404);
+        expect(response.json().detail).toBe(
+          id === missingPublication
+            ? 'Knowledge publication was not found.'
+            : 'Knowledge relationship was not found in this publication.',
+        );
+      }
+    } finally {
+      await server.close();
+    }
+  });
+
   it('paginates one-hop relationships and provenance with publication-bound cursors', async () => {
     const server = createApiServer(createCatalogue(), { logger: false });
     const entityId = publishedEntity.entity.id;
