@@ -292,7 +292,16 @@ async function consume(
       await handler(event);
       message.ack();
     } catch (error) {
-      logger.error({ err: error }, 'NATS discovery event processing failed');
+      logger.error(
+        {
+          err: error,
+          subject: message.subject,
+          consumer: durableName,
+          streamSequence: message.info.streamSequence,
+          deliveryCount: message.info.deliveryCount,
+        },
+        'NATS discovery event processing failed',
+      );
       if (
         !(error instanceof NonRetryableEventError) &&
         message.info.deliveryCount < maxProcessingAttempts

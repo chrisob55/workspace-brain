@@ -505,8 +505,29 @@ export type DuckDbConnection = Awaited<ReturnType<DuckDBInstance['connect']>>;
 export async function createDuckDbCatalogue(
   databasePath: string,
   migrationsDirectory: string,
+  resources?: { readonly memoryLimitMb: number; readonly threads: number },
 ): Promise<DuckDbCatalogue> {
-  const instance = await DuckDBInstance.create(databasePath);
+  if (
+    resources !== undefined &&
+    (!Number.isSafeInteger(resources.memoryLimitMb) ||
+      resources.memoryLimitMb < 1 ||
+      !Number.isSafeInteger(resources.threads) ||
+      resources.threads < 1)
+  ) {
+    throw new Error(
+      'DuckDB memory limit and threads must be positive safe integers',
+    );
+  }
+  const instance = await DuckDBInstance.create(
+    databasePath,
+    resources === undefined
+      ? undefined
+      : {
+          memory_limit: `${resources.memoryLimitMb}MB`,
+          threads: String(resources.threads),
+          preserve_insertion_order: 'false',
+        },
+  );
   const connection = await instance.connect();
 
   try {
@@ -1007,30 +1028,6 @@ export async function createDuckDbCatalogue(
           const change = getInventoryChange(previous, record.fingerprint);
           seenKeys.add(key);
 
-          await connection.run(
-            'INSERT INTO documents (id, source_id, path, filename, extension, size_bytes, modified_at, discovered_at, discovery_method) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (source_id, path) DO UPDATE SET filename = excluded.filename, extension = excluded.extension, size_bytes = excluded.size_bytes, modified_at = excluded.modified_at, discovered_at = excluded.discovered_at, discovery_method = excluded.discovery_method WHERE documents.filename IS DISTINCT FROM excluded.filename OR documents.extension IS DISTINCT FROM excluded.extension OR documents.size_bytes IS DISTINCT FROM excluded.size_bytes OR documents.modified_at IS DISTINCT FROM excluded.modified_at OR documents.discovery_method IS DISTINCT FROM excluded.discovery_method',
-            [
-              record.id,
-              record.sourceId,
-              record.path,
-              record.filename,
-              record.extension,
-              record.sizeBytes,
-              record.modifiedAt,
-              record.discoveredAt,
-              record.discoveryMethod,
-            ],
-          );
-          await upsertInventoryRecord(
-            connection,
-            record.id,
-            record.sourceId,
-            record.path,
-            'document',
-            record.fingerprint,
-            record.discoveredAt,
-            record.lastSeenAt,
-          );
           if (change === 'modified') {
             await connection.run(
               'UPDATE document_current_versions SET document_version_id = NULL, revision = revision + 1, updated_at = $2 WHERE document_id = $1 AND document_version_id IS NOT NULL',
@@ -1038,17 +1035,84 @@ export async function createDuckDbCatalogue(
             );
           }
           documentChanges.push({ change, record });
-          if (change !== 'unchanged') {
-            await insertDiscoveryHistory(
-              connection,
-              documentEventType(change),
-              record,
-              correlationId,
-              discoveredAt,
-            );
-          }
           persistedDocuments.push(record);
         }
+
+        await insertBatchedRows(
+          connection,
+          'INSERT INTO documents (id, source_id, path, filename, extension, size_bytes, modified_at, discovered_at, discovery_method)',
+          persistedDocuments.map((record) => [
+            record.id,
+            record.sourceId,
+            record.path,
+            record.filename,
+            record.extension,
+            record.sizeBytes,
+            record.modifiedAt,
+            record.discoveredAt,
+            record.discoveryMethod,
+          ]),
+          'ON CONFLICT (source_id, path) DO UPDATE SET filename = excluded.filename, extension = excluded.extension, size_bytes = excluded.size_bytes, modified_at = excluded.modified_at, discovered_at = excluded.discovered_at, discovery_method = excluded.discovery_method WHERE documents.filename IS DISTINCT FROM excluded.filename OR documents.extension IS DISTINCT FROM excluded.extension OR documents.size_bytes IS DISTINCT FROM excluded.size_bytes OR documents.modified_at IS DISTINCT FROM excluded.modified_at OR documents.discovery_method IS DISTINCT FROM excluded.discovery_method',
+        );
+        await insertBatchedRows(
+          connection,
+          'INSERT INTO inventory_records (id, source_id, path, asset_type, fingerprint, discovered_at, last_seen_at, is_present)',
+          persistedDocuments.map((record) => [
+            record.id,
+            record.sourceId,
+            record.path,
+            'document',
+            record.fingerprint,
+            record.discoveredAt,
+            record.lastSeenAt,
+            true,
+          ]),
+          'ON CONFLICT (source_id, path, asset_type) DO UPDATE SET fingerprint = excluded.fingerprint, last_seen_at = excluded.last_seen_at, is_present = TRUE',
+        );
+        const documentHistory = documentChanges.flatMap(({ change, record }) =>
+          change !== 'added' && change !== 'modified'
+            ? []
+            : [
+                {
+                  record,
+                  event: createInventoryHistoryEvent(
+                    documentEventType(change),
+                    record,
+                    correlationId,
+                    discoveredAt,
+                  ),
+                },
+              ],
+        );
+        await insertBatchedRows(
+          connection,
+          'INSERT INTO discovery_history (id, source_id, event_type, subject_id, path, fingerprint, occurred_at, correlation_id, payload_json)',
+          documentHistory.map(({ event, record }) => [
+            event.eventId,
+            record.sourceId,
+            event.eventType,
+            record.id,
+            record.path,
+            record.fingerprint,
+            discoveredAt,
+            correlationId,
+            JSON.stringify(record),
+          ]),
+        );
+        await insertBatchedRows(
+          connection,
+          'INSERT INTO discovery_outbox (event_id, idempotency_key, source_id, event_type, occurred_at, correlation_id, event_json)',
+          documentHistory.map(({ event }) => [
+            event.eventId,
+            event.idempotencyKey,
+            event.partitionKey,
+            event.eventType,
+            event.occurredAt,
+            event.correlationId,
+            JSON.stringify(event),
+          ]),
+          'ON CONFLICT (idempotency_key) DO NOTHING',
+        );
 
         for (const previous of previousRecords.values()) {
           const key = `${previous.asset_type}\0${previous.path}`;
@@ -2761,20 +2825,10 @@ async function insertDiscoveryHistory(
   correlationId: string,
   occurredAt: string,
 ): Promise<DiscoveryEvent> {
-  const eventType = parseCatalogueEventType(rawEventType);
-  const removed = eventType.endsWith('Removed');
-  const payload = removed
-    ? { inventoryRecord: record }
-    : eventType.startsWith('Repository')
-      ? { repository: record }
-      : { document: record };
-  const idempotencyKey = `catalogue:${eventType}:${record.sourceId}:${record.id}:${correlationId}`;
-  const event = createCatalogueEvent(
-    eventType,
-    payload,
-    record.sourceId,
+  const event = createInventoryHistoryEvent(
+    rawEventType,
+    record,
     correlationId,
-    idempotencyKey,
     occurredAt,
   );
   await connection.run(
@@ -2782,7 +2836,7 @@ async function insertDiscoveryHistory(
     [
       event.eventId,
       record.sourceId,
-      eventType,
+      event.eventType,
       record.id,
       record.path,
       record.fingerprint,
@@ -2793,6 +2847,50 @@ async function insertDiscoveryHistory(
   );
   await insertOutboxEvent(connection, event);
   return event;
+}
+
+function createInventoryHistoryEvent(
+  rawEventType: string,
+  record: Repository | Document | InventoryRecord,
+  correlationId: string,
+  occurredAt: string,
+): DiscoveryEvent {
+  const eventType = parseCatalogueEventType(rawEventType);
+  const removed = eventType.endsWith('Removed');
+  const payload = removed
+    ? { inventoryRecord: record }
+    : eventType.startsWith('Repository')
+      ? { repository: record }
+      : { document: record };
+  const idempotencyKey = `catalogue:${eventType}:${record.sourceId}:${record.id}:${correlationId}`;
+  return createCatalogueEvent(
+    eventType,
+    payload,
+    record.sourceId,
+    correlationId,
+    idempotencyKey,
+    occurredAt,
+  );
+}
+
+async function insertBatchedRows(
+  connection: DuckDbConnection,
+  insert: string,
+  rows: readonly (readonly (string | number | boolean)[])[],
+  conflict = '',
+): Promise<void> {
+  // Bound statement size while keeping the complete scan in one transaction.
+  for (let offset = 0; offset < rows.length; offset += 128) {
+    const batch = rows.slice(offset, offset + 128);
+    let parameter = 0;
+    const values = batch
+      .map((row) => `(${row.map(() => `$${++parameter}`).join(', ')})`)
+      .join(', ');
+    await connection.run(
+      `${insert} VALUES ${values} ${conflict}`,
+      batch.flat(),
+    );
+  }
 }
 
 type CatalogueEventType = Extract<

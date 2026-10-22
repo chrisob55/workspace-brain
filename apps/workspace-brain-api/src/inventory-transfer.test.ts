@@ -296,7 +296,10 @@ describe('source inventory transfer with DuckDB catalogue', () => {
     ).toBe(true);
 
     await catalogue.close();
-    catalogue = await createDuckDbCatalogue(databasePath, migrationsDirectory);
+    catalogue = await createDuckDbCatalogue(databasePath, migrationsDirectory, {
+      memoryLimitMb: 512,
+      threads: 1,
+    });
     service = createDiscoveryService(
       catalogue,
       {

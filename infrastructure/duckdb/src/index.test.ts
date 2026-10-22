@@ -15,7 +15,7 @@ import {
   processingDefinitionRegistry,
 } from '@workspace-brain/domain';
 import { CatalogueIntegrityError } from '@workspace-brain/catalogue';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createDuckDbCatalogue } from './index.js';
 import { createKnowledgePublicationContentHash } from './knowledge.js';
@@ -58,6 +58,38 @@ function createProcessingEvent(
 }
 
 describe('DuckDB catalogue migrations', () => {
+  it('applies the catalogue memory and thread budget to the DuckDB instance', async () => {
+    const create = vi.spyOn(DuckDBInstance, 'create');
+    try {
+      const catalogue = await createDuckDbCatalogue(
+        ':memory:',
+        migrationsDirectory,
+        {
+          memoryLimitMb: 256,
+          threads: 1,
+        },
+      );
+      try {
+        const instance = await create.mock.results[0]!.value;
+        const connection = await instance.connect();
+        try {
+          const rows = await connection.runAndReadAll(
+            "SELECT current_setting('memory_limit') AS memory, CAST(current_setting('threads') AS INTEGER) AS threads",
+          );
+          expect(rows.getRowObjectsJson()).toEqual([
+            { memory: '244.1 MiB', threads: 1 },
+          ]);
+        } finally {
+          connection.closeSync();
+        }
+      } finally {
+        await catalogue.close();
+      }
+    } finally {
+      create.mockRestore();
+    }
+  });
+
   it('registers HMRC processing definitions on previously migrated catalogues without replacing existing authority', async () => {
     const instance = await DuckDBInstance.create(':memory:');
     const connection = await instance.connect();
