@@ -67,6 +67,20 @@ model-provider key in that file or in LibreChat. See the
 On a memory-constrained Docker VM:
 `make rebuild-backend TURBO_BUILD_ARGS=--concurrency=1`.
 
+The API gives DuckDB a 3,072 MB buffer-manager budget and one query thread by
+default. Override `DUCKDB_MEMORY_LIMIT_MB` and `DUCKDB_THREADS` in
+`deploy/compose/.env` only after measuring the workload. These are DuckDB
+settings, not a container RSS cap: Node, native allocations and other services
+also need headroom. Changes require API recreation, not just restart.
+If a query exceeds the budget it fails explicitly; inspect API logs rather
+than repeatedly resubmitting it or increasing memory blindly. Retained NATS
+messages survive rebuilds; resetting the catalogue alone does not reset their
+document identities.
+Insertion-order preservation is disabled for this resource-constrained mode;
+catalogue queries use explicit ordering. The complete inventory is still
+committed atomically, but document/history/outbox inserts are grouped into
+bounded batches rather than thousands of individual insert statements.
+
 ## Next day: no code changes
 
 ```sh

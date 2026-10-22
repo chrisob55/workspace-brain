@@ -23,6 +23,9 @@ describe('HMRC normal publication pipeline', () => {
       const catalogue = await createDuckDbCatalogue(
         join(directory, 'catalogue.duckdb'),
         resolve('infrastructure/duckdb/migrations'),
+        scenario === 'oversized'
+          ? { memoryLimitMb: 512, threads: 1 }
+          : undefined,
       );
       try {
         await mkdir(join(root, '.git'), { recursive: true });
@@ -99,14 +102,35 @@ class SubscriptionController {
           .items[0]!;
         const scan = async () => {
           const inventory = await new FilesystemSourceScanner().scan(source);
-          return catalogue.persistScan(
+          const rootId = source.roots[0]!.id;
+          // Inventory-only metadata enlarges each immutable extraction context
+          // without processing thousands of unrelated fixture files.
+          const padding =
+            scenario === 'oversized'
+              ? Array.from({ length: 3992 }, (_, index) => ({
+                  path: `${rootId}/padding/${'x'.repeat(160)}/${index}.txt`,
+                  filename: `${index}.txt`,
+                  extension: '.txt',
+                  sizeBytes: 1,
+                  modifiedAt: inventory.discoveredAt,
+                  fingerprint: 'a'.repeat(64),
+                  discoveryMethod: 'filesystem' as const,
+                }))
+              : [];
+          const result = await catalogue.persistScan(
             source.sourceId,
             inventory.repositories,
-            inventory.documents,
+            [...inventory.documents, ...padding],
             inventory.discoveredAt,
             randomUUID(),
             1,
           );
+          return {
+            ...result,
+            documents: result.documents.filter(
+              (document) => document.extension !== '.txt',
+            ),
+          };
         };
         const process = async (document: Document) => {
           const path = document.path.split('/').slice(1).join('/');

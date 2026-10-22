@@ -1702,8 +1702,7 @@ async function loadActiveParserEvidence(
       CAST(e.locator_json AS VARCHAR) AS locator_json, v.id AS version_id, v.document_id,
       v.content_fingerprint, strftime(v.processed_at, '%Y-%m-%dT%H:%M:%S.%fZ') AS processed_at,
       v.processor_id, v.processor_version, v.extraction_rule_id, v.extraction_rule_version,
-      v.evidence_count, v.source_id, v.path, v.filename,
-      CAST(json_extract(x.context_json, '$.repositories') AS VARCHAR) AS repositories_json
+      v.evidence_count, v.source_id, v.path, v.filename
     FROM knowledge_active_document_contributions a
     JOIN document_versions v ON v.id = a.document_version_id
     JOIN extracted_evidence e ON e.document_version_id = v.id
@@ -1717,21 +1716,40 @@ async function loadActiveParserEvidence(
     string,
     KnowledgeExtractionContext['repositories']
   >();
-  return rows.getRowObjectsJson().map((row) => {
+  const inputs: KnowledgeInputEvidence[] = [];
+  for (const row of rows.getRowObjectsJson()) {
     const input = parseKnowledgeInputEvidence(row);
     let repositories = repositoriesByVersion.get(input.documentVersion.id);
     if (repositories === undefined) {
+      // Extract once per version, not once per evidence row: the immutable
+      // context also contains the entire source inventory.
+      const contextRows = await connection.runAndReadAll(
+        "SELECT CAST(json_extract(context_json, '$.repositories') AS VARCHAR) AS repositories_json FROM document_extraction_contexts WHERE document_version_id = $1",
+        [input.documentVersion.id],
+      );
+      const context = contextRows.getRowObjectsJson()[0];
+      if (context === undefined) {
+        throw new CatalogueIntegrityError(
+          'Immutable parser extraction context is missing',
+        );
+      }
       repositories = z
         .array(repositoryBoundarySchema)
-        .parse(JSON.parse(z.string().parse(row.repositories_json)) as unknown)
+        .parse(
+          JSON.parse(z.string().parse(context.repositories_json)) as unknown,
+        )
         .map(({ name, ...repository }) => ({
           ...repository,
           ...(name === undefined ? {} : { name }),
         }));
       repositoriesByVersion.set(input.documentVersion.id, repositories);
     }
-    return { ...input, extractionContext: { repositories, documents: [] } };
-  });
+    inputs.push({
+      ...input,
+      extractionContext: { repositories, documents: [] },
+    });
+  }
+  return inputs;
 }
 
 async function reconcileKnowledgeModel(

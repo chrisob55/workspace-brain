@@ -1,14 +1,14 @@
 # Capgemini Mac local runtime and DevOps review
 
 **Date:** 22 October 2026
-**Repository revision:** `02060f5`
-**Outcome:** the user authorized discarding the old catalogue data. Only the
-database, WAL, and stale DuckDB temp files were removed from the existing named
-volume; the volume and source corpus were preserved. The rebuilt API applied
-startup migrations, including migration 019, and passes `/health` and `/ready`.
-The inventory transfer committed 21 repositories and 3,992 documents in two
-bounded chunks. Ingestion, knowledge worker, NATS, LibreChat, and Mongo are
-running. Old catalogue content was intentionally discarded.
+**Repository revision:** base `02060f5`; PR #30 branch at `5412070`, with the
+stability corrections below still uncommitted.
+**Current outcome:** API and both workers are running against the repopulated
+catalogue. The API has zero restarts and no processing errors in the bounded
+post-fix observation. Real inventory and graph publications are committing.
+Initial processing is incomplete; healthy probes do not imply complete model
+coverage. The user explicitly approved the coordinated catalogue/pipeline reset
+described below. Sources, LibreChat data and named volumes were preserved.
 
 ## 1. Executive summary
 
@@ -16,15 +16,28 @@ Phases 1 and 2 are present in the running API image and focused source tests
 pass on this Mac. The recovered transfer implementation was built and
 deployed. The old database's startup index-deletion failure was resolved
 operationally by resetting the catalogue after the user authorized losing old
-data. Current API health and readiness pass.
+data. Subsequent Docker events proved API OOM kills, including exit 137;
+startup ordering was not the cause of those restarts.
+
+Two allocation problems were reproduced and corrected: thousands of individual
+inventory inserts in one transaction, and extraction of a full-source JSON
+context once per parser evidence row during graph reconciliation. Inventory
+inserts now use bounded batches within the same atomic transaction; repository
+context is extracted once per document version. Both large-inventory and
+graph/publication regression cases pass with a 512 MB DuckDB budget. The graph
+case failed with an out-of-memory error before the query correction.
+
+The deployed API uses a validated 3,072 MB DuckDB budget, one thread, and disabled
+insertion-order preservation. This budget is not a total RSS cap. Live
+post-fix samples ranged from approximately 0.92 to 4.28 GiB over eleven minutes,
+ending at 1.47 GiB. There were 102 successful publications, responsive readiness
+and no new processing errors, Docker OOM events or restarts. The transient peaks
+still matter on this shared 7.74 GiB VM.
 
 LibreChat and Mongo remain healthy; LibreChat `/health` returned 200. MCP
-initialized and advertised 20 tools, but actual tool invocation and
-model-backed architectural acceptance remain unverified. Fresh inventory
-processing is underway. JetStream still contains a large retained event
-backlog; some old events are rejected by current integrity checks. At sampled
-intervals, API CPU was about 104–106% and memory ranged from 1.24 to 2.13 GiB,
-without an OOM kill or restart. API readiness passed during this load.
+previously initialized and advertised 20 tools, but actual tool invocation and
+model-backed architectural acceptance remain unverified. No paid-model request
+was made. Earlier observations below are labelled separately from this recovery.
 
 ## 2. Actual Mac/runtime topology
 
@@ -52,8 +65,10 @@ without an OOM kill or restart. API readiness passed during this load.
 The primary worktree is on local `main` at
 `02060f5fe6851970e60eaa509227e639e0171983`, matching `origin/main`. Recovery
 implementation, startup logging, tests, and documentation are present in this
-review worktree. Deployment commands were run from the primary checkout so
-Compose mounted the populated primary `sources/` directory.
+review worktree. API-only stability rebuilds ran from this review worktree.
+Existing workers were stopped/started, not recreated: they retain the populated
+primary-checkout `sources/` bind mount. Recreating them from this worktree without
+checking that path would mount an empty corpus again.
 
 ## 3. Deployment and catalogue reconciliation
 
@@ -92,6 +107,33 @@ worker from primary `main` corrected the read-only source mount. API
 838,709 bytes against an 838,860-byte budget. The named volume, source files,
 and NATS data were preserved; old catalogue content was intentionally lost.
 
+### Subsequent coordinated stability recovery
+
+The catalogue-only reset left retained events referring to missing document
+identities. After repeated OOM kills, the user explicitly selected a coordinated
+reset of the Workspace Brain catalogue and pipeline stream. With API/workers
+stopped, only the `WORKSPACE_DISCOVERY` stream was deleted (72,602 retained
+messages, approximately 1.217 GB). Other streams and services were untouched.
+The active database and WAL were moved aside, not deleted, in the existing volume:
+
+```text
+/var/lib/workspace-brain/catalogue.duckdb.before-stability-20261022T1210Z
+/var/lib/workspace-brain/catalogue.duckdb.wal.before-stability-20261022T1210Z
+```
+
+Startup recreated the active catalogue and stream. Resource settings alone did
+not fix fresh-inventory or candidate failures; the two bounded-memory fixes were
+then deployed through API-only rebuild/recreate. A later complete scan committed
+21 repositories and 3,992 documents. There was no second pipeline reset.
+
+After the graph fix, 28 retained candidate events whose retries had exhausted
+on memory errors were republished unchanged, with unique recovery message IDs
+and acknowledged JetStream publishes. The candidate consumer's acknowledgement
+floor subsequently passed all 28 recovery messages, with no new processing
+errors. The old failed inventory chunk was not
+replayed: a newer complete inventory had already committed. Historical
+dead-letter records are retained for diagnosis, not silently removed.
+
 ## 4. Phase 1 and Phase 2 verification
 
 The three requested historical reports are present in `HEAD`. Targeted source
@@ -111,10 +153,26 @@ focused suites passed on this Mac: evidence validation (5), publication reads
 (15), and API server (37), **57 tests total**. The repository's
 `pnpm test:compose:config` also passed all checks. No manifests or lockfiles
 changed. The rebuilt API image was built from the same source whose focused tests passed.
-Runtime retrieval is available against the fresh catalogue, but full
-publication integrity and provenance acceptance remain pending.
+Bounded live retrieval now also passes: latest publication, validated summary,
+immutable export, entity detail and entity provenance all returned HTTP 200.
+The sampled immutable export contained 60 entities and no relationships.
+Traversal returned an empty successful page; non-empty relationship acceptance
+therefore remains pending rather than being inferred.
 
 ## 5. Published-data retrieval and integrity
+
+### Current post-fix checks
+
+During active ingestion, latest publication took 1.27–1.36 seconds; validated
+summary 1.16 seconds; an approximately 414 KB immutable export 1.43 seconds;
+entity detail 1.67 seconds; provenance 1.08 seconds; empty relationship
+traversal 2.22 seconds. The export exercises publication integrity validation.
+A bounded projected-entity search returned HTTP 200 but zero items; projection
+usefulness has not been accepted while the pipeline is still catching up.
+No source text, entity names or service relationships were included in diagnostics.
+These are individual elapsed-time samples, not latency percentiles.
+
+### Earlier observations, before coordinated recovery
 
 Before the authorized reset, publication listing returned an existing record,
 but a 100-item list timed out. Those old publications were intentionally
@@ -168,7 +226,7 @@ test account; the operating documentation now warns about this side effect.
 
 ## 7. Performance and resource observations
 
-During the observed API/catalogue activity, spot samples ranged from 94–166%
+Before coordinated recovery, spot samples ranged from 94–166%
 CPU and 1.15–4.35 GiB API memory before an OOM kill. LibreChat used roughly
 386–663 MiB; Mongo around 180–294 MiB; workers together around 150 MiB; NATS
 around 45–53 MiB. Qdrant and Ollama were running but each used only tens of MiB
@@ -182,7 +240,20 @@ which processes and event backlog drive the measured OOM. The API image build co
 concurrency 1. After catalogue reset and source processing, API samples were
 about 104–106% CPU and 1.24–2.13 GiB memory; ingestion used about 54–61 MiB and
 the knowledge worker about 156–161 MiB. No OOM or restart was observed in these
-samples. These are active-processing snapshots, not idle baselines.
+samples. Those early short observations did not establish sustained stability:
+subsequent OOM kills were confirmed by Docker events.
+
+After the final graph-query fix, active-load samples ranged from approximately
+0.92 to 4.28 GiB API memory. In the extended observation CPU was approximately
+96–102%, and memory dropped back to 1.47 GiB after the peaks. Workers together
+used about 176–180 MiB in an earlier sample; NATS about 91–136 MiB. Readiness
+remained HTTP 200, with measured elapsed times from approximately 0.03 to
+4.49 seconds. From 12:34 to 12:45 UTC the API produced 102 successful
+publications with no new processing errors, Docker OOM events or restarts.
+The observed working set is not capped by DuckDB's buffer-manager setting.
+These eleven minutes are not a long-duration soak or an idle baseline.
+The stream still has thousands of document-processing events pending; model
+coverage and projected search results remain incomplete.
 
 ## 8. Confirmed DevOps findings
 
@@ -200,10 +271,15 @@ samples. These are active-processing snapshots, not idle baselines.
 - **Confirmed and corrected:** Compose first mounted the task worktree's empty
   `sources/`; starting from primary `main` mounted the populated read-only
   corpus and produced the expected inventory.
-- **Confirmed but unresolved:** retained JetStream backlog remains large; some
-  stale events fail current integrity/foreign-key validation. API readiness
-  passes and no OOM was observed after reset, but backlog drainage needs
-  monitoring.
+- **Fixed and verified:** catalogue/retained-event epoch mismatch was removed
+  by the explicitly authorized coordinated reset. The remaining queue is fresh
+  work, not the discarded pre-reset identity backlog.
+- **Fixed and verified:** fresh-inventory transaction allocation and repeated
+  JSON extraction during graph reconciliation caused bounded-memory failures.
+  Regression tests reproduce the workloads under 512 MB; live processing now
+  advances without new failures in the observed interval.
+- **Confirmed but unresolved:** initial processing and search projection
+  coverage are incomplete. Health is not a pipeline-completion guarantee.
 - **Compose configuration verified:** the passing configuration test checks
   localhost-bound API/LibreChat ports, internal Mongo, and exclusion of
   LibreChat from normal backend targets. Compose declares API, LibreChat and
@@ -223,9 +299,10 @@ samples. These are active-processing snapshots, not idle baselines.
 - **Environmental/runtime limitation:** pre-reset API had DuckDB OOMs and an
   index error in the old catalogue. Old catalogue contents were discarded with
   the user's consent.
-- **Deferred:** full fresh-catalogue graph integrity, provenance, actual MCP
-  tool-call acceptance, model-backed acceptance, backlog drainage, and a
-  backup/restore procedure.
+- **Deferred:** non-empty relationship acceptance, projected-search usefulness,
+  actual MCP tool-call acceptance, model-backed acceptance, backlog drainage,
+  long-duration stability, and a tested backup/restore procedure. A bounded
+  immutable publication integrity/provenance check now passes.
 
 ## 9. Small corrections implemented
 
@@ -246,17 +323,32 @@ samples. These are active-processing snapshots, not idle baselines.
   processing it. No model-backed call was made.
 - Added a read-only `make tui` terminal dashboard for Compose state, health
   checks, restarts, resource snapshots, API probes, and LibreChat health.
+- Added centrally validated DuckDB resource settings, applied at connection
+  creation and exposed through Compose; API startup logs the selected budget.
+- Batched inventory document/history/outbox writes in groups of 128 while
+  preserving the complete scan transaction and removal semantics.
+- Removed per-evidence-row source-context JSON extraction from parser
+  reconciliation; repository context is validated once per version instead.
+- Added NATS failure subject, consumer, stream sequence and delivery count to
+  diagnostics without logging event bodies.
+- Final stability validation: full tests **840 passed / 4 skipped**, full
+  lint passed, typecheck **27/27 tasks**, Compose configuration checks and
+  `git diff --check` passed. The representative graph regression fails before
+  the query fix and passes afterwards under the same 512 MB limit.
+- Rebuilt/recreated only the API for these stability changes using
+  `make rebuild-api TURBO_BUILD_ARGS=--concurrency=1`; resumed existing workers.
+  NATS, LibreChat, Mongo and unrelated applications were not rebuilt.
 
 ## 10. Prioritised operational recommendations
 
-1. **Monitor the retained JetStream backlog.** Observe pending counts and
-   failure rates as consumers process retained events. If API readiness
-   degrades or OOM returns, stop ingestion first and correlate the failing
-   durable event with its catalogue operation.
-2. **Observe resource use during backlog drainage.** If DuckDB OOMs
-   recur, stop ingestion and correlate the failing NATS durable event/consumer
-   with its catalogue operation. Preserve the catalogue; do not raise limits or
-   initiate reprocessing without evidence.
+1. **Monitor fresh-pipeline progress.** Observe pending counts, successful
+   publications and failure rates; a green liveness probe alone is insufficient.
+   Keep the retained dead-letter history for diagnosis. The 28 memory-failed
+   candidate events have been replayed, not silently discarded.
+2. **Observe resource use through initial processing and ordinary daily use.**
+   If failures recur, correlate the now-logged subject and stream sequence with
+   its operation. Preserve the catalogue; do not raise limits or reset again
+   without evidence. DuckDB's limit leaves headroom but does not cap total RSS.
 3. **Complete bounded fresh-catalogue acceptance.** Check API `/health`
    and `/ready`, then perform bounded latest-publication, summary, search,
    traversal and provenance reads over HTTP and MCP, recording timings and

@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
+  parseCatalogueRuntimeConfig,
   parseDiscoveryInventoryConfig,
   parseRuntimeObservabilityConfig,
   parseWorkspaceBrainConfig,
@@ -23,6 +24,33 @@ workspaces:
     name: HMRC Agents
     sources: [projects]
 `;
+
+describe('parseCatalogueRuntimeConfig', () => {
+  it('reserves memory headroom by default and accepts explicit budgets', () => {
+    expect(parseCatalogueRuntimeConfig({})).toEqual({
+      memoryLimitMb: 3072,
+      threads: 1,
+    });
+    expect(
+      parseCatalogueRuntimeConfig({
+        DUCKDB_MEMORY_LIMIT_MB: '1024',
+        DUCKDB_THREADS: '1',
+      }),
+    ).toEqual({ memoryLimitMb: 1024, threads: 1 });
+  });
+
+  it.each(['0', '-1', '1.5', 'NaN', '', '9007199254740992'])(
+    'rejects invalid memory or thread values: %s',
+    (value) => {
+      expect(() =>
+        parseCatalogueRuntimeConfig({ DUCKDB_MEMORY_LIMIT_MB: value }),
+      ).toThrow();
+      expect(() =>
+        parseCatalogueRuntimeConfig({ DUCKDB_THREADS: value }),
+      ).toThrow();
+    },
+  );
+});
 
 describe('parseWorkspaceBrainConfig', () => {
   it('parses v1 YAML and applies safe defaults', () => {

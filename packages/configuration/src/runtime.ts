@@ -11,6 +11,20 @@ const positiveSafeInteger = z
   .transform(Number)
   .pipe(z.number().safe().int().positive());
 
+const catalogueRuntimeSchema = z.object({
+  memoryLimitMb: positiveSafeInteger.prefault('3072'),
+  threads: positiveSafeInteger.prefault('1'),
+});
+
+export function parseCatalogueRuntimeConfig(
+  env: NodeJS.ProcessEnv = process.env,
+): { readonly memoryLimitMb: number; readonly threads: number } {
+  return catalogueRuntimeSchema.parse({
+    memoryLimitMb: env.DUCKDB_MEMORY_LIMIT_MB,
+    threads: env.DUCKDB_THREADS,
+  });
+}
+
 const discoveryInventorySchema = z.object({
   maxEventBytes: positiveSafeInteger.prefault('1000000'),
   payloadSafetyRatio: z
