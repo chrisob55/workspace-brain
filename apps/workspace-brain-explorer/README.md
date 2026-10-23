@@ -10,6 +10,8 @@ administration tool — every visual reads **published** knowledge.
 ---
 config:
   theme: redux-color
+  themeVariables:
+    background: '#ffffff'
 ---
 flowchart TB
   User["Person using a browser"]

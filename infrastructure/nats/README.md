@@ -11,6 +11,8 @@ request/reply, and publishes runtime heartbeats.
 ---
 config:
   theme: redux-color
+  themeVariables:
+    background: '#ffffff'
 ---
 flowchart TB
   Ingestion["Ingestion worker"]

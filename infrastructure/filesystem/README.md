@@ -11,6 +11,8 @@ chunks for processing.
 ---
 config:
   theme: redux-color
+  themeVariables:
+    background: '#ffffff'
 ---
 flowchart TB
   Config["API source configuration"]

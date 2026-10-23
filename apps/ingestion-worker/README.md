@@ -10,6 +10,8 @@ does not own the catalogue and does not modify source files.
 ---
 config:
   theme: redux-color
+  themeVariables:
+    background: '#ffffff'
 ---
 sequenceDiagram
   participant API as API

@@ -88,6 +88,8 @@ flow. Editable Mermaid source: [component-flow.mmd](docs/architecture/component-
 ---
 config:
   theme: redux-color
+  themeVariables:
+    background: '#ffffff'
 ---
 flowchart TB
   subgraph Sources["Source workspace"]

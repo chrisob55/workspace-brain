@@ -12,6 +12,8 @@ Knowledge Model itself.
 ---
 config:
   theme: redux-color
+  themeVariables:
+    background: '#ffffff'
 ---
 sequenceDiagram
   participant API as Workspace Brain API

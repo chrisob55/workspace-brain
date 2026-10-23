@@ -12,6 +12,8 @@ and immutable publications without giving consumers direct storage access.
 ---
 config:
   theme: redux-color
+  themeVariables:
+    background: '#ffffff'
 ---
 flowchart TB
   Ingestion["Ingestion worker"]
