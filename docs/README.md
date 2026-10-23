@@ -12,6 +12,25 @@ implementation reports are historical records, not startup instructions.
 - [LibreChat integration reference](librechat-compose.md) — bundled MCP
   architecture, provider configuration and integration tests.
 
+## Application and component guides
+
+- [Workspace Brain API](../apps/workspace-brain-api/README.md) — HTTP
+  interface, catalogue ownership, and worker messaging.
+- [Ingestion worker](../apps/ingestion-worker/README.md) — read-only source
+  scanning and inventory events.
+- [Knowledge worker](../apps/knowledge-worker/README.md) — evidence processing
+  and candidate submission.
+- [DuckDB catalogue](../infrastructure/duckdb/README.md) — persistence and
+  migrations.
+- [Filesystem adapter](../infrastructure/filesystem/README.md) — source
+  scanning and bounded content reads.
+- [NATS event backbone](../infrastructure/nats/README.md) — durable events,
+  request/reply, and runtime heartbeats.
+- [Explorer](../apps/workspace-brain-explorer/README.md) and
+  [MCP server](../apps/workspace-brain-mcp/README.md) — consumer applications.
+- [End-to-end component flow](architecture/component-flow.mmd) — editable
+  Mermaid source for the repository overview diagram.
+
 ## Architecture and history
 
 - [Architecture Definition Document v1](architecture/Workspace-Brain-ADD-v1.md)

@@ -78,17 +78,60 @@ See [ADR-001](docs/adr/ADR-001-workspace-brain-product-boundary.md) for the
 product boundary and [ADR-022](docs/adr/ADR-022-mvp-boundary-and-read-only-sources.md)
 for the MVP scope.
 
+## How the components connect
+
+The arrows show source reads, worker messaging, API-owned persistence, and
+read-only consumer access. See each component guide below for its operating
+flow. Editable Mermaid source: [component-flow.mmd](docs/architecture/component-flow.mmd).
+
+```mermaid
+flowchart LR
+  subgraph Sources["Source workspace"]
+    Files["Source files"]
+    FS["Filesystem adapter"]
+  end
+  subgraph Workers["Backend workers"]
+    Ingestion["Ingestion worker"]
+    Knowledge["Knowledge worker"]
+    Processing["Processing core"]
+  end
+  subgraph Backend["Workspace Brain backend"]
+    NATS["NATS JetStream and request/reply"]
+    API["Workspace Brain API"]
+    DuckDB[("DuckDB catalogue")]
+  end
+  subgraph Consumers["Read-only consumers"]
+    Explorer["Explorer"]
+    MCP["MCP server"]
+    Other["Other API clients"]
+  end
+  Files -->|"read-only scan and content"| FS
+  FS --> Ingestion
+  Ingestion <-->|"source and content requests"| NATS
+  Ingestion -->|"scan inventory events"| NATS
+  NATS -->|"durable events and evidence requests"| API
+  API <-->|"catalogue reads and writes"| DuckDB
+  API -->|"document discovery and extraction events"| NATS
+  NATS <-->|"document processing and candidate events; evidence requests"| Knowledge
+  Knowledge --> Processing
+  Processing --> Knowledge
+  Knowledge -->|"content requests"| NATS
+  API -->|"HTTP API"| Explorer
+  API -->|"HTTP API"| MCP
+  API -->|"HTTP API"| Other
+```
+
 ## Repository map
 
 | Path                                                             | Purpose                                         |
 | ---------------------------------------------------------------- | ----------------------------------------------- |
-| [apps/workspace-brain-api/](apps/workspace-brain-api/)           | HTTP API and catalogue writes                   |
-| [apps/ingestion-worker/](apps/ingestion-worker/)                 | Read-only filesystem scanning                   |
-| [apps/knowledge-worker/](apps/knowledge-worker/)                 | Evidence processing and candidate submission    |
+| [apps/workspace-brain-api/](apps/workspace-brain-api/) ([README](apps/workspace-brain-api/README.md)) | HTTP API and catalogue writes                   |
+| [apps/ingestion-worker/](apps/ingestion-worker/) ([README](apps/ingestion-worker/README.md))         | Read-only filesystem scanning                   |
+| [apps/knowledge-worker/](apps/knowledge-worker/) ([README](apps/knowledge-worker/README.md))         | Evidence processing and candidate submission    |
 | [apps/workspace-brain-explorer/](apps/workspace-brain-explorer/) | Published-knowledge UI                          |
 | [apps/workspace-brain-mcp/](apps/workspace-brain-mcp/)           | Read-only MCP server over HTTP                  |
 | [packages/](packages/)                                           | Domain, processing, configuration and contracts |
-| [infrastructure/](infrastructure/)                               | DuckDB, filesystem and NATS adapters            |
+| [infrastructure/](infrastructure/)                               | [DuckDB](infrastructure/duckdb/README.md), [filesystem](infrastructure/filesystem/README.md) and [NATS](infrastructure/nats/README.md) adapters |
 | [config/](config/)                                               | Source, workspace and runtime settings          |
 | [deploy/compose/](deploy/compose/)                               | Container runtime                               |
 | [openapi/openapi.json](openapi/openapi.json)                     | Public HTTP API contract                        |

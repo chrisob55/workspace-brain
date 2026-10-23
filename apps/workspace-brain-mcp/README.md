@@ -24,6 +24,22 @@ Workspace Brain remains the source of truth:
 - **Read-only.** No tool writes, ingests or deletes anything, touches the
   filesystem or fetches caller-supplied URLs.
 
+## How a tool call flows
+
+```mermaid
+sequenceDiagram
+  participant Client as MCP client or LibreChat
+  participant Server as Workspace Brain MCP server
+  participant API as Workspace Brain HTTP API
+  participant DB as DuckDB catalogue
+  Client->>Server: Call read-only MCP tool
+  Server->>API: Map tool to documented GET endpoint
+  API->>DB: Read current or publication-scoped data
+  DB-->>API: Knowledge and provenance
+  API-->>Server: HTTP response or explicit error
+  Server-->>Client: JSON tool result or MCP tool error
+```
+
 ## Tools
 
 The server registers **17 tools**, all read-only (`readOnlyHint: true`,
