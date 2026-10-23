@@ -4,6 +4,27 @@ A visual show-and-tell for Workspace Brain: what it is, what it knows, why it
 can be trusted, and where it is heading. It is a product demonstration, not an
 administration tool — every visual reads **published** knowledge.
 
+## How Explorer works
+
+```mermaid
+---
+config:
+  theme: redux-color
+---
+flowchart TB
+  User["Person using a browser"]
+  UI["Explorer UI"]
+  API["Workspace Brain HTTP API"]
+  Publication[("Latest immutable publication")]
+  Snapshot[("Bundled publication snapshot")]
+  User -->|"browse and explore"| UI
+  UI -->|"fetch publication and export"| API
+  API -->|"read published data"| Publication
+  Publication -->|"publication and provenance"| API
+  API -->|"JSON responses"| UI
+  UI -.->|"fallback when API is unreachable"| Snapshot
+```
+
 ## Run
 
 For the backend startup order and rebuild/restart decisions, use the

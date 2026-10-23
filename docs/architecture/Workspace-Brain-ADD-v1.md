@@ -31,7 +31,11 @@ Non-negotiable invariants:
 10. Vector stores, event streams and caches are rebuildable projections or transport.
 
 ```mermaid
-flowchart LR
+---
+config:
+  theme: redux-color
+---
+flowchart TB
   S[Files and repositories] --> WB[Workspace Brain]
   WB --> KM[Published Knowledge Models]
   KM --> AIOS[AI OS]

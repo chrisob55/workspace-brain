@@ -86,6 +86,15 @@ For diagrams updated by the Mermaid GitHub Sync app (or pre-commit regenerate):
 5. Write diagrams to `.mmd` files; never return unvalidated Mermaid syntax.
 6. Warn the user before Repair (Mermaid AI credits).
 7. Cooperate with the Sync workflow — do not manually regenerate managed diagrams.
+8. Set every flowchart direction to `TB`, in both `.mmd` files and Markdown code
+   blocks; do not use `LR`.
+9. Set every diagram's Mermaid frontmatter theme to `redux-color`:
+   ```yaml
+   ---
+   config:
+     theme: redux-color
+   ---
+   ```
 
 ## Docs
 
