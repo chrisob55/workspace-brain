@@ -10,6 +10,8 @@ database service and workers and user-facing clients do not connect to it.
 ---
 config:
   theme: redux-color
+  themeVariables:
+    background: '#ffffff'
 ---
 flowchart TB
   Ingestion["Ingestion worker"]

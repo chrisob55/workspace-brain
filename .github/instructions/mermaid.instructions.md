@@ -93,6 +93,8 @@ For diagrams updated by the Mermaid GitHub Sync app (or pre-commit regenerate):
    ---
    config:
      theme: redux-color
+     themeVariables:
+       background: '#ffffff'
    ---
    ```
 

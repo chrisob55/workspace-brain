@@ -30,6 +30,8 @@ Workspace Brain remains the source of truth:
 ---
 config:
   theme: redux-color
+  themeVariables:
+    background: '#ffffff'
 ---
 sequenceDiagram
   participant Client as MCP client or LibreChat

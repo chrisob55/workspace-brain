@@ -34,6 +34,8 @@ Non-negotiable invariants:
 ---
 config:
   theme: redux-color
+  themeVariables:
+    background: '#ffffff'
 ---
 flowchart TB
   S[Files and repositories] --> WB[Workspace Brain]
