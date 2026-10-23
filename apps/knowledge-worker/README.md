@@ -9,6 +9,10 @@ Knowledge Model itself.
 ## Operating flow
 
 ```mermaid
+---
+config:
+  theme: redux-color
+---
 sequenceDiagram
   participant API as Workspace Brain API
   participant Bus as NATS JetStream

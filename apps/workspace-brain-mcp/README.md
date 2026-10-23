@@ -27,6 +27,10 @@ Workspace Brain remains the source of truth:
 ## How a tool call flows
 
 ```mermaid
+---
+config:
+  theme: redux-color
+---
 sequenceDiagram
   participant Client as MCP client or LibreChat
   participant Server as Workspace Brain MCP server

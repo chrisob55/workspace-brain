@@ -7,7 +7,11 @@ administration tool — every visual reads **published** knowledge.
 ## How Explorer works
 
 ```mermaid
-flowchart LR
+---
+config:
+  theme: redux-color
+---
+flowchart TB
   User["Person using a browser"]
   UI["Explorer UI"]
   API["Workspace Brain HTTP API"]

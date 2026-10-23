@@ -85,7 +85,11 @@ read-only consumer access. See each component guide below for its operating
 flow. Editable Mermaid source: [component-flow.mmd](docs/architecture/component-flow.mmd).
 
 ```mermaid
-flowchart LR
+---
+config:
+  theme: redux-color
+---
+flowchart TB
   subgraph Sources["Source workspace"]
     Files["Source files"]
     FS["Filesystem adapter"]

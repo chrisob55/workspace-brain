@@ -9,6 +9,10 @@ and immutable publications without giving consumers direct storage access.
 ## Connections
 
 ```mermaid
+---
+config:
+  theme: redux-color
+---
 flowchart TB
   Ingestion["Ingestion worker"]
   Knowledge["Knowledge worker"]

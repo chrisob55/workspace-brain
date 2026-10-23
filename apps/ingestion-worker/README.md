@@ -7,6 +7,10 @@ does not own the catalogue and does not modify source files.
 ## Operating flow
 
 ```mermaid
+---
+config:
+  theme: redux-color
+---
 sequenceDiagram
   participant API as API
   participant Bus as NATS

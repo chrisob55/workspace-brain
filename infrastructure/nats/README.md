@@ -8,7 +8,11 @@ request/reply, and publishes runtime heartbeats.
 ## Connections and flow
 
 ```mermaid
-flowchart LR
+---
+config:
+  theme: redux-color
+---
+flowchart TB
   Ingestion["Ingestion worker"]
   Knowledge["Knowledge worker"]
   API["Workspace Brain API"]

@@ -7,7 +7,11 @@ database service and workers and user-facing clients do not connect to it.
 ## Connections and ownership
 
 ```mermaid
-flowchart LR
+---
+config:
+  theme: redux-color
+---
+flowchart TB
   Ingestion["Ingestion worker"]
   Knowledge["Knowledge worker"]
   Bus["NATS"]

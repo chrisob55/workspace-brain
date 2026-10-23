@@ -8,7 +8,11 @@ chunks for processing.
 ## Connections and boundaries
 
 ```mermaid
-flowchart LR
+---
+config:
+  theme: redux-color
+---
+flowchart TB
   Config["API source configuration"]
   Bus["NATS request/reply"]
   Ingestion["Ingestion worker"]
