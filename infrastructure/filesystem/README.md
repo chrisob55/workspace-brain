@@ -15,27 +15,30 @@ config:
     background: '#ffffff'
 ---
 flowchart TB
-  Config["API source configuration"]
-  Bus["NATS request/reply"]
-  Ingestion["Ingestion worker"]
-  Roots["Read-only source roots"]
-  Scan["Inventory scan"]
-  Content["Bounded content reads"]
-  Knowledge["Knowledge worker"]
-  Catalogue["API and DuckDB catalogue"]
-  Config -->|"source roots and rules"| Bus
-  Bus -->|"configured sources"| Ingestion
-  Ingestion --> Scan
-  Roots -->|"read only"| Scan
-  Scan -->|"inventory results"| Ingestion
-  Ingestion -->|"inventory events"| Bus
-  Bus -->|"persist inventory"| Catalogue
-  Knowledge -->|"document content request"| Bus
-  Bus --> Ingestion
-  Ingestion --> Content
-  Roots -->|"read only"| Content
-  Content -->|"content reply"| Bus
-  Bus --> Knowledge
+  subgraph WhiteBackground[" "]
+    Config["API source configuration"]
+    Bus["NATS request/reply"]
+    Ingestion["Ingestion worker"]
+    Roots["Read-only source roots"]
+    Scan["Inventory scan"]
+    Content["Bounded content reads"]
+    Knowledge["Knowledge worker"]
+    Catalogue["API and DuckDB catalogue"]
+    Config -->|"source roots and rules"| Bus
+    Bus -->|"configured sources"| Ingestion
+    Ingestion --> Scan
+    Roots -->|"read only"| Scan
+    Scan -->|"inventory results"| Ingestion
+    Ingestion -->|"inventory events"| Bus
+    Bus -->|"persist inventory"| Catalogue
+    Knowledge -->|"document content request"| Bus
+    Bus --> Ingestion
+    Ingestion --> Content
+    Roots -->|"read only"| Content
+    Content -->|"content reply"| Bus
+    Bus --> Knowledge
+  end
+  style WhiteBackground fill:#ffffff,stroke:#ffffff,color:#ffffff
 ```
 
 - The **API** owns source definitions and workspace include/exclude rules and

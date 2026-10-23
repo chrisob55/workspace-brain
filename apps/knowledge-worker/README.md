@@ -24,31 +24,33 @@ sequenceDiagram
   participant Core as Processing core
   participant DB as DuckDB via API
   participant Client as Explorer or MCP client
-  API->>Bus: DocumentDiscovered or DocumentModified
-  Bus->>Worker: Deliver document event
-  Worker->>Bus: Request document content
-  Bus->>Ingestion: Read request
-  Ingestion->>FS: Read bounded content chunk
-  FS-->>Ingestion: Content bytes
-  Ingestion-->>Bus: Content response
-  Bus-->>Worker: Content response
-  Worker->>Core: Process document and extract evidence
-  Worker->>Bus: DocumentProcessingSubmitted
-  Bus->>API: Deliver evidence submission
-  API->>DB: Persist document version and evidence
-  API->>Bus: DocumentExtracted
-  Bus->>Worker: Deliver extraction event
-  Worker->>Bus: Request evidence and extraction context
-  Bus->>API: Evidence request
-  API->>DB: Read evidence and context
-  API-->>Bus: Bounded evidence pages
-  Bus-->>Worker: Evidence and context
-  Worker->>Worker: Extract deterministic knowledge candidates
-  Worker->>Bus: KnowledgeCandidatesSubmitted
-  Bus->>API: Deliver candidate submission
-  API->>DB: Reconcile candidates and publish model
-  Client->>API: Read published knowledge over HTTP
-  API-->>Client: Publication and provenance
+  rect rgb(255, 255, 255)
+    API->>Bus: DocumentDiscovered or DocumentModified
+    Bus->>Worker: Deliver document event
+    Worker->>Bus: Request document content
+    Bus->>Ingestion: Read request
+    Ingestion->>FS: Read bounded content chunk
+    FS-->>Ingestion: Content bytes
+    Ingestion-->>Bus: Content response
+    Bus-->>Worker: Content response
+    Worker->>Core: Process document and extract evidence
+    Worker->>Bus: DocumentProcessingSubmitted
+    Bus->>API: Deliver evidence submission
+    API->>DB: Persist document version and evidence
+    API->>Bus: DocumentExtracted
+    Bus->>Worker: Deliver extraction event
+    Worker->>Bus: Request evidence and extraction context
+    Bus->>API: Evidence request
+    API->>DB: Read evidence and context
+    API-->>Bus: Bounded evidence pages
+    Bus-->>Worker: Evidence and context
+    Worker->>Worker: Extract deterministic knowledge candidates
+    Worker->>Bus: KnowledgeCandidatesSubmitted
+    Bus->>API: Deliver candidate submission
+    API->>DB: Reconcile candidates and publish model
+    Client->>API: Read published knowledge over HTTP
+    API-->>Client: Publication and provenance
+  end
 ```
 
 ## Connections

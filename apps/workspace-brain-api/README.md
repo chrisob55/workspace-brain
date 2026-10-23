@@ -16,25 +16,28 @@ config:
     background: '#ffffff'
 ---
 flowchart TB
-  Ingestion["Ingestion worker"]
-  Knowledge["Knowledge worker"]
-  Bus["NATS JetStream and request/reply"]
-  API["Workspace Brain API"]
-  DB[("DuckDB catalogue")]
-  Explorer["Explorer"]
-  MCP["MCP server"]
-  Other["Other HTTP clients"]
-  Ingestion -->|"inventory and scan events"| Bus
-  Bus -->|"discovery events"| API
-  API -->|"document processing events"| Bus
-  Bus -->|"document events and evidence requests"| Knowledge
-  Knowledge -->|"processing evidence and knowledge candidates"| Bus
-  Bus -->|"candidate events"| API
-  API <-->|"catalogue reads and writes"| DB
-  API -->|"source and evidence replies"| Bus
-  Explorer -->|"HTTP reads"| API
-  MCP -->|"HTTP reads"| API
-  Other -->|"HTTP reads"| API
+  subgraph WhiteBackground[" "]
+    Ingestion["Ingestion worker"]
+    Knowledge["Knowledge worker"]
+    Bus["NATS JetStream and request/reply"]
+    API["Workspace Brain API"]
+    DB[("DuckDB catalogue")]
+    Explorer["Explorer"]
+    MCP["MCP server"]
+    Other["Other HTTP clients"]
+    Ingestion -->|"inventory and scan events"| Bus
+    Bus -->|"discovery events"| API
+    API -->|"document processing events"| Bus
+    Bus -->|"document events and evidence requests"| Knowledge
+    Knowledge -->|"processing evidence and knowledge candidates"| Bus
+    Bus -->|"candidate events"| API
+    API <-->|"catalogue reads and writes"| DB
+    API -->|"source and evidence replies"| Bus
+    Explorer -->|"HTTP reads"| API
+    MCP -->|"HTTP reads"| API
+    Other -->|"HTTP reads"| API
+  end
+  style WhiteBackground fill:#ffffff,stroke:#ffffff,color:#ffffff
 ```
 
 - **Configuration:** loads source, workspace, and discovery rules from

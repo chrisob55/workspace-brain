@@ -15,21 +15,24 @@ config:
     background: '#ffffff'
 ---
 flowchart TB
-  Ingestion["Ingestion worker"]
-  Knowledge["Knowledge worker"]
-  API["Workspace Brain API"]
-  JetStream[("WORKSPACE_DISCOVERY<br/>JetStream durable events")]
-  Core["NATS core request/reply and heartbeats"]
-  Explorer["Explorer and MCP"]
-  Ingestion -->|"scan and inventory events"| JetStream
-  JetStream -->|"discovery events"| API
-  API -->|"processing and extraction events"| JetStream
-  JetStream -->|"document events and evidence requests"| Knowledge
-  Knowledge -->|"evidence and candidate events"| JetStream
-  Ingestion <-->|"source and content requests"| Core
-  API <-->|"source, evidence, and runtime requests"| Core
-  Knowledge <-->|"document content requests"| Core
-  Explorer -->|"HTTP, not NATS"| API
+  subgraph WhiteBackground[" "]
+    Ingestion["Ingestion worker"]
+    Knowledge["Knowledge worker"]
+    API["Workspace Brain API"]
+    JetStream[("WORKSPACE_DISCOVERY<br/>JetStream durable events")]
+    Core["NATS core request/reply and heartbeats"]
+    Explorer["Explorer and MCP"]
+    Ingestion -->|"scan and inventory events"| JetStream
+    JetStream -->|"discovery events"| API
+    API -->|"processing and extraction events"| JetStream
+    JetStream -->|"document events and evidence requests"| Knowledge
+    Knowledge -->|"evidence and candidate events"| JetStream
+    Ingestion <-->|"source and content requests"| Core
+    API <-->|"source, evidence, and runtime requests"| Core
+    Knowledge <-->|"document content requests"| Core
+    Explorer -->|"HTTP, not NATS"| API
+  end
+  style WhiteBackground fill:#ffffff,stroke:#ffffff,color:#ffffff
 ```
 
 - The **ingestion worker** requests configured sources and document content

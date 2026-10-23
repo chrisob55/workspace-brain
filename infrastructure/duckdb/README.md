@@ -14,20 +14,23 @@ config:
     background: '#ffffff'
 ---
 flowchart TB
-  Ingestion["Ingestion worker"]
-  Knowledge["Knowledge worker"]
-  Bus["NATS"]
-  API["API catalogue boundary"]
-  DB[("DuckDB file and migrations")]
-  Clients["Explorer, MCP, and other clients"]
-  Ingestion -->|"inventory events"| Bus
-  Bus -->|"inventory"| API
-  Knowledge -->|"evidence and candidate events"| Bus
-  Bus -->|"evidence and candidates"| API
-  API -->|"apply migrations and persist"| DB
-  API -->|"query catalogue"| DB
-  Clients -->|"HTTP only"| API
-  API -->|"published/read models"| Clients
+  subgraph WhiteBackground[" "]
+    Ingestion["Ingestion worker"]
+    Knowledge["Knowledge worker"]
+    Bus["NATS"]
+    API["API catalogue boundary"]
+    DB[("DuckDB file and migrations")]
+    Clients["Explorer, MCP, and other clients"]
+    Ingestion -->|"inventory events"| Bus
+    Bus -->|"inventory"| API
+    Knowledge -->|"evidence and candidate events"| Bus
+    Bus -->|"evidence and candidates"| API
+    API -->|"apply migrations and persist"| DB
+    API -->|"query catalogue"| DB
+    Clients -->|"HTTP only"| API
+    API -->|"published/read models"| Clients
+  end
+  style WhiteBackground fill:#ffffff,stroke:#ffffff,color:#ffffff
 ```
 
 - The **API** opens DuckDB through `@workspace-brain/duckdb`, applies the

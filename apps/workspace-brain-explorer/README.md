@@ -14,17 +14,20 @@ config:
     background: '#ffffff'
 ---
 flowchart TB
-  User["Person using a browser"]
-  UI["Explorer UI"]
-  API["Workspace Brain HTTP API"]
-  Publication[("Latest immutable publication")]
-  Snapshot[("Bundled publication snapshot")]
-  User -->|"browse and explore"| UI
-  UI -->|"fetch publication and export"| API
-  API -->|"read published data"| Publication
-  Publication -->|"publication and provenance"| API
-  API -->|"JSON responses"| UI
-  UI -.->|"fallback when API is unreachable"| Snapshot
+  subgraph WhiteBackground[" "]
+    User["Person using a browser"]
+    UI["Explorer UI"]
+    API["Workspace Brain HTTP API"]
+    Publication[("Latest immutable publication")]
+    Snapshot[("Bundled publication snapshot")]
+    User -->|"browse and explore"| UI
+    UI -->|"fetch publication and export"| API
+    API -->|"read published data"| Publication
+    Publication -->|"publication and provenance"| API
+    API -->|"JSON responses"| UI
+    UI -.->|"fallback when API is unreachable"| Snapshot
+  end
+  style WhiteBackground fill:#ffffff,stroke:#ffffff,color:#ffffff
 ```
 
 ## Run
