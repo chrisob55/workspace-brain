@@ -129,13 +129,13 @@ flowchart TB
 
 | Path                                                             | Purpose                                         |
 | ---------------------------------------------------------------- | ----------------------------------------------- |
-| [apps/workspace-brain-api/](apps/workspace-brain-api/) ([README](apps/workspace-brain-api/README.md)) | HTTP API and catalogue writes                   |
-| [apps/ingestion-worker/](apps/ingestion-worker/) ([README](apps/ingestion-worker/README.md))         | Read-only filesystem scanning                   |
-| [apps/knowledge-worker/](apps/knowledge-worker/) ([README](apps/knowledge-worker/README.md))         | Evidence processing and candidate submission    |
+| [apps/workspace-brain-api/](apps/workspace-brain-api/)           | HTTP API and catalogue writes                   |
+| [apps/ingestion-worker/](apps/ingestion-worker/)                 | Read-only filesystem scanning                   |
+| [apps/knowledge-worker/](apps/knowledge-worker/)                 | Evidence processing and candidate submission    |
 | [apps/workspace-brain-explorer/](apps/workspace-brain-explorer/) | Published-knowledge UI                          |
 | [apps/workspace-brain-mcp/](apps/workspace-brain-mcp/)           | Read-only MCP server over HTTP                  |
 | [packages/](packages/)                                           | Domain, processing, configuration and contracts |
-| [infrastructure/](infrastructure/)                               | [DuckDB](infrastructure/duckdb/README.md), [filesystem](infrastructure/filesystem/README.md) and [NATS](infrastructure/nats/README.md) adapters |
+| [infrastructure/](infrastructure/)                               | DuckDB, filesystem and NATS adapters            |
 | [config/](config/)                                               | Source, workspace and runtime settings          |
 | [deploy/compose/](deploy/compose/)                               | Container runtime                               |
 | [openapi/openapi.json](openapi/openapi.json)                     | Public HTTP API contract                        |
