@@ -88,7 +88,8 @@ For diagrams updated by the Mermaid GitHub Sync app (or pre-commit regenerate):
 7. Cooperate with the Sync workflow — do not manually regenerate managed diagrams.
 8. Set every flowchart direction to `TB`, in both `.mmd` files and Markdown code
    blocks; do not use `LR`.
-9. Set every diagram's Mermaid frontmatter theme to `redux-color`:
+9. Set every diagram's Mermaid frontmatter theme to `redux-color` and the white
+   background theme variable:
    ```yaml
    ---
    config:
@@ -97,6 +98,11 @@ For diagrams updated by the Mermaid GitHub Sync app (or pre-commit regenerate):
        background: '#ffffff'
    ---
    ```
+10. GitHub renders the SVG canvas transparently in dark mode, so theme
+    background variables alone do not create a white canvas. Add an explicit
+    white `WhiteBackground` subgraph styled with `fill:#ffffff` to every
+    flowchart and a `rect rgb(255, 255, 255)` around the messages in every
+    sequence diagram.
 
 ## Docs
 

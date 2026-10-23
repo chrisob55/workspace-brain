@@ -38,12 +38,15 @@ config:
     background: '#ffffff'
 ---
 flowchart TB
-  S[Files and repositories] --> WB[Workspace Brain]
-  WB --> KM[Published Knowledge Models]
-  KM --> AIOS[AI OS]
-  AIOS --> DB[Digital Brain]
-  AIOS --> KL[Knowledge Ledger]
-  AIOS --> A[Governed Agents]
+  subgraph WhiteBackground[" "]
+    S[Files and repositories] --> WB[Workspace Brain]
+    WB --> KM[Published Knowledge Models]
+    KM --> AIOS[AI OS]
+    AIOS --> DB[Digital Brain]
+    AIOS --> KL[Knowledge Ledger]
+    AIOS --> A[Governed Agents]
+  end
+  style WhiteBackground fill:#ffffff,stroke:#ffffff,color:#ffffff
 ```
 
 ## 3. Canonical concepts

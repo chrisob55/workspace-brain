@@ -20,23 +20,25 @@ sequenceDiagram
   participant FS as Read-only filesystem
   participant DB as DuckDB via API
   participant Knowledge as Knowledge worker
-  Worker->>Bus: Request configured sources
-  Bus->>API: Source-list request
-  API-->>Bus: Configured source page
-  Bus-->>Worker: Configured source page
-  loop Startup and each scan interval
-    Worker->>FS: Scan source roots
-    FS-->>Worker: Repository and document inventory
-    Worker->>Bus: Publish bounded inventory events
-    Bus->>API: Deliver durable inventory events
-    API->>DB: Assemble and commit inventory
+  rect rgb(255, 255, 255)
+    Worker->>Bus: Request configured sources
+    Bus->>API: Source-list request
+    API-->>Bus: Configured source page
+    Bus-->>Worker: Configured source page
+    loop Startup and each scan interval
+      Worker->>FS: Scan source roots
+      FS-->>Worker: Repository and document inventory
+      Worker->>Bus: Publish bounded inventory events
+      Bus->>API: Deliver durable inventory events
+      API->>DB: Assemble and commit inventory
+    end
+    Knowledge->>Bus: Request document content chunk
+    Bus->>Worker: Content-read request
+    Worker->>FS: Read source chunk
+    FS-->>Worker: Content bytes
+    Worker-->>Bus: Reply with bounded content chunk
+    Bus-->>Knowledge: Route reply to knowledge worker
   end
-  Knowledge->>Bus: Request document content chunk
-  Bus->>Worker: Content-read request
-  Worker->>FS: Read source chunk
-  FS-->>Worker: Content bytes
-  Worker-->>Bus: Reply with bounded content chunk
-  Bus-->>Knowledge: Route reply to knowledge worker
 ```
 
 ## Connections

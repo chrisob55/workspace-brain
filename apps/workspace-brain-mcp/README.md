@@ -38,12 +38,14 @@ sequenceDiagram
   participant Server as Workspace Brain MCP server
   participant API as Workspace Brain HTTP API
   participant DB as DuckDB catalogue
-  Client->>Server: Call read-only MCP tool
-  Server->>API: Map tool to documented GET endpoint
-  API->>DB: Read current or publication-scoped data
-  DB-->>API: Knowledge and provenance
-  API-->>Server: HTTP response or explicit error
-  Server-->>Client: JSON tool result or MCP tool error
+  rect rgb(255, 255, 255)
+    Client->>Server: Call read-only MCP tool
+    Server->>API: Map tool to documented GET endpoint
+    API->>DB: Read current or publication-scoped data
+    DB-->>API: Knowledge and provenance
+    API-->>Server: HTTP response or explicit error
+    Server-->>Client: JSON tool result or MCP tool error
+  end
 ```
 
 ## Tools
